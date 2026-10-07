@@ -7,8 +7,9 @@
 #   - never commits or pushes on main/master or a detached HEAD
 #   - never commits .env/key/credential files (only .env.example is allowed)
 #     or files containing token-shaped secrets
-#   - never pushes unpushed commits (e.g. ones Claude made itself) that touch
-#     such files or tokens; those are left for a manual push
+#   - never pushes unpushed commits (e.g. ones Claude made itself, merges
+#     included) that touch such files or tokens or carry a token in their
+#     message; those are left for a manual push
 #   - skips while a merge/rebase/cherry-pick is in progress
 #   - never force-pushes and never skips git hooks
 #
@@ -55,12 +56,21 @@ for marker in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply;
 done
 
 # One run at a time per repository, so overlapping sessions can't commit or
-# restore the index under each other. A lock older than 5 minutes is stale.
-lock="$gitdir/autopush.lock"
-[ -n "$(find "$lock" -maxdepth 0 -mmin +5 2>/dev/null)" ] && rmdir "$lock" 2>/dev/null
-mkdir "$lock" 2>/dev/null || say "another auto-push is running on $branch, skipped"
+# restore the index under each other. This is an OS lock on fd 9 (flock, or
+# perl on macOS): it is released as soon as this run exits or is killed, so
+# there is no stale lock to reclaim. Children that may outlive the run get
+# fd 9 closed (9>&-) so they don't keep holding it.
+{ exec 9>>"$gitdir/autopush.flock"; } 2>/dev/null || say "cannot open lock file on $branch, skipped"
+if command -v flock >/dev/null 2>&1; then
+  flock -n 9 || say "another auto-push is running on $branch, skipped"
+elif command -v perl >/dev/null 2>&1; then
+  perl -MFcntl=:flock -e 'open(my $fh, ">&=", 9) or exit 2; flock($fh, LOCK_EX | LOCK_NB) or exit 1' ||
+    say "another auto-push is running on $branch, skipped"
+fi
 backup=
-trap '[ -n "$backup" ] && rm -f "$backup"; rmdir "$lock" 2>/dev/null' EXIT
+trap '[ -n "$backup" ] && rm -f "$backup"' EXIT
+# Holding the lock, no other run is using a backup: drop any a killed run left.
+rm -f "$(git rev-parse --git-path index)".autopush.* 2>/dev/null
 
 if [ -n "$(git status --porcelain)" ]; then
   # Back up the index so a refusal leaves whatever the user had staged intact.
@@ -69,6 +79,7 @@ if [ -n "$(git status --porcelain)" ]; then
   if [ -n "$backup" ] && ! cp "$index" "$backup" 2>/dev/null; then
     rm -f "$backup"; backup=
   fi
+  # Put the user's index back as it was before this run staged anything.
   restore() { if [ -n "$backup" ]; then mv -f "$backup" "$index"; else git reset -q; fi; }
 
   if ! out=$(git add -A 2>&1); then
@@ -86,7 +97,7 @@ if [ -n "$(git status --porcelain)" ]; then
       say "nothing committed - possible secrets in: ${blocked% } (remove them or add to .gitignore)"
     fi
   fi
-  if ! out=$(git commit -q -m "chore(auto): checkpoint after Claude Code run" 2>&1); then
+  if ! out=$(git commit -q -m "chore(auto): checkpoint after Claude Code run" 2>&1 9>&-); then
     restore
     say "commit failed on $branch: $out"
   fi
@@ -98,13 +109,28 @@ if git rev-parse -q --verify "refs/remotes/origin/$branch" >/dev/null &&
   exit 0  # already up to date
 fi
 
-# Check every commit the push would send, not just the checkpoint above.
+# Check every commit the push would send, not just the checkpoint above: the
+# paths and content each one changes, and its message. Merge commits are
+# diffed with --remerge-diff (git 2.36+), which shows only what the merge
+# resolution itself introduced, not content brought in from the other parent.
 outgoing=(HEAD --not --remotes=origin)
-blocked=$(git log --format= --name-only -z --diff-filter=d "${outgoing[@]}" | secret_paths)
-if [ -z "$blocked" ]; then
-  blocked=$(git log --text -G"$SECRET_TOKENS" --format=%h "${outgoing[@]}" | tr '\n' ' ')
+if git log -1 --format= --diff-merges=remerge HEAD >/dev/null 2>&1; then
+  merges=--diff-merges=remerge
+elif [ -n "$(git rev-list --merges "${outgoing[@]}")" ]; then
+  say "not pushed - scanning unpushed merge commits needs git 2.36+ (review, then push manually)"
+else
+  merges=--no-merges  # older git, and no merges to scan anyway
 fi
-[ -n "$blocked" ] && say "not pushed - unpushed commits touch possible secrets: ${blocked% } (review, then push manually)"
+# Print each outgoing secret-file path, then each commit whose changes or
+# message match a token shape. A failing scan fails the whole check.
+scan_outgoing() {
+  git log --format= --name-only -z --diff-filter=d "$merges" "${outgoing[@]}" | secret_paths &&
+  git log --text --no-patch -G"$SECRET_TOKENS" --format='%h ' "$merges" "${outgoing[@]}" &&
+  git log -E --grep="$SECRET_TOKENS" --format='%h(message) ' "${outgoing[@]}"
+}
+blocked=$(scan_outgoing | tr '\n' ' ') ||
+  say "not pushed - could not scan unpushed commits on $branch (push manually after review)"
+[ -n "${blocked// /}" ] && say "not pushed - unpushed commits touch possible secrets: ${blocked% } (review, then push manually)"
 
 # Retry transient network failures with backoff; a rejection won't fix itself.
 for delay in 2 4 8 16 0; do
@@ -112,6 +138,6 @@ for delay in 2 4 8 16 0; do
     say "pushed $branch @ $(git rev-parse --short HEAD)"
   fi
   case "$out" in *rejected*|*denied*|*protected*) break ;; esac
-  [ "$delay" -gt 0 ] && sleep "$delay"
+  [ "$delay" -gt 0 ] && sleep "$delay" 9>&-
 done
 say "push of $branch failed: $(printf '%s\n' "$out" | grep -v '^hint:')"
