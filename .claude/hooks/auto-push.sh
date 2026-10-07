@@ -4,8 +4,8 @@
 #
 # Guardrails (see CLAUDE.md):
 #   - never commits or pushes on main/master or a detached HEAD
-#   - never commits .env/key files (only .env.example is allowed) or files
-#     containing token-shaped secrets
+#   - never commits .env/key/credential files (only .env.example is allowed)
+#     or files containing token-shaped secrets
 #   - skips while a merge/rebase/cherry-pick is in progress
 #   - never force-pushes and never skips git hooks
 #
@@ -23,7 +23,7 @@ say() {
 
 # Paths that hold secrets, and token shapes for private keys, JWTs (Supabase
 # keys), Anthropic/OpenAI, Supabase secret, GitHub and AWS keys.
-SECRET_FILES='(^|/)(\.env[^/]*|[^/]*\.(pem|key|p12|pfx)|id_(rsa|dsa|ecdsa|ed25519))$'
+SECRET_FILES='(^|/)(\.env[^/]*|\.netrc|\.pgpass|credentials[^/]*\.json|[^/]*service[-_]?account[^/]*\.json|[^/]*\.(pem|key|p12|pfx|jks|keystore)|id_(rsa|dsa|ecdsa|ed25519))$'
 SECRET_TOKENS='-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(^|[^A-Za-z0-9_-])sk-((ant|proj)-[A-Za-z0-9_-]{20,}|[A-Za-z0-9]{32,})|sb_secret_[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9]{36}|AKIA[0-9A-Z]{16}'
 
 [ "${MODULEONE_AUTOPUSH:-1}" = "0" ] && exit 0
@@ -44,20 +44,25 @@ if [ -n "$(git status --porcelain)" ]; then
   # Back up the index so a refusal leaves whatever the user had staged intact.
   index=$(git rev-parse --git-path index)
   cp "$index" "$index.autopush" 2>/dev/null
-  git add -A
+  restore() { mv -f "$index.autopush" "$index" 2>/dev/null || git reset -q; }
+  if ! out=$(git add -A 2>&1); then
+    restore
+    say "nothing committed - staging failed on $branch: $out"
+  fi
+  # -z: raw names, so quoting of unusual filenames can't hide a match.
   if [ -n "$(git diff --cached --name-only --diff-filter=d)" ]; then
-    blocked=$( { git diff --cached --name-only --diff-filter=d |
+    blocked=$( { git diff --cached --name-only --diff-filter=d -z | tr '\0' '\n' |
                    grep -E "$SECRET_FILES" | grep -vE '(^|/)\.env\.example$'
                  git diff --cached --name-only --diff-filter=d -z |
-                   xargs -0 git grep --cached -I -l -E -e "$SECRET_TOKENS" --
+                   xargs -0 git grep --cached -I -l -z -E -e "$SECRET_TOKENS" -- | tr '\0' '\n'
                } | sort -u | tr '\n' ' ')
     if [ -n "$blocked" ]; then
-      mv -f "$index.autopush" "$index" 2>/dev/null || git reset -q
+      restore
       say "nothing committed - possible secrets in: ${blocked% } (remove them or add to .gitignore)"
     fi
   fi
   if ! out=$(git commit -q -m "chore(auto): checkpoint after Claude Code run" 2>&1); then
-    mv -f "$index.autopush" "$index" 2>/dev/null
+    restore
     say "commit failed on $branch: $out"
   fi
   rm -f "$index.autopush"
