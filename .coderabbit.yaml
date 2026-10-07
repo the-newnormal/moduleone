@@ -1,0 +1,10 @@
+# CodeRabbit = the PR reviewer (bugs, regressions, security, missing tests).
+reviews:
+  request_changes_workflow: true      # can block a PR, not just comment
+  auto_review:
+    enabled: true
+  path_filters:
+    - "!**/*.generated.ts"
+    - "!**/database.types.ts"
+    - "!supabase/migrations/**"        # migrations reviewed by a human, not nitpicked
+language: "en"
