@@ -7,6 +7,10 @@ export const metadata: Metadata = { title: "Sign in · Module One" };
 
 const ERRORS = new Map([
   ["link", "That sign-in link has expired or was already used. Request a new one below."],
+  [
+    "signout",
+    "You're signed out on this device, but we couldn't sign out your other devices. To retry, sign in and sign out again.",
+  ],
 ]);
 
 export default async function LoginPage({ searchParams }: PageProps<"/login">) {
