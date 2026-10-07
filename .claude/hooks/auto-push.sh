@@ -23,7 +23,7 @@ say() {
 
 # Paths that hold secrets, and token shapes for private keys, JWTs (Supabase
 # keys), Anthropic/OpenAI, Supabase secret, GitHub and AWS keys.
-SECRET_FILES='(^|/)(\.env[^/]*|\.netrc|\.pgpass|credentials[^/]*\.json|[^/]*service[-_]?account[^/]*\.json|[^/]*\.(pem|key|p12|pfx|jks|keystore)|id_(rsa|dsa|ecdsa|ed25519))$'
+SECRET_FILES='(^|/)(\.env[^/]*(/.*)?|\.netrc|\.pgpass|credentials[^/]*\.json|[^/]*service[-_]?account[^/]*\.json|[^/]*\.(pem|key|p12|pfx|jks|keystore)|id_(rsa|dsa|ecdsa|ed25519))$'
 SECRET_TOKENS='-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(^|[^A-Za-z0-9_-])sk-((ant|proj)-[A-Za-z0-9_-]{20,}|[A-Za-z0-9]{32,})|sb_secret_[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9]{36}|AKIA[0-9A-Z]{16}'
 
 [ "${MODULEONE_AUTOPUSH:-1}" = "0" ] && exit 0
@@ -54,7 +54,7 @@ if [ -n "$(git status --porcelain)" ]; then
     blocked=$( { git diff --cached --name-only --diff-filter=d -z | tr '\0' '\n' |
                    grep -E "$SECRET_FILES" | grep -vE '(^|/)\.env\.example$'
                  git diff --cached --name-only --diff-filter=d -z |
-                   xargs -0 git grep --cached -I -l -z -E -e "$SECRET_TOKENS" -- | tr '\0' '\n'
+                   xargs -0 git grep --cached -l -z -E -e "$SECRET_TOKENS" -- | tr '\0' '\n'
                } | sort -u | tr '\n' ' ')
     if [ -n "$blocked" ]; then
       restore
