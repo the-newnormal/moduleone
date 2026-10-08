@@ -234,14 +234,16 @@ describe("processPendingCheckins", () => {
     vi.restoreAllMocks();
   });
 
-  it("asks for submitted, ungraded check-ins with attempts left, oldest first", async () => {
+  it("asks for submitted, ungraded check-ins that still have a recording and attempts left, least recently tried first", async () => {
     await processPendingCheckins(NOW);
     expect(calls).toEqual([
       ["checkins.select", "id, submitted_at, graded_at, processing_started_at, processing_error, processing_attempts"],
       ["checkins.not", "submitted_at", "is", null],
       ["checkins.is", "graded_at", null],
+      // Without a recording (deleted after 90 days) the claim skips a row forever.
+      ["checkins.not", "audio_path", "is", null],
       ["checkins.lt", "processing_attempts", 5],
-      ["checkins.order", "submitted_at", { ascending: true }],
+      ["checkins.order", "processing_started_at", { ascending: true, nullsFirst: true }],
       ["checkins.limit", 100],
     ]);
   });

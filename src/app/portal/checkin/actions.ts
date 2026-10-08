@@ -216,7 +216,11 @@ export async function saveDraft(input: { path: string; durationMs?: number }): P
     await removeFile(admin, memberId, path);
     return fail("upload_too_big");
   }
-  if (!mimeType.startsWith("audio/")) {
+  // The browser chose the uploaded file's type, so check it against the same list as
+  // prepareRecording and against the path's extension: a .webm that claims to be audio/wav would
+  // only fail at transcription, using up an attempt.
+  const ext = extensionFor(mimeType);
+  if (!ext || !path.endsWith(`.${ext}`)) {
     await removeFile(admin, memberId, path);
     return fail("upload_not_audio");
   }

@@ -19,10 +19,17 @@ const BUCKET = "checkin-audio";
 // Time limits for one attempt. The function running it (the check-in page's after(), or the cron
 // route) is stopped at 300 seconds, and a stopped attempt records nothing, so it would only be
 // retried 10 minutes later. Stopping here instead records the failure so the usual retries apply.
+// Downloading, transcribing and grading share ATTEMPT_BUDGET_MS; each database write gets
+// SAVE_MS of its own, so even a write after the budget has run out finishes inside 300 seconds.
 // Transcribing a 10-minute recording normally takes well under a minute, and grading one about as
 // long; the transcript is saved before grading, so a retry after a slow grade only grades.
-const ATTEMPT_BUDGET_MS = 270_000;
+const ATTEMPT_BUDGET_MS = 240_000;
+const DOWNLOAD_MS = 60_000;
 const TRANSCRIBE_BUDGET_MS = 150_000;
+const SAVE_MS = 20_000;
+// If transcribing left less than this, grading waits for the next attempt (which reuses the saved
+// transcript and has the whole budget) instead of starting and being cut off.
+const GRADE_MIN_MS = 120_000;
 
 // Transcribes and grades one submitted check-in, then stores the result. Safe to call more than
 // once and from several places at the same time: claim_checkin_processing (0004) hands each attempt
@@ -50,6 +57,7 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
   const claim = (claimed as Claim[] | null)?.[0];
   if (!claim) return "skipped";
   const attempt = AbortSignal.timeout(ATTEMPT_BUDGET_MS);
+  const attemptEnds = Date.now() + ATTEMPT_BUDGET_MS;
 
   const fail = async (code: string, error: unknown, { giveBackAttempt = false } = {}) => {
     // A short, stable reason for whoever looks at the row; no transcript text, no secrets.
@@ -59,7 +67,11 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
     const values = giveBackAttempt
       ? { processing_error: message, processing_attempts: claim.attempts - 1 }
       : { processing_error: message };
-    const { error: updateError } = await admin.from("checkins").update(values).eq("id", checkinId);
+    const { error: updateError } = await admin
+      .from("checkins")
+      .update(values)
+      .eq("id", checkinId)
+      .abortSignal(AbortSignal.timeout(SAVE_MS));
     if (updateError) console.error("processCheckin: could not record the failure", { checkinId, code: updateError.code });
     return "failed" as const;
   };
@@ -68,7 +80,9 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
   // grading failure doesn't cost a second transcription.
   let transcript = claim.transcript;
   if (transcript === null) {
-    const { data: blob, error: downloadError } = await admin.storage.from(BUCKET).download(claim.audio_path);
+    const { data: blob, error: downloadError } = await admin.storage
+      .from(BUCKET)
+      .download(claim.audio_path, undefined, { signal: AbortSignal.any([attempt, AbortSignal.timeout(DOWNLOAD_MS)]) });
     if (downloadError || !blob) return fail("download_failed", downloadError);
     const filename = claim.audio_path.slice(claim.audio_path.lastIndexOf("/") + 1);
 
@@ -96,9 +110,16 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
         transcript_model: `${result.provider}:${result.model}`,
         transcript_warnings: result.warnings,
       })
-      .eq("id", checkinId);
+      .eq("id", checkinId)
+      .abortSignal(AbortSignal.timeout(SAVE_MS));
     if (transcriptError) return fail("save_transcript_failed", transcriptError);
     transcript = result.text;
+    // Not a failure of the check-in, so it doesn't use up an attempt.
+    if (attemptEnds - Date.now() < GRADE_MIN_MS) {
+      return fail("grading_deferred", new Error("Too little of this attempt left to grade; the next one grades the saved transcript."), {
+        giveBackAttempt: true,
+      });
+    }
   }
 
   // 2. The grade.
@@ -126,7 +147,8 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
       processing_error: null,
     })
     .eq("id", checkinId)
-    .is("graded_at", null);
+    .is("graded_at", null)
+    .abortSignal(AbortSignal.timeout(SAVE_MS));
   if (gradeError) return fail("save_grade_failed", gradeError);
   return "graded";
 }

@@ -20,6 +20,7 @@ const BUCKET = "checkin-audio";
 
 const UNSUPPORTED = "This browser can't record audio here. Use an up-to-date Chrome, Edge, Firefox or Safari.";
 const AWAY = "Your phone may have paused the recording while you were away. Listen back before you submit.";
+const LEAVE_MESSAGE = "Leave this page? Your recording hasn't been saved yet, so it will be lost.";
 
 type State =
   | { step: "idle"; problem: string | null }
@@ -97,8 +98,23 @@ export function Recorder() {
   useEffect(() => {
     if (!unsaved) return;
     const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    // App links (← Portal) change pages without unloading this one, so beforeunload doesn't see
+    // them. This runs before Next's own click handler, and stops it if the member stays.
+    const confirmLeave = (event: MouseEvent) => {
+      const link = event.target instanceof Element ? event.target.closest("a[href]") : null;
+      if (!link || event.defaultPrevented || event.button !== 0) return;
+      // A new tab or window leaves this page, and the take, where it is.
+      if (event.metaKey || event.ctrlKey || event.shiftKey || link.getAttribute("target") === "_blank") return;
+      if (window.confirm(LEAVE_MESSAGE)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
     window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
+    document.addEventListener("click", confirmLeave, true);
+    return () => {
+      window.removeEventListener("beforeunload", warn);
+      document.removeEventListener("click", confirmLeave, true);
+    };
   }, [unsaved]);
 
   // iOS Safari mutes the microphone while the page is hidden (another app, a locked screen), so

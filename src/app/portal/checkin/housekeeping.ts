@@ -143,8 +143,10 @@ export async function deleteExpiredRecordings(): Promise<{ deleted: number } | n
   }
 }
 
-// How many submitted check-ins one sweep picks up, oldest first. They are processed side by side,
-// and each attempt stops transcribing well within the function's 300 seconds (see process.ts).
+// How many submitted check-ins one sweep picks up. They are processed side by side, and each
+// attempt stays within the function's 300 seconds (see process.ts). Never-tried check-ins come
+// first, then the ones tried longest ago: a check-in that just failed (or is running) goes to the
+// back, so a few that keep failing can't take every run's places, or the query's, from the rest.
 const SWEEP_LIMIT = 20;
 
 // Processes every submitted check-in that is due an attempt (needsProcessing), for everyone. Run on
@@ -158,8 +160,11 @@ export async function processPendingCheckins(now: Date = new Date()): Promise<{ 
       .select("id, submitted_at, graded_at, processing_started_at, processing_error, processing_attempts")
       .not("submitted_at", "is", null)
       .is("graded_at", null)
+      // A recording deleted after 90 days can't be processed any more (the claim skips it), so
+      // such rows must not take up the batch.
+      .not("audio_path", "is", null)
       .lt("processing_attempts", MAX_ATTEMPTS)
-      .order("submitted_at", { ascending: true })
+      .order("processing_started_at", { ascending: true, nullsFirst: true })
       .limit(SWEEP_LIMIT * 5);
     if (error) {
       console.error("processPendingCheckins: reading check-ins failed", { code: error.code });

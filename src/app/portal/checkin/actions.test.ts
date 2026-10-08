@@ -308,8 +308,12 @@ describe("saveDraft", () => {
     expect(rpc).not.toHaveBeenCalled();
   });
 
-  it("deletes and refuses a file that isn't audio", async () => {
-    info.mockResolvedValue(uploaded({ contentType: "text/plain" }));
+  it.each([
+    ["isn't audio", "text/plain"],
+    ["is audio of a type the recorder never makes", "audio/wav"],
+    ["is another allowed type than its name says (.webm, mp4 inside)", "audio/mp4"],
+  ])("deletes and refuses a file that %s", async (_label, contentType) => {
+    info.mockResolvedValue(uploaded({ contentType }));
     expect(await saveDraft({ path: PATH })).toMatchObject({ status: "error", code: "upload_not_audio" });
     expect(remove).toHaveBeenCalledExactlyOnceWith([PATH]);
     expect(rpc).not.toHaveBeenCalled();
@@ -317,7 +321,7 @@ describe("saveDraft", () => {
 
   it("falls back to the file's metadata for size and type", async () => {
     info.mockResolvedValue(uploaded({ size: undefined, contentType: undefined, metadata: { size: 10, mimetype: "audio/mp4" } }));
-    expect(await saveDraft({ path: PATH })).toEqual({ status: "saved" });
+    expect(await saveDraft({ path: PATH.replace(/\.webm$/, ".m4a") })).toEqual({ status: "saved" });
     expect(rpc.mock.calls[0][1]).toMatchObject({ p_mime_type: "audio/mp4" });
   });
 

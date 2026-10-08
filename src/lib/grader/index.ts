@@ -24,10 +24,11 @@ export const MIN_TRANSCRIPT_WORDS = 5;
 // well as the short JSON reply.
 const MAX_TOKENS = 16_000;
 
-// One time limit for the whole grading call, the SDK's retries included, so the check-in page can
-// give after() a maxDuration that covers transcription plus grading. Five minutes leaves room for
-// long thinking (most of MAX_TOKENS); a try that runs out of time is not asked for again.
-export const GRADER_TIMEOUT_MS = 300_000;
+// One time limit for the whole grading call, the SDK's retries included. Four minutes leaves room
+// for long thinking (most of MAX_TOKENS) and matches processCheckin's budget for one attempt, which
+// grades with the whole budget whenever it doesn't also transcribe (src/lib/checkin/process.ts).
+// A try that runs out of time is not asked for again.
+export const GRADER_TIMEOUT_MS = 240_000;
 
 // Claude's safety classifiers can occasionally decline a benign request. With fallbacks on, the
 // API re-runs a declined request on the model Anthropic recommends instead of failing it; the

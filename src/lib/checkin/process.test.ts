@@ -39,6 +39,7 @@ function from(table: string) {
       const builder = {
         eq: (column: string, value: unknown) => (entry.filters.push(["eq", column, value]), builder),
         is: (column: string, value: unknown) => (entry.filters.push(["is", column, value]), builder),
+        abortSignal: () => builder,
         then: (resolve: (r: { error: typeof updateError }) => void) => resolve({ error: updateError }),
       };
       return builder;
@@ -74,7 +75,7 @@ describe("processCheckin", () => {
 
     expect(rpc).toHaveBeenCalledExactlyOnceWith("claim_checkin_processing", { p_checkin_id: CHECKIN });
     expect(storageFrom).toHaveBeenCalledWith("checkin-audio");
-    expect(download).toHaveBeenCalledExactlyOnceWith(PATH);
+    expect(download).toHaveBeenCalledExactlyOnceWith(PATH, undefined, { signal: expect.any(AbortSignal) });
     expect(transcribe).toHaveBeenCalledExactlyOnceWith(
       {
         data: new Uint8Array([1, 2, 3]),
@@ -152,23 +153,29 @@ describe("processCheckin", () => {
   });
 
   it("keeps the whole attempt inside the function's 300 seconds", async () => {
-    const controllers: AbortController[] = [];
-    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+    const made: { ms: number; controller: AbortController }[] = [];
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
       const controller = new AbortController();
-      controllers.push(controller);
+      made.push({ ms, controller });
       return controller.signal;
     });
     await processCheckin(CHECKIN);
-    const [[attemptMs], [transcribeMs]] = timeout.mock.calls;
-    expect(attemptMs).toBeLessThanOrEqual(280_000);
-    expect(transcribeMs).toBeLessThanOrEqual(150_000);
-    expect(attemptMs - transcribeMs).toBeGreaterThanOrEqual(120_000);
-    // Grading gets what's left of the attempt; running out of it also stops transcription.
-    expect(vi.mocked(gradeCheckin).mock.calls[0][0].signal).toBe(controllers[0].signal);
+    // In order: the attempt, the download, transcription, then one limit per database write.
+    const [attempt, downloadLimit, transcribeLimit, ...saves] = made;
+    expect(saves).toHaveLength(2);
+    // Even a write that starts as the attempt runs out finishes inside 300 seconds.
+    expect(attempt.ms + Math.max(...saves.map((save) => save.ms))).toBeLessThanOrEqual(290_000);
+    expect(downloadLimit.ms).toBeLessThanOrEqual(60_000);
+    expect(transcribeLimit.ms).toBeLessThanOrEqual(150_000);
+    // Grading gets what's left of the attempt: at least 90 seconds after the longest transcription.
+    expect(attempt.ms - transcribeLimit.ms).toBeGreaterThanOrEqual(90_000);
+    expect(vi.mocked(gradeCheckin).mock.calls[0][0].signal).toBe(attempt.controller.signal);
+    // Running out of the attempt also stops the download and transcription.
+    const downloadSignal = download.mock.calls[0][2]?.signal as AbortSignal;
     const transcribeSignal = vi.mocked(transcribe).mock.calls[0][1]?.signal;
-    expect(transcribeSignal?.aborted).toBe(false);
-    controllers[0].abort();
-    expect(transcribeSignal?.aborted).toBe(true);
+    expect([downloadSignal.aborted, transcribeSignal?.aborted]).toEqual([false, false]);
+    attempt.controller.abort();
+    expect([downloadSignal.aborted, transcribeSignal?.aborted]).toEqual([true, true]);
   });
 
   it("records a transcription that ran out of time, so it is retried", async () => {
@@ -272,6 +279,27 @@ describe("processCheckin", () => {
       for (let i = 0; i < 5; i++) expect(await visit()).toBe("failed");
       expect(row.attempts).toBe(5);
       expect(await visit()).toBe("skipped");
+    });
+
+    it("leaves grading to the next attempt, without using one up, when transcribing took most of this one", async () => {
+      let now = 1_000_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      vi.mocked(transcribe).mockImplementation(async () => {
+        now += 130_000;
+        return { text: TRANSCRIPT, provider: "openai", model: "gpt-transcribe", warnings: [] };
+      });
+
+      expect(await visit()).toBe("failed");
+      expect(gradeCheckin).not.toHaveBeenCalled();
+      expect(row).toEqual({ attempts: 0, transcript: TRANSCRIPT });
+      expect(updates.at(-1)?.values).toMatchObject({
+        processing_error: expect.stringMatching(/^grading_deferred: /),
+        processing_attempts: 0,
+      });
+
+      // The next attempt only grades, with the whole budget.
+      expect(await visit()).toBe("graded");
+      expect(transcribe).toHaveBeenCalledOnce();
     });
 
     it.each([

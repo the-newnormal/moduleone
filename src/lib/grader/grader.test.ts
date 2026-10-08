@@ -162,9 +162,9 @@ describe("gradeCheckin request", () => {
   it("gives the whole call, the SDK's retries included, one deadline", async () => {
     const timeout = vi.spyOn(AbortSignal, "timeout");
     await gradeCheckin({ transcript: TRANSCRIPT });
-    // Five minutes: room for a reply that thinks for most of max_tokens, and no second try of a
-    // slow reply after that.
-    expect(GRADER_TIMEOUT_MS).toBe(300_000);
+    // Four minutes: room for a reply that thinks for most of max_tokens, within one processing
+    // attempt, and no second try of a slow reply after that.
+    expect(GRADER_TIMEOUT_MS).toBe(240_000);
     expect(timeout).toHaveBeenCalledExactlyOnceWith(GRADER_TIMEOUT_MS);
     expect(create.mock.calls[0][1]).toEqual({ signal: timeout.mock.results[0].value });
   });
@@ -342,7 +342,7 @@ describe("gradeCheckin API errors", () => {
     const error = await gradingError(gradeCheckin({ transcript: TRANSCRIPT }));
     expect(error.reason).toBe("api");
     expect(error.retryable).toBe(true);
-    expect(error.message).toBe("No grade from the Anthropic API within 300 s");
+    expect(error.message).toBe("No grade from the Anthropic API within 240 s");
   });
 
   it("stops when the caller's time runs out first, and says so", async () => {
