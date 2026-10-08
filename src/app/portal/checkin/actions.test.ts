@@ -248,8 +248,8 @@ describe("prepareRecording", () => {
 
 describe("saveDraft", () => {
   it("checks the upload, then saves it as this week's draft", async () => {
-    const recordedAt = Date.parse("2026-10-08T03:30:00Z");
-    expect(await saveDraft({ path: PATH, durationMs: 95_000, recordedAt })).toEqual({ status: "saved" });
+    // Recorded 30 minutes ago by the browser's clock, so 03:30 by the server's.
+    expect(await saveDraft({ path: PATH, durationMs: 95_000, ageMs: 30 * 60 * 1000 })).toEqual({ status: "saved" });
     expect(info).toHaveBeenCalledExactlyOnceWith(PATH);
     expect(rpc).toHaveBeenCalledExactlyOnceWith("save_checkin_draft", {
       p_member_id: MEMBER,
@@ -346,17 +346,22 @@ describe("saveDraft", () => {
     expect(rpc.mock.calls[0][1]).toMatchObject({ p_duration_ms: stored });
   });
 
-  it.each([undefined, Number.NaN, -1, 0, 1e20, "2026-10-08T03:30:00Z"])(
+  it.each([undefined, Number.NaN, Number.POSITIVE_INFINITY, 1e20, "1800000"])(
     "leaves the recording time to the database when the browser sends %s",
-    async (recordedAt) => {
-      await saveDraft({ path: PATH, recordedAt: recordedAt as number });
+    async (ageMs) => {
+      await saveDraft({ path: PATH, ageMs: ageMs as number });
       expect(rpc).toHaveBeenCalledWith("save_checkin_draft", expect.objectContaining({ p_recorded_at: null }));
     },
   );
 
+  it("counts a negative age (the browser's clock was turned back) as just now", async () => {
+    await saveDraft({ path: PATH, ageMs: -60_000 });
+    expect(rpc).toHaveBeenCalledWith("save_checkin_draft", expect.objectContaining({ p_recorded_at: NOW.toISOString() }));
+  });
+
   it("drops a take recorded before the current draft, deleting its upload, and shows the draft", async () => {
     rpc.mockResolvedValue(raised("newer_draft"));
-    expect(await saveDraft({ path: PATH, recordedAt: 1 })).toEqual({ status: "superseded" });
+    expect(await saveDraft({ path: PATH, ageMs: 60 * 60 * 1000 })).toEqual({ status: "superseded" });
     expect(remove).toHaveBeenCalledExactlyOnceWith([PATH]);
     expect(revalidatePath).toHaveBeenCalledExactlyOnceWith(PAGE);
   });

@@ -2,8 +2,9 @@ import type { CheckinErrorCode, PrepareRecordingResult, SaveDraftResult } from "
 import { OFFLINE_MESSAGE, updatedSinceLoad } from "./unreachable";
 
 // A finished recording, kept in memory until it is saved, so a failed upload can be retried.
-// recordedAt (ms since the epoch, when the recording stopped) lets the server keep a newer take
-// when an older one arrives late.
+// recordedAt is when the recording stopped, by this browser's clock. Saving sends how long ago that
+// was (one clock, so it doesn't matter if it is off), and the server works out the time from its
+// own clock, to keep a newer take when an older one arrives late.
 export type Take = {
   blob: Blob;
   mimeType: string;
@@ -26,7 +27,7 @@ export type SaveSteps = {
   prepare: (mimeType: string) => Promise<PrepareRecordingResult>;
   // Uploads to the signed upload URL prepare made; resolves with Storage's error, if any.
   upload: (ready: ReadyToUpload, body: Blob) => Promise<{ error: unknown }>;
-  saveDraft: (input: { path: string; durationMs: number; recordedAt: number }) => Promise<SaveDraftResult>;
+  saveDraft: (input: { path: string; durationMs: number; ageMs: number }) => Promise<SaveDraftResult>;
   timeouts?: Timeouts;
 };
 
@@ -84,7 +85,7 @@ export async function saveTake(take: Take, steps: SaveSteps): Promise<SaveOutcom
     }
     const saved = await within(
       timeouts.saveMs,
-      saveDraft({ path, durationMs: current.durationMs, recordedAt: current.recordedAt }),
+      saveDraft({ path, durationMs: current.durationMs, ageMs: Date.now() - current.recordedAt }),
     );
     // An upload kept from an earlier try that is now too old to save: the take itself is fine, so
     // upload it again rather than ask the member to record it again.

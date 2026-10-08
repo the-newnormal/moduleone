@@ -14,6 +14,7 @@ import { formatDateTime, formatLength, formatWeekEnd, formatWeekStart } from "./
 import { needsProcessing, tidyMemberAudio, type ProcessingState } from "./housekeeping";
 import { NoticeForm } from "./notice-form";
 import { Recorder } from "./recorder";
+import { SavedTake } from "./saved-take";
 
 export const metadata: Metadata = { title: "Check-in · Module One" };
 
@@ -36,7 +37,7 @@ type View =
   | { state: "unavailable" }
   | { state: "notice" }
   | { state: "submitted"; submittedAt: string | null }
-  | { state: "draft"; playbackUrl: string | null; durationMs: number | null; recordedAt: string }
+  | { state: "draft"; path: string; playbackUrl: string | null; durationMs: number | null; recordedAt: string }
   | { state: "record" };
 
 export default async function CheckinPage() {
@@ -123,6 +124,7 @@ async function loadView(
   if (signError) console.error("checkin page: signing playback failed", { code: signError.name });
   return {
     state: "draft",
+    path: draft.data.audio_path,
     playbackUrl: signed?.signedUrl ?? null,
     durationMs: draft.data.duration_ms,
     recordedAt: draft.data.created_at,
@@ -188,6 +190,7 @@ function CheckinCard({ view }: { view: View }) {
                 ? `Submitted on ${formatDateTime(view.submittedAt)}. Thanks, see you next week.`
                 : "Your check-in for this week is in. Thanks, see you next week."}
             </p>
+            <SavedTake path={null} />
           </CardContent>
         </Card>
       );
@@ -215,6 +218,7 @@ function CheckinCard({ view }: { view: View }) {
               {view.durationMs !== null && ` · ${formatLength(view.durationMs)}`}
             </p>
             <DraftControls />
+            <SavedTake path={view.path} />
           </CardContent>
         </Card>
       );

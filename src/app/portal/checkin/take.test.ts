@@ -1,5 +1,5 @@
 import { UnrecognizedActionError } from "next/dist/client/components/unrecognized-action-error";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CheckinErrorCode } from "./actions";
 import {
   REDEPLOYED_MESSAGE,
@@ -22,6 +22,14 @@ const take: Take = {
   recordedAt: Date.parse("2026-10-08T03:30:00Z"),
   uploadedPath: `${MEMBER}/2026-10-05-take.webm`,
 };
+// Five minutes after the take was recorded. Only Date is faked; the timeout tests need real timers.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-08T03:35:00Z") });
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 // Just recorded: nothing uploaded yet.
 const fresh: Take = { ...take, uploadedPath: null };
 
@@ -60,7 +68,7 @@ describe("saveTake", () => {
     expect(steps.saveDraft).toHaveBeenCalledWith({
       path: ready(1).path,
       durationMs: 95_000,
-      recordedAt: take.recordedAt,
+      ageMs: 5 * 60 * 1000,
     });
   });
 
@@ -103,7 +111,7 @@ describe("saveTake", () => {
     expect(steps.saveDraft).toHaveBeenLastCalledWith({
       path: ready(2).path,
       durationMs: 95_000,
-      recordedAt: take.recordedAt,
+      ageMs: 5 * 60 * 1000,
     });
   });
 

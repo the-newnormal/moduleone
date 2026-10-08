@@ -117,6 +117,39 @@ describe("pendingSave", () => {
   });
 });
 
+describe("forgetSavedTake", () => {
+  it("drops a failed save of the take the page shows as the draft (its reply was lost)", async () => {
+    const { trackSave, currentSave, forgetSavedTake } = await load();
+    const save = Promise.resolve(failed);
+    await trackSave(save);
+    forgetSavedTake(take.uploadedPath);
+    await save;
+    await Promise.resolve();
+    expect(currentSave()).toBeNull();
+    expect(asksBeforeLeaving()).toBe(false);
+  });
+
+  it("keeps a failed save of a take other than the draft", async () => {
+    const { trackSave, currentSave, forgetSavedTake } = await load();
+    const save = Promise.resolve(failed);
+    await trackSave(save);
+    forgetSavedTake("member/2026-10-05-other.webm");
+    await save;
+    await Promise.resolve();
+    expect(currentSave()).toBe(save);
+  });
+
+  it("drops any held save once the week's check-in is in", async () => {
+    const { trackSave, currentSave, forgetSavedTake } = await load();
+    const save = Promise.resolve<SaveOutcome>({ ...failed, take: { ...take, uploadedPath: null } });
+    await trackSave(save);
+    forgetSavedTake(null);
+    await save;
+    await Promise.resolve();
+    expect(currentSave()).toBeNull();
+  });
+});
+
 describe("forgetDeletedTake", () => {
   it("drops a failed save of the draft the member deleted", async () => {
     const { trackSave, currentSave, forgetDeletedTake, wasDeleted } = await load();

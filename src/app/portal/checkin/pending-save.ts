@@ -64,6 +64,17 @@ export async function pendingSave(): Promise<SaveOutcome | null> {
   return null;
 }
 
+// Called where the page shows that a take is safe: as the draft (its path), or because the week's
+// check-in is in (null: nothing held can be saved any more). A save of that take whose reply was
+// lost after it had saved is dropped, so neither Sign out nor closing the tab asks about it.
+export function forgetSavedTake(path: string | null) {
+  const held = inFlight;
+  void held?.then((outcome) => {
+    if (inFlight !== held) return;
+    if (path === null || (outcome?.step === "failed" && outcome.take.uploadedPath === path)) clear();
+  });
+}
+
 // Called once the member has deleted their draft. A failed save of that same take is dropped.
 export function forgetDeletedTake(path: string) {
   deletedPath = path;

@@ -196,12 +196,11 @@ export async function prepareRecording(mimeType: string): Promise<PrepareRecordi
 
 // Saves an uploaded take as this week's draft, replacing (and deleting) any earlier take. A take
 // recorded before the current draft is dropped instead: it arrived late (a save that timed out,
-// or one retried from another tab or device), and must not replace the newer one.
-export async function saveDraft(input: {
-  path: string;
-  durationMs?: number;
-  recordedAt?: number;
-}): Promise<SaveDraftResult> {
+// or one retried from another tab or device), and must not replace the newer one. `ageMs` is how
+// long ago the take was recorded, by the browser's clock; the time it was recorded is worked out
+// from this server's clock, so browsers whose clocks disagree still order their takes correctly.
+export async function saveDraft(input: { path: string; durationMs?: number; ageMs?: number }): Promise<SaveDraftResult> {
+  const receivedAt = Date.now(); // before anything that could be slow
   const session = await sessionMember();
   if ("status" in session) return session;
   const memberId = session.member.id;
@@ -241,7 +240,7 @@ export async function saveDraft(input: {
     p_audio_path: path,
     p_mime_type: mimeType,
     p_duration_ms: clampDuration(input?.durationMs),
-    p_recorded_at: recordedAt(input?.recordedAt),
+    p_recorded_at: recordedAt(receivedAt, input?.ageMs),
   });
   if (raised(error, "newer_draft")) {
     await removeFile(admin, memberId, path);
@@ -303,11 +302,11 @@ export async function submitCheckin(): Promise<SubmitCheckinResult> {
   return submitted();
 }
 
-// When the browser says the take was recorded. Its clock may be off, so anything odd becomes null
-// (the database then uses now), and the database caps it at now.
-function recordedAt(value: unknown): string | null {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
-  const date = new Date(value);
+// When the take was recorded, by this server's clock. Anything odd becomes null (the database then
+// uses now); a negative age (the browser's clock was turned back meanwhile) counts as just now.
+function recordedAt(receivedAt: number, ageMs: unknown): string | null {
+  if (typeof ageMs !== "number" || !Number.isFinite(ageMs)) return null;
+  const date = new Date(receivedAt - Math.max(0, ageMs));
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
