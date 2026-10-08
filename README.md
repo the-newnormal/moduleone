@@ -22,7 +22,7 @@ pnpm dev
 pnpm supabase test db             # RLS tests in supabase/tests/: who can read and write what
 ```
 
-**Tuning the heat-map:** the R/Y/G rules live in the single `scoring_settings` row: what each 1–5 score of activity, excellence and morale counts for, and the green and yellow thresholds. Members with the `admin` grant can change them (until the admin settings page exists, edit the row in the Supabase Table Editor). Values have two decimals and must be between 0.01 and 1000; the database refuses settings that break that or leave a colour unreachable. Colours are computed from the stored scores on every page load, so an edit recolours past weeks too.
+**Tuning the heat-map:** the R/Y/G rules live in the single `scoring_settings` row: what each 1–5 score of activity, excellence and morale counts for, and the green and yellow thresholds. Members with the `admin` grant can change them (until the admin settings page exists, edit the row in the Supabase Table Editor). Score values have two decimals and must be between 0.01 and 1000. Thresholds also have two decimals: yellow must be above 0 and green at most 1,000,000. The database refuses settings outside these limits or that leave a colour unreachable. Colours are computed from the stored scores on every page load, so an edit recolours past weeks too.
 
 **Admin grants** (`member_grants`): `admin` edits teams, scoring and other members (not `hq` members, not themselves; only the project owner makes someone `hq`); `recordings` plays anyone's recording; `big_five` reads and edits Big Five profiles. Only the project owner adds or removes grants, in the Supabase Table Editor, so no one can promote themselves through the app.
 

@@ -4,7 +4,8 @@
 --
 -- Sign in at http://localhost:3000/login as any of these, then open the link from Mailpit
 -- (http://127.0.0.1:54324):
---   hq@example.com      hq and admin, with the recordings and big_five grants: sees and edits everything
+--   hq@example.com      hq (sees every check-in) and admin, with the recordings grant (can play, not change,
+--                       recordings) and the big_five grant; as an admin it can't edit its own or other hq rows
 --   leader@example.com  leader of Product: sees Product's check-ins (transcripts, not recordings)
 --   member@example.com  member of Product: sees only their own check-ins (none yet this week)
 --
