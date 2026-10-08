@@ -3,9 +3,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { loadScoringConfig, loadTeamWeek, type TeamWeekCheckin } from "@/lib/dashboard/load";
+import { loadRole, loadScoringConfig, loadTeamWeek, type TeamWeekCheckin } from "@/lib/dashboard/load";
 import { formatWeek, isWeekStart, parseWeekCount } from "@/lib/dashboard/weeks";
-import { type HealthConfig, healthBand, healthScore, teamWeekHealth } from "@/lib/health/health";
+import { formatScore, type HealthConfig, healthBand, healthScore, teamWeekHealth } from "@/lib/health/health";
 import { createClient } from "@/lib/supabase/server";
 import { BandBadge } from "../../band";
 
@@ -25,7 +25,7 @@ function CheckinCard({ checkin, config }: { checkin: TeamWeekCheckin; config: He
           <h2 className="font-sans text-lg font-semibold">{checkin.memberName ?? "A team member"}</h2>
         </CardTitle>
         {score !== null ? (
-          <BandBadge band={healthBand(score, config)} score={Math.round(score * 100) / 100} />
+          <BandBadge band={healthBand(score, config)} score={formatScore(score, config)} />
         ) : (
           <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
             <Clock aria-hidden className="size-4" />
@@ -77,12 +77,16 @@ export default async function TeamWeekPage({
   if (!data?.claims) redirect(`/login?next=${encodeURIComponent(`/portal/dashboard/${teamId}/${week}`)}`);
 
   const weekCount = parseWeekCount((await searchParams).weeks);
-  const [config, teamWeek] = await Promise.all([
+  const [config, teamWeek, role] = await Promise.all([
     loadScoringConfig(supabase),
     loadTeamWeek(supabase, teamId === "none" ? null : teamId, week),
+    loadRole(supabase),
   ]);
   const { checkins } = teamWeek;
-  const teamName = teamId === "none" ? "No team" : (teamWeek.teamName ?? "Earlier team");
+  const team = teamId === "none" ? "No team" : (teamWeek.teamName ?? "Earlier team");
+  // A member only ever sees their own check-in here, as on the grid: no team-wide summary.
+  const own = role === "member";
+  const teamName = own ? `You · ${team}` : team;
   const cell = teamWeekHealth(checkins, config);
   const waiting = checkins.length - (cell?.graded ?? 0);
 
@@ -95,14 +99,16 @@ export default async function TeamWeekPage({
         >
           ← Team health
         </Link>
-        {teamWeek.division && (
-          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{teamWeek.division}</p>
+        {teamWeek.context.length > 0 && (
+          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+            {teamWeek.context.join(" › ")}
+          </p>
         )}
         <h1 className="text-4xl">{teamName}</h1>
         <p className="text-muted-foreground">Week of {formatWeek(week, true)}</p>
-        {cell && (
+        {cell && !own && (
           <div className="flex flex-wrap items-center gap-3 text-sm">
-            <BandBadge band={cell.band} score={cell.score} />
+            <BandBadge band={cell.band} score={formatScore(cell.score, config)} />
             <span className="text-muted-foreground">
               mean of {cell.graded} graded check-in{cell.graded === 1 ? "" : "s"}: {cell.bands.green} green,{" "}
               {cell.bands.yellow} yellow, {cell.bands.red} red

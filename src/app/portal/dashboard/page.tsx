@@ -18,8 +18,8 @@ const SCOPE: Record<Role, { caption: string; blurb: string }> = {
     blurb: "Every team, week by week. Open a cell to read that week's check-ins.",
   },
   leader: {
-    caption: "Your team's health by week",
-    blurb: "Check-ins made in your team, week by week. Open a cell to read them.",
+    caption: "Health of the teams you lead, by week",
+    blurb: "Check-ins made in the teams you lead, week by week. Open a cell to read them.",
   },
   member: {
     caption: "Your check-ins by week",
@@ -71,8 +71,13 @@ export default async function DashboardPage({ searchParams }: PageProps<"/portal
   const weekCount = parseWeekCount((await searchParams).weeks);
   const now = new Date();
   const weeks = recentWeeks(now, weekCount);
-  const { teams, checkins, config, role } = await loadHeatmapData(supabase, weeks);
-  const heatmap = buildHeatmap({ teams, checkins, weeks, config });
+  const { teams, checkins, config, role, ownTeam, ledTeams } = await loadHeatmapData(supabase, weeks);
+  // hq reads every check-in, so an empty row means nobody checked in. Anyone else may see teams
+  // whose check-ins they can't read (admins see every team, leaders the domains above theirs), so
+  // they only get empty rows for their own team and the teams they lead.
+  const readable = new Set([...(ownTeam ? [ownTeam] : []), ...ledTeams]);
+  const showEmpty = role === "hq" ? () => true : (teamId: string) => readable.has(teamId);
+  const heatmap = buildHeatmap({ teams, checkins, weeks, config, showEmpty });
   // A member only ever sees their own check-ins, so their row is theirs, not the team's.
   const groups =
     role === "member"
@@ -124,11 +129,13 @@ export default async function DashboardPage({ searchParams }: PageProps<"/portal
             </p>
           ) : (
             <HeatmapGrid
+              key={weekCount} // remount, so a new range opens on the latest week again
               groups={groups}
               weeks={weeks}
               thisWeek={weekStartFor(now)}
               weeksParam={weekCount}
               caption={SCOPE[role].caption}
+              config={config}
             />
           )}
         </>

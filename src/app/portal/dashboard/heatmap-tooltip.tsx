@@ -7,8 +7,9 @@ type Tip = { title: string; lines: string[]; x: number; y: number; below: boolea
 const HALF_WIDTH = 150; // half the tooltip's max width, to keep it on screen
 
 // One tooltip for the whole grid: any element inside with data-tip-title (and optional
-// data-tip-body, one line per "\n") shows it on hover and on keyboard focus. Escape or scrolling
-// hides it. It only repeats what the cell's aria-label and the drill-in page already say.
+// data-tip-body, one line per "\n") shows it on hover and on keyboard focus. Escape hides it;
+// scrolling hides a hover tip and moves a focus tip along with its cell. It only repeats what the
+// cell's aria-label and the drill-in page already say.
 // It also scrolls a data-scroll-to-end container to its right edge (the latest week) on load.
 export function HeatmapTooltip({ children }: { children: ReactNode }) {
   const root = useRef<HTMLDivElement>(null);
@@ -22,14 +23,9 @@ export function HeatmapTooltip({ children }: { children: ReactNode }) {
     const scroller = el.querySelector<HTMLElement>("[data-scroll-to-end]");
     if (scroller) scroller.scrollLeft = scroller.scrollWidth;
 
-    const show = (event: Event) => {
-      const target = (event.target as Element | null)?.closest<HTMLElement>("[data-tip-title]");
-      if (!target || !el.contains(target)) {
-        if (event.type === "pointerover") setTip(null);
-        return;
-      }
+    const place = (target: HTMLElement) => {
       const box = target.getBoundingClientRect();
-      const below = box.top < 110;
+      const below = box.top < 120;
       setTip({
         title: target.dataset.tipTitle ?? "",
         lines: (target.dataset.tipBody ?? "").split("\n").filter(Boolean),
@@ -38,7 +34,19 @@ export function HeatmapTooltip({ children }: { children: ReactNode }) {
         below,
       });
     };
+    const show = (event: Event) => {
+      const target = (event.target as Element | null)?.closest<HTMLElement>("[data-tip-title]");
+      if (target && el.contains(target)) place(target);
+      else if (event.type === "pointerover") setTip(null);
+    };
     const hide = () => setTip(null);
+    const onScroll = () => {
+      // Focusing a cell can scroll it into view; keep that tip with its cell.
+      const focused = document.activeElement;
+      const keyboard = focused instanceof HTMLElement && focused.matches(":focus-visible");
+      if (keyboard && el.contains(focused) && focused.dataset.tipTitle) place(focused);
+      else hide();
+    };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") hide();
     };
@@ -47,14 +55,14 @@ export function HeatmapTooltip({ children }: { children: ReactNode }) {
     el.addEventListener("focusin", show);
     el.addEventListener("pointerleave", hide);
     el.addEventListener("focusout", hide);
-    window.addEventListener("scroll", hide, true);
+    window.addEventListener("scroll", onScroll, true);
     window.addEventListener("keydown", onKey);
     return () => {
       el.removeEventListener("pointerover", show);
       el.removeEventListener("focusin", show);
       el.removeEventListener("pointerleave", hide);
       el.removeEventListener("focusout", hide);
-      window.removeEventListener("scroll", hide, true);
+      window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("keydown", onKey);
     };
   }, []);
@@ -65,7 +73,7 @@ export function HeatmapTooltip({ children }: { children: ReactNode }) {
       {tip && (
         <div
           aria-hidden
-          className="pointer-events-none fixed z-50 max-w-[300px] rounded-lg border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-md"
+          className="pointer-events-none fixed z-50 w-max max-w-[300px] rounded-lg border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-md"
           style={{
             left: tip.x,
             top: tip.y,

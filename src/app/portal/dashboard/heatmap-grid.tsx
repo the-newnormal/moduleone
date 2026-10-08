@@ -2,18 +2,19 @@ import { Clock, OctagonAlert } from "lucide-react";
 import Link from "next/link";
 import type { HeatmapCell, HeatmapGroup, HeatmapRow } from "@/lib/dashboard/heatmap";
 import { formatWeek } from "@/lib/dashboard/weeks";
+import { formatScore, type HealthConfig } from "@/lib/health/health";
 import { BANDS } from "./band";
 import { HeatmapTooltip } from "./heatmap-tooltip";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-// The tooltip and the cell's accessible name say the same thing.
-function describe(row: HeatmapRow, cell: HeatmapCell) {
+// The tooltip and the cell's accessible name say the same thing, with the number the cell shows.
+function describe(row: HeatmapRow, cell: HeatmapCell, config: HealthConfig) {
   const title = `${row.name} · week of ${formatWeek(cell.week, true)}`;
   const lines: string[] = [];
   if (cell.health) {
     const { band, score, graded, bands } = cell.health;
-    lines.push(`${BANDS[band].label} · mean score ${score}`);
+    lines.push(`${BANDS[band].label} · mean score ${formatScore(score, config)}`);
     lines.push(
       `${plural(graded, "graded check-in")}: ${bands.green} green, ${bands.yellow} yellow, ${bands.red} red`,
     );
@@ -24,7 +25,17 @@ function describe(row: HeatmapRow, cell: HeatmapCell) {
   return { title, lines };
 }
 
-function Cell({ row, cell, weeksParam }: { row: HeatmapRow; cell: HeatmapCell; weeksParam: number }) {
+function Cell({
+  row,
+  cell,
+  weeksParam,
+  config,
+}: {
+  row: HeatmapRow;
+  cell: HeatmapCell;
+  weeksParam: number;
+  config: HealthConfig;
+}) {
   if (!cell.health && cell.pending === 0) {
     return (
       <td className="p-0.5">
@@ -36,7 +47,7 @@ function Cell({ row, cell, weeksParam }: { row: HeatmapRow; cell: HeatmapCell; w
     );
   }
 
-  const { title, lines } = describe(row, cell);
+  const { title, lines } = describe(row, cell, config);
   const band = cell.health ? BANDS[cell.health.band] : null;
   // A green or yellow mean can hide a red check-in; flag it in the corner.
   const hiddenRed = cell.health && cell.health.band !== "red" && cell.health.bands.red > 0;
@@ -53,7 +64,7 @@ function Cell({ row, cell, weeksParam }: { row: HeatmapRow; cell: HeatmapCell; w
         {band ? (
           <>
             <band.Icon aria-hidden className={`size-4 shrink-0 ${band.icon}`} strokeWidth={2.25} />
-            {cell.health!.score.toFixed(1)}
+            {formatScore(cell.health!.score, config)}
           </>
         ) : (
           <>
@@ -82,12 +93,14 @@ export function HeatmapGrid({
   thisWeek,
   weeksParam,
   caption,
+  config,
 }: {
   groups: HeatmapGroup[];
   weeks: readonly string[];
   thisWeek: string;
   weeksParam: number;
   caption: string;
+  config: HealthConfig;
 }) {
   return (
     <HeatmapTooltip>
@@ -112,27 +125,28 @@ export function HeatmapGrid({
             </tr>
           </thead>
           {groups.map((group) => (
-            <tbody key={group.division ?? "none"}>
+            <tbody key={group.key ?? "other"}>
               <tr>
                 <th
-                  scope="colgroup"
+                  scope="rowgroup"
                   colSpan={weeks.length + 1}
-                  className="sticky left-0 border-t bg-card px-3 pt-3 pb-1 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+                  className="border-t bg-card px-3 pt-3 pb-1 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
                 >
-                  {group.division ?? "Other"}
+                  {/* A cell spanning every column can't stick; its label can, so it stays in view on phones. */}
+                  <span className="sticky left-3 inline-block">{group.label ?? "Other"}</span>
                 </th>
               </tr>
               {group.rows.map((row) => (
                 <tr key={row.teamId ?? "none"}>
                   <th
                     scope="row"
-                    className="sticky left-0 z-10 max-w-48 truncate bg-card px-3 py-0.5 text-left font-medium"
+                    className={`sticky left-0 z-10 max-w-48 truncate bg-card py-0.5 pr-3 text-left font-medium ${row.depth > 0 ? "pl-7" : "pl-3"}`}
                   >
                     {row.name}
                     {row.archived && <span className="ml-1.5 text-xs font-normal text-muted-foreground">archived</span>}
                   </th>
                   {row.cells.map((cell) => (
-                    <Cell key={cell.week} row={row} cell={cell} weeksParam={weeksParam} />
+                    <Cell key={cell.week} row={row} cell={cell} weeksParam={weeksParam} config={config} />
                   ))}
                 </tr>
               ))}

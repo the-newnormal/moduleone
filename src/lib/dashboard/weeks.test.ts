@@ -36,6 +36,7 @@ describe("isWeekStart", () => {
     ["2026-02-30", false], // not a real date
     ["2026-10-5", false],
     ["2026-10-05'; drop table", false],
+    ["0000-01-03", false], // a Monday in JavaScript, an error in Postgres
     ["", false],
   ])("%s → %s", (value, expected) => {
     expect(isWeekStart(value)).toBe(expected);

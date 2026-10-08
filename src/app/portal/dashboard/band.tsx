@@ -9,7 +9,8 @@ export const BANDS: Record<Band, { label: string; Icon: LucideIcon; icon: string
   red: { label: "Red", Icon: OctagonAlert, icon: "text-status-critical", tint: "bg-status-critical/12" },
 };
 
-export function BandBadge({ band, score }: { band: Band; score?: number }) {
+// `score` comes from formatScore, so the number never contradicts the colour.
+export function BandBadge({ band, score }: { band: Band; score?: string }) {
   const { label, Icon, icon, tint } = BANDS[band];
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-sm font-medium ${tint}`}>

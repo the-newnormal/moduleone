@@ -20,9 +20,12 @@ export function recentWeeks(now: Date, count: number): string[] {
   );
 }
 
-// True for a real calendar date (YYYY-MM-DD) that is a Monday.
+// True for a real calendar date (YYYY-MM-DD) that is a Monday, in a sane range (Postgres rejects
+// year 0000, which JavaScript accepts).
 export function isWeekStart(value: string): boolean {
   if (!ISO_DATE.test(value)) return false;
+  const year = Number(value.slice(0, 4));
+  if (year < 2000 || year > 2100) return false;
   const date = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(value) && date.getUTCDay() === 1;
 }
