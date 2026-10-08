@@ -161,7 +161,8 @@ describe("processCheckin", () => {
     await processCheckin(CHECKIN);
     const [[attemptMs], [transcribeMs]] = timeout.mock.calls;
     expect(attemptMs).toBeLessThanOrEqual(280_000);
-    expect(transcribeMs).toBeLessThanOrEqual(120_000);
+    expect(transcribeMs).toBeLessThanOrEqual(150_000);
+    expect(attemptMs - transcribeMs).toBeGreaterThanOrEqual(120_000);
     // Grading gets what's left of the attempt; running out of it also stops transcription.
     expect(vi.mocked(gradeCheckin).mock.calls[0][0].signal).toBe(controllers[0].signal);
     const transcribeSignal = vi.mocked(transcribe).mock.calls[0][1]?.signal;
@@ -242,6 +243,35 @@ describe("processCheckin", () => {
 
       vi.mocked(gradeCheckin).mockResolvedValue(GRADE);
       expect(await visit()).toBe("graded");
+    });
+
+    it("doesn't use them up while transcription is misconfigured, so it goes through once fixed", async () => {
+      vi.mocked(transcribe).mockRejectedValue(
+        new TranscriptionError("The transcription account is out of credit.", {
+          provider: "openai",
+          model: "gpt-transcribe",
+          retryable: false,
+          config: true,
+        }),
+      );
+      for (let i = 0; i < 8; i++) expect(await visit()).toBe("failed");
+      expect(row.attempts).toBe(0);
+      expect(updates.at(-1)?.values).toEqual({
+        processing_error: "transcription_failed: TranscriptionError: The transcription account is out of credit.",
+        processing_attempts: 0,
+      });
+
+      vi.mocked(transcribe).mockResolvedValue({ text: TRANSCRIPT, provider: "openai", model: "gpt-transcribe", warnings: [] });
+      expect(await visit()).toBe("graded");
+    });
+
+    it("counts a recording that can't be transcribed, and stops after five", async () => {
+      vi.mocked(transcribe).mockRejectedValue(
+        new TranscriptionError("Transcription failed (400).", { provider: "openai", model: "gpt-transcribe", retryable: false }),
+      );
+      for (let i = 0; i < 5; i++) expect(await visit()).toBe("failed");
+      expect(row.attempts).toBe(5);
+      expect(await visit()).toBe("skipped");
     });
 
     it.each([

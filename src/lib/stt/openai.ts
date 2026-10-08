@@ -18,6 +18,7 @@ function createClient(target: SttTarget): OpenAI {
       throw new TranscriptionError("Local speech-to-text isn't configured (STT_LOCAL_URL).", {
         ...target,
         retryable: false,
+        config: true,
       });
     }
     // Local servers usually ignore the key, but the SDK insists on one.
@@ -25,7 +26,7 @@ function createClient(target: SttTarget): OpenAI {
   }
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
-    throw new TranscriptionError("Missing OPENAI_API_KEY (server-only).", { ...target, retryable: false });
+    throw new TranscriptionError("Missing OPENAI_API_KEY (server-only).", { ...target, retryable: false, config: true });
   }
   // baseURL is explicit so a stray OPENAI_BASE_URL can't send recordings somewhere else.
   return new OpenAI({ apiKey, baseURL: "https://api.openai.com/v1", timeout: TIMEOUT_MS, maxRetries: 1 });
@@ -70,17 +71,23 @@ export async function transcribeWithOpenAI(
 
 // The SDK's network errors are subclasses of APIError, so they're checked first.
 function toTranscriptionError(target: SttTarget, error: unknown): TranscriptionError {
-  const wrap = (message: string, retryable: boolean) =>
-    new TranscriptionError(message, { ...target, retryable, cause: error });
-  if (error instanceof OpenAI.APIUserAbortError) return wrap("Transcription was cancelled.", false);
+  const wrap = (message: string, retryable: boolean, config = false) =>
+    new TranscriptionError(message, { ...target, retryable, config, cause: error });
+  // The caller's signal: cancelled, or out of time for this attempt.
+  if (error instanceof OpenAI.APIUserAbortError) return wrap("Transcription was stopped (out of time or cancelled).", false);
   if (error instanceof OpenAI.APIConnectionError) return wrap("Couldn't reach the transcription service.", true);
-  // Out of credit is a rate-limit status too, but waiting won't fix it.
-  if (error instanceof OpenAI.RateLimitError) return wrap("Rate-limited by the transcription service.", error.code !== "insufficient_quota");
+  // Out of credit is a rate-limit status too, but waiting won't fix it; topping up will.
+  if (error instanceof OpenAI.RateLimitError) {
+    return error.code === "insufficient_quota"
+      ? wrap("The transcription account is out of credit.", false, true)
+      : wrap("Rate-limited by the transcription service.", true);
+  }
   if (error instanceof OpenAI.InternalServerError) return wrap(`Transcription service error (${error.status}).`, true);
-  // 403/404: no access to this model, which the fallback model may have. 400 (bad audio), 401
-  // (wrong key) and 413 (too big) fail the same way on any model.
+  // 403/404: no access to this model, which the fallback model may have. 400 (bad audio) and 413
+  // (too big) fail the same way on any model; so does 401 (wrong key), until the key is fixed.
   if (error instanceof OpenAI.APIError) {
-    return wrap(`Transcription failed (${error.status ?? "no status"}).`, error.status === 403 || error.status === 404);
+    const retryable = error.status === 403 || error.status === 404;
+    return wrap(`Transcription failed (${error.status ?? "no status"}).`, retryable, error.status === 401);
   }
   return wrap("Transcription failed.", false);
 }

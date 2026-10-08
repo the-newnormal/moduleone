@@ -38,15 +38,20 @@ export class TranscriptionError extends Error {
   // timeout, rate limit, no access to the model). False when it never will (bad or oversized
   // audio, a wrong key, nothing configured).
   readonly retryable: boolean;
+  // True when the setup is at fault rather than the recording (no or a wrong key, no credit left,
+  // nothing configured): every check-in fails the same way until someone fixes it, so a failure
+  // like this shouldn't use up the check-in's attempts.
+  readonly config: boolean;
 
   constructor(
     message: string,
-    details: { provider: SttProvider; model: string; retryable: boolean; cause?: unknown },
+    details: { provider: SttProvider; model: string; retryable: boolean; config?: boolean; cause?: unknown },
   ) {
     super(message, { cause: details.cause });
     this.name = "TranscriptionError";
     this.provider = details.provider;
     this.model = details.model;
     this.retryable = details.retryable;
+    this.config = details.config ?? false;
   }
 }

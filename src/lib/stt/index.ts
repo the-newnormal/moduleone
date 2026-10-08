@@ -6,9 +6,14 @@ import { transcriptWarnings } from "./warnings";
 
 export * from "./types";
 
+// With a fallback to go to, the main model gets this long, so a hung or very slow service still
+// leaves the fallback time inside the caller's limit (processCheckin allows 150 s in all). A
+// 10-minute recording normally transcribes in well under a minute.
+const PRIMARY_LIMIT_MS = 75_000;
+
 // Transcribes one check-in recording with the configured model (STT_PROVIDER, STT_MODEL). If that
-// fails in a way another model might not, tries the fallback (STT_FALLBACK) once and says so in
-// the warnings. Throws TranscriptionError when neither produced a transcript.
+// fails in a way another model might not (or takes too long), tries the fallback (STT_FALLBACK)
+// once and says so in the warnings. Throws TranscriptionError when neither produced a transcript.
 export async function transcribe(audio: AudioInput, opts: TranscribeOptions = {}): Promise<TranscriptResult> {
   let config;
   try {
@@ -18,14 +23,18 @@ export async function transcribe(audio: AudioInput, opts: TranscribeOptions = {}
       provider: "openai",
       model: "unknown",
       retryable: false,
+      config: true,
       cause: error,
     });
   }
 
+  const primaryLimit = config.fallback ? AbortSignal.timeout(PRIMARY_LIMIT_MS) : null;
+  const primarySignal = primaryLimit && opts.signal ? AbortSignal.any([opts.signal, primaryLimit]) : (primaryLimit ?? opts.signal);
   try {
-    return await run(config.primary, audio, opts, []);
+    return await run(config.primary, audio, { ...opts, signal: primarySignal }, []);
   } catch (error) {
-    if (!config.fallback || !(error instanceof TranscriptionError) || !error.retryable || opts.signal?.aborted) {
+    const tooSlow = Boolean(primaryLimit?.aborted) && !opts.signal?.aborted;
+    if (!config.fallback || !(error instanceof TranscriptionError) || !(error.retryable || tooSlow) || opts.signal?.aborted) {
       throw error;
     }
     const { provider, model } = config.fallback;

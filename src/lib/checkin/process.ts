@@ -22,7 +22,7 @@ const BUCKET = "checkin-audio";
 // Transcribing a 10-minute recording normally takes well under a minute, and grading one about as
 // long; the transcript is saved before grading, so a retry after a slow grade only grades.
 const ATTEMPT_BUDGET_MS = 270_000;
-const TRANSCRIBE_BUDGET_MS = 120_000;
+const TRANSCRIBE_BUDGET_MS = 150_000;
 
 // Transcribes and grades one submitted check-in, then stores the result. Safe to call more than
 // once and from several places at the same time: claim_checkin_processing (0004) hands each attempt
@@ -84,7 +84,10 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
         { signal: AbortSignal.any([attempt, AbortSignal.timeout(TRANSCRIBE_BUDGET_MS)]) },
       );
     } catch (error) {
-      return fail(error instanceof TranscriptionError ? "transcription_failed" : "transcription_error", error);
+      if (!(error instanceof TranscriptionError)) return fail("transcription_error", error);
+      // As for the grader below: a setup problem (no or a wrong OPENAI_API_KEY, no credit, nothing
+      // configured) fails every check-in until it's fixed, so it doesn't use up an attempt.
+      return fail("transcription_failed", error, { giveBackAttempt: error.config });
     }
     const { error: transcriptError } = await admin
       .from("checkins")

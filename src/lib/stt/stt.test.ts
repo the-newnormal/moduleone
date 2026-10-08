@@ -4,7 +4,7 @@ import { transcribe, TranscriptionError, type AudioInput } from "./index";
 import { transcriptWarnings } from "./warnings";
 
 // The OpenAI SDK calls the global fetch, so each test answers its requests here: no network.
-type Call = { url: string; headers: Headers; form: FormData };
+type Call = { url: string; headers: Headers; form: FormData; signal?: AbortSignal | null };
 let calls: Call[];
 let respond: (call: Call, index: number) => Response | Promise<Response>;
 
@@ -27,7 +27,7 @@ beforeEach(() => {
   calls = [];
   respond = () => json(200, { text: "  I shipped the login page.  " });
   const fetch = async (input: string | URL | Request, init?: RequestInit) => {
-    const call = { url: String(input), headers: new Headers(init?.headers), form: init?.body as FormData };
+    const call = { url: String(input), headers: new Headers(init?.headers), form: init?.body as FormData, signal: init?.signal };
     calls.push(call);
     return respond(call, calls.length - 1);
   };
@@ -186,16 +186,34 @@ describe("transcribe", () => {
   });
 
   it.each([
-    ["bad audio", () => apiError(400, "invalid_value"), "Transcription failed (400)."],
-    ["a wrong key", () => apiError(401, "invalid_api_key"), "Transcription failed (401)."],
-    ["a body over the size limit", () => apiError(413), "Transcription failed (413)."],
-    ["no credit left", () => apiError(429, "insufficient_quota"), "Rate-limited by the transcription service."],
-  ])("doesn't fall back after %s, which would fail the same way", async (_label, failure, message) => {
+    ["bad audio", () => apiError(400, "invalid_value"), "Transcription failed (400).", false],
+    ["a body over the size limit", () => apiError(413), "Transcription failed (413).", false],
+    ["a wrong key", () => apiError(401, "invalid_api_key"), "Transcription failed (401).", true],
+    ["no credit left", () => apiError(429, "insufficient_quota"), "The transcription account is out of credit.", true],
+  ])("doesn't fall back after %s, which would fail the same way", async (_label, failure, message, config) => {
     respond = failure;
     const error = await transcribe(AUDIO).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(TranscriptionError);
-    expect(error).toMatchObject({ message, provider: "openai", model: "gpt-transcribe", retryable: false });
+    // `config`: the setup is at fault, not the recording, so the check-in keeps its attempts.
+    expect(error).toMatchObject({ message, provider: "openai", model: "gpt-transcribe", retryable: false, config });
     expect(calls).toHaveLength(1);
+  });
+
+  it("falls back when the main model takes too long, inside the caller's time", async () => {
+    const limit = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(limit.signal);
+    const caller = new AbortController();
+    respond = (call) => {
+      if (call.form.get("model") === "whisper-1") return json(200, { text: "From the fallback." });
+      // The main model hangs until its time is up.
+      queueMicrotask(() => limit.abort());
+      return new Promise((_resolve, reject) => call.signal?.addEventListener("abort", () => reject(call.signal?.reason)));
+    };
+
+    const result = await transcribe(AUDIO, { signal: caller.signal });
+
+    expect(result).toMatchObject({ model: "whisper-1", warnings: ["used_fallback:openai:whisper-1"] });
+    expect(caller.signal.aborted).toBe(false);
   });
 
   it("throws the main model's error when the fallback is off", async () => {
@@ -223,13 +241,14 @@ describe("transcribe", () => {
     await expect(transcribe(AUDIO)).rejects.toMatchObject({
       message: "Missing OPENAI_API_KEY (server-only).",
       retryable: false,
+      config: true,
     });
     expect(calls).toHaveLength(0);
   });
 
   it("refuses a recording over the upload limit, before sending anything", async () => {
     const big = { ...AUDIO, data: new Uint8Array(25 * 1024 * 1024) };
-    await expect(transcribe(big)).rejects.toMatchObject({ retryable: false });
+    await expect(transcribe(big)).rejects.toMatchObject({ retryable: false, config: false });
     expect(calls).toHaveLength(0);
   });
 
@@ -237,7 +256,7 @@ describe("transcribe", () => {
     vi.stubEnv("STT_PROVIDER", "web");
     const error = await transcribe(AUDIO).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(TranscriptionError);
-    expect(error).toMatchObject({ retryable: false });
+    expect(error).toMatchObject({ retryable: false, config: true });
     expect(calls).toHaveLength(0);
   });
 
@@ -264,6 +283,7 @@ describe("transcribe", () => {
         message: "Local speech-to-text isn't configured (STT_LOCAL_URL).",
         provider: "local",
         retryable: false,
+        config: true,
       });
       expect(calls).toHaveLength(0);
     });
