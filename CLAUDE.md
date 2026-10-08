@@ -6,8 +6,8 @@ Stack: **Next.js (App Router) + TypeScript + Tailwind + shadcn/ui + Supabase + V
 
 ## Git
 - Never commit directly to `main`. Create a feature branch.
-- Claude merges a PR as soon as GitHub shows it mergeable (checks green, approval in, threads resolved); no need to ask. Hold it while the PR lists unticked "Before merging" steps.
-- Never bypass CI or branch protection. Don't post `@coderabbitai approve` unless the user asks; let the approval come from CodeRabbit's own review or a person.
+- Claude may merge a PR without asking once all three hold on its latest commit: CodeRabbit has approved it, Greptile's review scores it 5/5, and the CI `check` passed. Hold it while the PR lists unticked "Before merging" steps.
+- Never bypass CI or branch protection. Don't post `@coderabbitai approve` unless the user asks; the approval must come from CodeRabbit's own review.
 - Small, focused PRs.
 
 ## Database
