@@ -35,15 +35,20 @@ type Media = { stream: MediaStream; recorder: MediaRecorder; timer: number; save
 
 // A take keeps saving after the member leaves the page (see the unmount effect). This module
 // outlives the component across in-app navigation, so coming back finds the save here and waits
-// for it, instead of offering a new recording that the older save could then replace.
+// for it, instead of offering a new recording that the older save could then replace. A save that
+// failed stays here, take and all, until a recorder shows it (with Try again) or it's discarded.
 let inFlight: Promise<SaveOutcome | null> | null = null;
 
 function trackSave<T extends SaveOutcome | null>(save: Promise<T>): Promise<T> {
   inFlight = save;
-  const clear = () => {
-    if (inFlight === save) inFlight = null;
-  };
-  save.then(clear, clear);
+  save.then(
+    (outcome) => {
+      if (inFlight === save && outcome?.step !== "failed") inFlight = null;
+    },
+    () => {
+      if (inFlight === save) inFlight = null;
+    },
+  );
   return save;
 }
 
@@ -112,11 +117,12 @@ export function Recorder() {
   useEffect(
     () => () => {
       startCount.current += 1;
+      // Still set while recording, and after Finish until onstop has collected the take.
       const live = media.current;
-      if (live && live.recorder.state === "recording") {
+      if (live) {
         window.clearInterval(live.timer);
         void trackSave(live.saved); // registered now, before onstop runs, so a quick return waits too
-        live.recorder.stop(); // onstop saves the take and lets go of the microphone
+        if (live.recorder.state !== "inactive") live.recorder.stop(); // onstop saves the take and lets go of the microphone
         return;
       }
       release(media);
@@ -134,6 +140,8 @@ export function Recorder() {
     let mounted = true;
     void pending.then((outcome) => {
       if (!mounted) return;
+      // This recorder holds the outcome now (a failed take included), so it's no longer pending.
+      if (inFlight === pending) inFlight = null;
       setState(outcome ?? { step: "idle", problem: null });
       // The save re-rendered the page while the member was elsewhere; this page hasn't seen it.
       if (outcome?.step === "saved") router.refresh();
@@ -278,6 +286,7 @@ export function Recorder() {
   }
 
   function discard() {
+    inFlight = null; // the failed take this recorder was showing, if it was still kept there
     setElapsedMs(0);
     setState({ step: "idle", problem: null });
   }
