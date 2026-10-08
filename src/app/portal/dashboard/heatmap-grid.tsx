@@ -25,29 +25,42 @@ function describe(row: HeatmapRow, cell: HeatmapCell, config: HealthConfig) {
   return { title, lines };
 }
 
+// With a single week there's room to spell the cell out instead of leaving it to the tooltip.
 function Cell({
   row,
   cell,
   weeksParam,
   config,
+  detailed,
 }: {
   row: HeatmapRow;
   cell: HeatmapCell;
   weeksParam: number;
   config: HealthConfig;
+  detailed: boolean;
 }) {
+  const size = detailed ? "min-h-11 justify-start px-3 py-2 text-left" : "h-11 justify-center";
+
   if (!cell.health && cell.pending === 0) {
     return (
       <td className="p-0.5">
-        <span className="flex h-11 items-center justify-center rounded-md text-muted-foreground/60">
-          <span aria-hidden>–</span>
-          <span className="sr-only">No check-ins</span>
+        <span className={`flex items-center rounded-md text-muted-foreground/60 ${size}`}>
+          {detailed ? (
+            "No check-ins yet"
+          ) : (
+            <>
+              <span aria-hidden>–</span>
+              <span className="sr-only">No check-ins</span>
+            </>
+          )}
         </span>
       </td>
     );
   }
 
   const { title, lines } = describe(row, cell, config);
+  // Everything after the band line: the colour counts and anything still waiting.
+  const detail = cell.health ? lines.slice(1).join(" · ") : lines[lines.length - 1];
   const band = cell.health ? BANDS[cell.health.band] : null;
   // A green or yellow mean can hide a red check-in; flag it in the corner.
   const hiddenRed = cell.health && cell.health.band !== "red" && cell.health.bands.red > 0;
@@ -59,7 +72,7 @@ function Cell({
         aria-label={`${title}. ${lines.join(". ")}.`}
         data-tip-title={title}
         data-tip-body={lines.join("\n")}
-        className={`relative flex h-11 items-center justify-center gap-1.5 rounded-md text-sm font-medium tabular-nums outline-offset-2 transition hover:ring-2 hover:ring-foreground/25 focus-visible:outline-2 focus-visible:outline-ring ${band ? band.tint : "bg-muted"}`}
+        className={`relative flex items-center gap-1.5 rounded-md text-sm font-medium tabular-nums outline-offset-2 transition hover:ring-2 hover:ring-foreground/25 focus-visible:outline-2 focus-visible:outline-ring ${size} ${band ? band.tint : "bg-muted"}`}
       >
         {band ? (
           <>
@@ -69,9 +82,10 @@ function Cell({
         ) : (
           <>
             <Clock aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-            {cell.pending}
+            {!detailed && cell.pending}
           </>
         )}
+        {detailed && <span className="pr-3 font-normal text-muted-foreground">{detail}</span>}
         {hiddenRed && (
           <OctagonAlert
             aria-hidden
@@ -113,7 +127,11 @@ export function HeatmapGrid({
                 Team
               </th>
               {weeks.map((week) => (
-                <th key={week} scope="col" className="min-w-[5.5rem] px-1 py-2 text-center font-medium">
+                <th
+                  key={week}
+                  scope="col"
+                  className={`min-w-[5.5rem] py-2 font-medium ${weeks.length === 1 ? "px-3.5 text-left" : "px-1 text-center"}`}
+                >
                   <span className={week === thisWeek ? "text-foreground" : "text-muted-foreground"}>
                     {formatWeek(week)}
                   </span>
@@ -146,7 +164,14 @@ export function HeatmapGrid({
                     {row.archived && <span className="ml-1.5 text-xs font-normal text-muted-foreground">archived</span>}
                   </th>
                   {row.cells.map((cell) => (
-                    <Cell key={cell.week} row={row} cell={cell} weeksParam={weeksParam} config={config} />
+                    <Cell
+                      key={cell.week}
+                      row={row}
+                      cell={cell}
+                      weeksParam={weeksParam}
+                      config={config}
+                      detailed={weeks.length === 1}
+                    />
                   ))}
                 </tr>
               ))}

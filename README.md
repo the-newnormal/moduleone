@@ -22,7 +22,7 @@ pnpm dev
 pnpm supabase test db             # RLS tests in supabase/tests/: who can read and write what
 ```
 
-**The heat-map** is at `/portal/dashboard`: teams × weeks (Singapore-time Mondays; the last 4, 8 or 12), grouped by division, each cell the mean score of that team-week's graded check-ins. Open a cell to read the check-ins, reviews and transcripts, and play recordings if you may. It reads with the viewer's own login, so RLS decides what each person sees: hq every team, a leader the teams they lead, a member their own check-ins.
+**The heat-map** is at `/portal/dashboard`: teams × weeks (Singapore-time Mondays; the last 1, 4, 8 or 12, where a single week spells out each team's counts), grouped by division, each cell the mean score of that team-week's graded check-ins. Open a cell to read the check-ins, reviews and transcripts, and play recordings if you may. It reads with the viewer's own login, so RLS decides what each person sees: hq every team, a leader the teams they lead, a member their own check-ins.
 
 **Tuning the heat-map:** the R/Y/G rules live in the single `scoring_settings` row: what each 1–5 score of activity, excellence and morale counts for, and the green and yellow thresholds. Members with the `admin` grant can change them (until the admin settings page exists, edit the row in the Supabase Table Editor). Score values have two decimals and must be between 0.01 and 1000. Thresholds also have two decimals: yellow must be above 0 and green at most 1,000,000. The database refuses settings outside these limits or that leave a colour unreachable. Colours are computed from the stored scores on every page load, so an edit recolours past weeks too.
 

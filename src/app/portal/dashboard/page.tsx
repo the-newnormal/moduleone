@@ -115,7 +115,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/portal
                   }`}
                 >
                   {selected && <Check aria-hidden className="size-4" strokeWidth={2.75} />}
-                  {count} weeks
+                  {count} {count === 1 ? "week" : "weeks"}
                 </Link>
               );
             })}
