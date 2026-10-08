@@ -26,25 +26,30 @@ function describe(row: HeatmapRow, cell: HeatmapCell, config: HealthConfig) {
 }
 
 // With a single week there's room to spell the cell out instead of leaving it to the tooltip.
+// A member's row holds only their own check-in, so it names the colour rather than counting one.
 function Cell({
   row,
   cell,
   weeksParam,
   config,
   detailed,
+  own,
 }: {
   row: HeatmapRow;
   cell: HeatmapCell;
   weeksParam: number;
   config: HealthConfig;
   detailed: boolean;
+  own: boolean;
 }) {
   const size = detailed ? "min-h-11 justify-start px-3 py-2 text-left" : "h-11 justify-center";
 
   if (!cell.health && cell.pending === 0) {
     return (
       <td className="p-0.5">
-        <span className={`flex items-center rounded-md text-muted-foreground/60 ${size}`}>
+        <span
+          className={`flex items-center rounded-md ${detailed ? "text-muted-foreground" : "text-muted-foreground/60"} ${size}`}
+        >
           {detailed ? (
             "No check-ins yet"
           ) : (
@@ -60,7 +65,13 @@ function Cell({
 
   const { title, lines } = describe(row, cell, config);
   // Everything after the band line: the colour counts and anything still waiting.
-  const detail = cell.health ? lines.slice(1).join(" · ") : lines[lines.length - 1];
+  const detail = own
+    ? cell.health
+      ? BANDS[cell.health.band].label
+      : "Waiting for the grader"
+    : cell.health
+      ? lines.slice(1).join(" · ")
+      : lines[lines.length - 1];
   const band = cell.health ? BANDS[cell.health.band] : null;
   // A green or yellow mean can hide a red check-in; flag it in the corner.
   const hiddenRed = cell.health && cell.health.band !== "red" && cell.health.bands.red > 0;
@@ -108,6 +119,7 @@ export function HeatmapGrid({
   weeksParam,
   caption,
   config,
+  own = false,
 }: {
   groups: HeatmapGroup[];
   weeks: readonly string[];
@@ -115,6 +127,7 @@ export function HeatmapGrid({
   weeksParam: number;
   caption: string;
   config: HealthConfig;
+  own?: boolean; // a member's grid: every row is their own check-ins
 }) {
   return (
     <HeatmapTooltip>
@@ -171,6 +184,7 @@ export function HeatmapGrid({
                       weeksParam={weeksParam}
                       config={config}
                       detailed={weeks.length === 1}
+                      own={own}
                     />
                   ))}
                 </tr>
