@@ -6,7 +6,8 @@ Stack: **Next.js (App Router) + TypeScript + Tailwind + shadcn/ui + Supabase + V
 
 ## Git
 - Never commit directly to `main`. Create a feature branch.
-- Never merge your own PR. Never bypass CI.
+- Claude merges a PR as soon as GitHub shows it mergeable (checks green, approval in, threads resolved); no need to ask. Hold it while the PR lists unticked "Before merging" steps.
+- Never bypass CI or branch protection. Don't post `@coderabbitai approve` unless the user asks; let the approval come from CodeRabbit's own review or a person.
 - Small, focused PRs.
 
 ## Database
