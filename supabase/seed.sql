@@ -2,17 +2,28 @@
 -- would Supabase preview branches if they're turned on. Production never runs it: `db push` and
 -- the GitHub integration's production deploy apply migrations only.
 --
+-- The divisions, domains and teams come from migration 0003 (the founding structure); this file
+-- puts people in three of its teams, found by code: IP Lab 1 (IP.1, under Gather › IP Lab), Atlas
+-- (AT.X, a Culture domain) and Youth Day 1 (YD.1, under Special Projects › Youth Day).
+--
 -- Sign in at http://localhost:3000/login as any of these, then open the link from Mailpit
 -- (http://127.0.0.1:54324):
---   hq@example.com      hq (sees every check-in) and admin, with the recordings grant (can play, not change,
---                       recordings) and the big_five grant; as an admin it can't edit its own or other hq rows
---   leader@example.com  leader of Product: sees Product's check-ins (transcripts, not recordings)
---   member@example.com  member of Product: sees only their own check-ins (none yet this week)
+--   hq@example.com      hq (sees every team, member and check-in) and admin, with the recordings grant
+--                       (can play, not change, recordings) and the big_five grant; as an admin it can't
+--                       edit its own or other hq rows
+--   leader@example.com  leader of IP Lab 1 who also leads IP Lab 2 (team_leads): sees check-ins made
+--                       in either (transcripts, not recordings; IP Lab 2 has none yet), and the nodes
+--                       above them (IP Lab, Gather) but not check-ins made in those. A lead covers
+--                       everything under the led node, so a leader of a domain (as their own team or
+--                       through team_leads) would also see its sub-teams' check-ins
+--   member@example.com  member of IP Lab 1: sees only their own check-ins (none yet this week), their
+--                       teammates, and IP Lab 1, IP Lab and Gather
+-- (Ben Ong, a leader with no login, sits in the domain Atlas itself, which has no sub-teams.)
 --
 -- Eight weeks of check-ins, ending this week, tell a story on the heat-map under the default scoring
--- settings (scoring_settings): Product stays green apart from a yellow dip, Sales slides from green
--- to red, and Ops climbs from red to green. Some weeks are missed, and one check-in from this week
--- is still waiting for the grader. Re-running `db reset` moves the weeks to end at the current one.
+-- settings (scoring_settings): IP Lab 1 stays green apart from a yellow dip, Atlas slides from green
+-- to red, and Youth Day 1 climbs from red to green. Some weeks are missed, and one check-in from this
+-- week is still waiting for the grader. Re-running `db reset` moves the weeks to end at the current one.
 
 -- ---------- logins ----------
 insert into auth.users (
@@ -41,24 +52,27 @@ where id in (
   '5eed0000-0000-4000-8000-000000000003'
 );
 
--- ---------- teams and members ----------
-insert into teams (id, name, division) values
-  ('7ea30000-0000-4000-8000-000000000001', 'Product', 'Studio'),
-  ('7ea30000-0000-4000-8000-000000000002', 'Sales', 'Growth'),
-  ('7ea30000-0000-4000-8000-000000000003', 'Ops', 'Operations');
+-- ---------- members ----------
+insert into members (id, auth_user_id, name, team_id, role)
+select v.id, v.auth_user_id, v.name, t.id, v.role
+from (values
+  ('3e3b0000-0000-4000-8000-000000000001'::uuid, '5eed0000-0000-4000-8000-000000000001'::uuid, 'Hana Lim',    null,   'hq'),
+  ('3e3b0000-0000-4000-8000-000000000002',       '5eed0000-0000-4000-8000-000000000002',       'Leo Tan',     'IP.1', 'leader'),
+  ('3e3b0000-0000-4000-8000-000000000003',       '5eed0000-0000-4000-8000-000000000003',       'Mei Wong',    'IP.1', 'member'),
+  ('3e3b0000-0000-4000-8000-000000000004',       null,                                         'Ravi Kumar',  'IP.1', 'member'),
+  ('3e3b0000-0000-4000-8000-000000000005',       null,                                         'Siti Rahman', 'IP.1', 'member'),
+  ('3e3b0000-0000-4000-8000-000000000006',       null,                                         'Ben Ong',     'AT.X', 'leader'),
+  ('3e3b0000-0000-4000-8000-000000000007',       null,                                         'Aisha Noor',  'AT.X', 'member'),
+  ('3e3b0000-0000-4000-8000-000000000008',       null,                                         'Daniel Goh',  'AT.X', 'member'),
+  ('3e3b0000-0000-4000-8000-000000000009',       null,                                         'Wei Chen',    'YD.1', 'leader'),
+  ('3e3b0000-0000-4000-8000-000000000010',       null,                                         'Priya Nair',  'YD.1', 'member'),
+  ('3e3b0000-0000-4000-8000-000000000011',       null,                                         'Farah Aziz',  'YD.1', 'member')
+) as v (id, auth_user_id, name, team_code, role)
+left join teams t on t.code = v.team_code;
 
-insert into members (id, auth_user_id, name, team_id, role) values
-  ('3e3b0000-0000-4000-8000-000000000001', '5eed0000-0000-4000-8000-000000000001', 'Hana Lim',    null,                                   'hq'),
-  ('3e3b0000-0000-4000-8000-000000000002', '5eed0000-0000-4000-8000-000000000002', 'Leo Tan',     '7ea30000-0000-4000-8000-000000000001', 'leader'),
-  ('3e3b0000-0000-4000-8000-000000000003', '5eed0000-0000-4000-8000-000000000003', 'Mei Wong',    '7ea30000-0000-4000-8000-000000000001', 'member'),
-  ('3e3b0000-0000-4000-8000-000000000004', null,                                   'Ravi Kumar',  '7ea30000-0000-4000-8000-000000000001', 'member'),
-  ('3e3b0000-0000-4000-8000-000000000005', null,                                   'Siti Rahman', '7ea30000-0000-4000-8000-000000000001', 'member'),
-  ('3e3b0000-0000-4000-8000-000000000006', null,                                   'Ben Ong',     '7ea30000-0000-4000-8000-000000000002', 'leader'),
-  ('3e3b0000-0000-4000-8000-000000000007', null,                                   'Aisha Noor',  '7ea30000-0000-4000-8000-000000000002', 'member'),
-  ('3e3b0000-0000-4000-8000-000000000008', null,                                   'Daniel Goh',  '7ea30000-0000-4000-8000-000000000002', 'member'),
-  ('3e3b0000-0000-4000-8000-000000000009', null,                                   'Wei Chen',    '7ea30000-0000-4000-8000-000000000003', 'leader'),
-  ('3e3b0000-0000-4000-8000-000000000010', null,                                   'Priya Nair',  '7ea30000-0000-4000-8000-000000000003', 'member'),
-  ('3e3b0000-0000-4000-8000-000000000011', null,                                   'Farah Aziz',  '7ea30000-0000-4000-8000-000000000003', 'member');
+-- Leo also leads IP Lab 2 (in production, admins maintain team_leads in the app).
+insert into team_leads (team_id, member_id)
+select t.id, '3e3b0000-0000-4000-8000-000000000002' from teams t where t.code = 'IP.2';
 
 -- In production the project owner adds grants in the Supabase dashboard; here hq gets all three.
 insert into member_grants (member_id, grant_name) values
@@ -69,13 +83,13 @@ insert into member_grants (member_id, grant_name) values
 -- ---------- check-ins ----------
 -- Each team's typical (activity, excellence, morale) for each week, by weeks before this one.
 -- Each member adds a small fixed nudge (ja, je, jm) so check-ins within a team differ.
-with trend (team, weeks_ago, a, e, m) as (values
-  ('Product', 7, 4, 4, 4), ('Product', 6, 4, 4, 4), ('Product', 5, 4, 4, 3), ('Product', 4, 4, 3, 3),
-  ('Product', 3, 3, 3, 2), ('Product', 2, 4, 3, 3), ('Product', 1, 4, 4, 4), ('Product', 0, 4, 4, 4),
-  ('Sales',   7, 4, 4, 4), ('Sales',   6, 4, 4, 3), ('Sales',   5, 4, 3, 3), ('Sales',   4, 3, 3, 3),
-  ('Sales',   3, 3, 3, 2), ('Sales',   2, 3, 2, 2), ('Sales',   1, 2, 2, 2), ('Sales',   0, 2, 2, 1),
-  ('Ops',     7, 2, 2, 2), ('Ops',     6, 2, 3, 2), ('Ops',     5, 3, 3, 2), ('Ops',     4, 3, 3, 3),
-  ('Ops',     3, 3, 4, 3), ('Ops',     2, 4, 4, 3), ('Ops',     1, 4, 4, 4), ('Ops',     0, 5, 4, 4)
+with trend (team_code, weeks_ago, a, e, m) as (values
+  ('IP.1', 7, 4, 4, 4), ('IP.1', 6, 4, 4, 4), ('IP.1', 5, 4, 4, 3), ('IP.1', 4, 4, 3, 3),
+  ('IP.1', 3, 3, 3, 2), ('IP.1', 2, 4, 3, 3), ('IP.1', 1, 4, 4, 4), ('IP.1', 0, 4, 4, 4),
+  ('AT.X', 7, 4, 4, 4), ('AT.X', 6, 4, 4, 3), ('AT.X', 5, 4, 3, 3), ('AT.X', 4, 3, 3, 3),
+  ('AT.X', 3, 3, 3, 2), ('AT.X', 2, 3, 2, 2), ('AT.X', 1, 2, 2, 2), ('AT.X', 0, 2, 2, 1),
+  ('YD.1', 7, 2, 2, 2), ('YD.1', 6, 2, 3, 2), ('YD.1', 5, 3, 3, 2), ('YD.1', 4, 3, 3, 3),
+  ('YD.1', 3, 3, 4, 3), ('YD.1', 2, 4, 4, 3), ('YD.1', 1, 4, 4, 4), ('YD.1', 0, 5, 4, 4)
 ),
 nudge (member_name, seq, ja, je, jm) as (values
   ('Leo Tan',     1,  0,  1,  0), ('Mei Wong',   2,  1,  0,  0), ('Ravi Kumar', 3, -1,  0,  0),
@@ -95,7 +109,7 @@ rows as (
     least(5, greatest(1, t.e + n.je)) as e,
     least(5, greatest(1, t.m + n.jm)) as m
   from trend t
-  join teams tm on tm.name = t.team
+  join teams tm on tm.code = t.team_code
   join members mb on mb.team_id = tm.id
   join nudge n on n.member_name = mb.name
 )
