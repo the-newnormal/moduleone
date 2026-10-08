@@ -6,7 +6,9 @@
 #   - a table has row level security off (CLAUDE.md: RLS on every table).
 #     Schemas the Supabase stack itself owns are skipped.
 #
-# Usage: supabase db start && scripts/check-migrations.sh
+# Usage: supabase db start && supabase db reset && scripts/check-migrations.sh
+# (db reset rebuilds from the migrations; an existing database alone won't
+# retest a migration edited after it was applied)
 # Needs psql. DB_URL defaults to the local Supabase database.
 set -euo pipefail
 
