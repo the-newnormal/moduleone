@@ -12,7 +12,7 @@ name=protect-main  # must match "name" in the JSON
 ruleset="$(git rev-parse --show-toplevel)/.github/rulesets/$name.json"
 repo=${1:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}
 
-id=$(gh api --paginate "repos/$repo/rulesets" --jq ".[] | select(.name == \"$name\") | .id")
+id=$(gh api --paginate "repos/$repo/rulesets?includes_parents=false" --jq ".[] | select(.name == \"$name\") | .id")
 if [ -n "$id" ]; then
   gh api -X PUT "repos/$repo/rulesets/$id" --input "$ruleset" --silent
   echo "Updated ruleset $name (#$id) on $repo"

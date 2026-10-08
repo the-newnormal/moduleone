@@ -26,8 +26,10 @@ See `CLAUDE.md` for the engineering contract. Hygiene is non-negotiable: protect
 - `ci / migrations` applies every file in `supabase/migrations/` to a fresh local Supabase, and fails if one errors or leaves a table without RLS. Run it locally with `supabase db start && supabase db reset && scripts/check-migrations.sh`. `db reset` rebuilds the local database from the migrations and deletes its data; without it, an edited migration that was already applied is not retested
 - no force-pushes, no deleting `main`
 
+A classic branch-protection rule on `main` also applies until it is removed (required `check` on an up-to-date branch, conversations resolved, admins included). GitHub enforces both, so changing the JSON alone can't loosen what the classic rule requires.
+
 To change the rules, edit the JSON in a PR. Once it merges, a repo admin re-applies it:
 ```bash
 scripts/protect-main.sh           # needs `gh` logged in as a repo admin; creates or updates the ruleset
 ```
-Without the CLI: Settings → Rules → Rulesets → New ruleset → Import a ruleset, then pick the JSON file.
+Without the CLI, first-time setup only: Settings → Rules → Rulesets → New ruleset → Import a ruleset, then pick the JSON file (an import always creates a new ruleset). For later changes, edit the existing `protect-main` ruleset on that page.
