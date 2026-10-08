@@ -18,3 +18,13 @@ jobs:
       - run: pnpm lint
       - run: pnpm test
       - run: pnpm build
+  migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@1dedf2c611547ede7232d26866dd3c56ab903bbb # v1.7.3
+        with:
+          version: 2.120.0
+      # Fresh local Postgres; applies every file in supabase/migrations/ and fails on the first error.
+      - run: supabase db start
+      - run: scripts/check-migrations.sh

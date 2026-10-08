@@ -22,7 +22,8 @@ See `CLAUDE.md` for the engineering contract. Hygiene is non-negotiable: protect
 ### Branch protection
 `main` is protected by the GitHub ruleset in `.github/rulesets/protect-main.json`, with no bypass (admins included):
 - changes land only through a PR with 1 approval; a new push dismisses earlier approvals, and all review threads must be resolved
-- the `ci / check` job must pass, on a branch that is up to date with `main`
+- the `ci / check` and `ci / migrations` jobs must pass, on a branch that is up to date with `main`
+- `ci / migrations` applies every file in `supabase/migrations/` to a fresh local Supabase, and fails if one errors or leaves a table without RLS. Run it locally with `supabase db start && supabase db reset && scripts/check-migrations.sh`. `db reset` rebuilds the local database from the migrations and deletes its data; without it, an edited migration that was already applied is not retested
 - no force-pushes, no deleting `main`
 
 A classic branch-protection rule on `main` also applies until it is removed (required `check` on an up-to-date branch, conversations resolved, admins included). GitHub enforces both, so changing the JSON alone can't loosen what the classic rule requires.
