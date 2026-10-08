@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatScore,
   type HealthConfig,
   type ScoringSettingsRow,
   healthBand,
@@ -107,13 +108,13 @@ describe("teamWeekHealth", () => {
     expect(cell?.bands.red).toBe(1);
   });
 
-  it("colours the exact mean, not the rounded one", () => {
-    // 18 × 6 + 2 + 9.9 = 119.9 over 20 check-ins: a mean of 5.995, which displays as 6 but is red.
+  it("colours the exact mean, not a rounded one", () => {
+    // 18 × 6 + 2 + 9.9 = 119.9 over 20 check-ins: a mean of 5.995, which would round to 6.
     const cell = teamWeekHealth(
       [...Array(18).fill(graded(2, 3, 3)), graded(1, 2, 3), graded(3, 3, 4)],
       RULES,
     );
-    expect(cell?.score).toBe(6);
+    expect(cell?.score).toBeCloseTo(5.995, 9);
     expect(cell?.band).toBe("red");
   });
 
@@ -176,5 +177,34 @@ describe("settingsToConfig", () => {
 
   it("refuses an unusable row", () => {
     expect(() => settingsToConfig({ ...row, yellow_threshold: 20 })).toThrow(/Unusable scoring settings/);
+  });
+});
+
+describe("formatScore", () => {
+  it("shows one decimal", () => {
+    expect(formatScore(10.5, RULES)).toBe("10.5");
+    expect(formatScore(12, RULES)).toBe("12.0");
+    expect(formatScore(17.85, RULES)).toMatch(/^17\.[89]$/);
+  });
+
+  it("never shows a number across a threshold from the score's colour", () => {
+    // 2 and 9.9: a red mean of 5.95, which one decimal would show as 6.0.
+    const red = teamWeekHealth([graded(2, 1, 3), graded(3, 3, 4)], RULES)!;
+    expect(red.band).toBe("red");
+    expect(formatScore(red.score, RULES)).toBe("5.95");
+
+    // 1, 9.9 and 25: a yellow mean of 11.966…, which one decimal would show as 12.0.
+    const yellow = teamWeekHealth([graded(1, 1, 3), graded(3, 3, 4), graded(5, 5, 3)], RULES)!;
+    expect(yellow.band).toBe("yellow");
+    expect(formatScore(yellow.score, RULES)).toBe("11.97");
+
+    // A red mean of 5.995 rounds to 6.00 even at two decimals, so it is cut to 5.99.
+    expect(formatScore(5.995, RULES)).toBe("5.99");
+  });
+
+  it("keeps two-decimal thresholds on the right side too", () => {
+    const fine: HealthConfig = { ...RULES, thresholds: { green: 12, yellow: 6.05 } };
+    expect(formatScore(6.05, fine)).toBe("6.05"); // yellow; "6.0" would read as red
+    expect(formatScore(6.04, fine)).toBe("6.0"); // red
   });
 });

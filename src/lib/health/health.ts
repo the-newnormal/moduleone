@@ -53,10 +53,6 @@ function assertScore(name: string, value: number): asserts value is Score {
   }
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
 export function healthScore(scores: Scores, config: HealthConfig): number {
   assertScore("activity", scores.activity);
   assertScore("excellence", scores.excellence);
@@ -75,8 +71,8 @@ export function healthBand(score: number, config: HealthConfig): Band {
 }
 
 // One team's cell for one week. Check-ins the grader hasn't scored yet are left out, and a week
-// with no graded check-ins returns null (an empty cell, not a red one). `score` is the mean rounded
-// to 2 decimals for display. `bands` counts the check-ins in each colour, so a green mean can still
+// with no graded check-ins returns null (an empty cell, not a red one). `score` is the exact mean;
+// show it with formatScore. `bands` counts the check-ins in each colour, so a green mean can still
 // show that someone on the team is red.
 export function teamWeekHealth(
   checkins: readonly MaybeScores[],
@@ -99,7 +95,19 @@ export function teamWeekHealth(
 
   if (graded === 0) return null;
   const mean = total / graded;
-  return { band: healthBand(mean, config), score: round2(mean), graded, bands };
+  return { band: healthBand(mean, config), score: mean, graded, bands };
+}
+
+// A score as people read it: one decimal, or two where one would land across a threshold from the
+// score's colour (a red 5.95 shows as 5.95, not 6.0). Pass the exact score, never a rounded one.
+export function formatScore(score: number, config: HealthConfig): string {
+  const band = healthBand(score, config);
+  for (const decimals of [1, 2]) {
+    const shown = score.toFixed(decimals);
+    if (healthBand(Number(shown), config) === band) return shown;
+  }
+  // Thresholds have two decimals, so only rounding up can cross one: cut down instead.
+  return (Math.floor(score * 100) / 100).toFixed(2);
 }
 
 // Problems with a config, as readable sentences. Empty means the config is usable. The database
