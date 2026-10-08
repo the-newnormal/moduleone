@@ -12,7 +12,8 @@ import { HeatmapGrid } from "./heatmap-grid";
 
 export const metadata: Metadata = { title: "Team health · Module One" };
 
-const SCOPE: Record<Role, { caption: string; blurb: string }> = {
+// Members are sent to their check-in instead (see the page below).
+const SCOPE: Record<Exclude<Role, "member">, { caption: string; blurb: string }> = {
   hq: {
     caption: "Health of every team by week",
     blurb: "Every team, week by week. Open a cell to read that week's check-ins.",
@@ -21,13 +22,9 @@ const SCOPE: Record<Role, { caption: string; blurb: string }> = {
     caption: "Health of the teams you lead, by week",
     blurb: "Check-ins made in the teams you lead, week by week. Open a cell to read them.",
   },
-  member: {
-    caption: "Your check-ins by week",
-    blurb: "Your own check-ins, week by week. Your team leader sees the whole team.",
-  },
 };
 
-function Legend({ config, forTeams }: { config: HealthConfig; forTeams: boolean }) {
+function Legend({ config }: { config: HealthConfig }) {
   const { green, yellow } = config.thresholds;
   const items = [
     { band: BANDS.green, text: `${green} or more` },
@@ -48,12 +45,10 @@ function Legend({ config, forTeams }: { config: HealthConfig; forTeams: boolean 
           <Clock aria-hidden className="size-4 text-muted-foreground" />
           <span className="text-muted-foreground">waiting for the grader</span>
         </li>
-        {forTeams && (
-          <li className="flex items-center gap-1.5">
-            <OctagonAlert aria-hidden className="size-3 text-status-critical" strokeWidth={2.5} />
-            <span className="text-muted-foreground">someone in the team was red</span>
-          </li>
-        )}
+        <li className="flex items-center gap-1.5">
+          <OctagonAlert aria-hidden className="size-3 text-status-critical" strokeWidth={2.5} />
+          <span className="text-muted-foreground">someone in the team was red</span>
+        </li>
       </ul>
       <p className="text-muted-foreground">
         A check-in&apos;s score is activity × excellence × a morale weight. Each cell shows the mean of
@@ -72,17 +67,15 @@ export default async function DashboardPage({ searchParams }: PageProps<"/portal
   const now = new Date();
   const weeks = recentWeeks(now, weekCount);
   const { teams, checkins, config, role, ownTeam, ledTeams } = await loadHeatmapData(supabase, weeks);
+  // Members never see their grade (the owner's rule, and the privacy notice says so): their only
+  // row here would be their own scores. The heat-map is for leaders and hq.
+  if (role === "member") redirect("/portal/checkin");
   // hq reads every check-in, so an empty row means nobody checked in. Anyone else may see teams
   // whose check-ins they can't read (admins see every team, leaders the domains above theirs), so
   // they only get empty rows for their own team and the teams they lead.
   const readable = new Set([...(ownTeam ? [ownTeam] : []), ...ledTeams]);
   const showEmpty = role === "hq" ? () => true : (teamId: string) => readable.has(teamId);
-  const heatmap = buildHeatmap({ teams, checkins, weeks, config, showEmpty });
-  // A member only ever sees their own check-ins, so their row is theirs, not the team's.
-  const groups =
-    role === "member"
-      ? heatmap.map((g) => ({ ...g, rows: g.rows.map((r) => ({ ...r, name: `You · ${r.name}` })) }))
-      : heatmap;
+  const groups = buildHeatmap({ teams, checkins, weeks, config, showEmpty });
 
   return (
     <main className="mx-auto grid w-full max-w-6xl grid-cols-[minmax(0,1fr)] gap-6 px-4 py-10">
@@ -121,7 +114,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/portal
             })}
           </nav>
 
-          <Legend config={config} forTeams={role !== "member"} />
+          <Legend config={config} />
 
           {groups.length === 0 ? (
             <p className="rounded-xl border bg-card p-6 text-muted-foreground">
@@ -135,7 +128,6 @@ export default async function DashboardPage({ searchParams }: PageProps<"/portal
               thisWeek={weekStartFor(now)}
               weeksParam={weekCount}
               caption={SCOPE[role].caption}
-              own={role === "member"}
               config={config}
             />
           )}

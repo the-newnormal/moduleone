@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { loadRole } from "@/lib/dashboard/load";
 import { createClient } from "@/lib/supabase/server";
 import { SignOutButton } from "./sign-out-button";
 
@@ -13,6 +14,10 @@ export default async function PortalPage() {
   // never renders without a verified user.
   const { data } = await supabase.auth.getClaims();
   if (!data?.claims) redirect("/login?next=/portal");
+  // Team health shows grades, which members never see; it is for leaders and hq. If the role can't
+  // be read, the card is left out rather than the portal failing.
+  const role = await loadRole(supabase).catch(() => null);
+  const seesTeamHealth = role === "leader" || role === "hq";
 
   return (
     <main className="mx-auto grid w-full max-w-2xl gap-8 px-4 py-12">
@@ -40,18 +45,20 @@ export default async function PortalPage() {
         </CardHeader>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            <h2 className="text-2xl">
-              <Link href="/portal/dashboard" className="hover:underline">
-                Team health
-              </Link>
-            </h2>
-          </CardTitle>
-          <CardDescription>The red, yellow and green heat-map of check-ins, week by week.</CardDescription>
-        </CardHeader>
-      </Card>
+      {seesTeamHealth && (
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              <h2 className="text-2xl">
+                <Link href="/portal/dashboard" className="hover:underline">
+                  Team health
+                </Link>
+              </h2>
+            </CardTitle>
+            <CardDescription>The red, yellow and green heat-map of check-ins, week by week.</CardDescription>
+          </CardHeader>
+        </Card>
+      )}
     </main>
   );
 }
