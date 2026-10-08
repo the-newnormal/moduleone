@@ -41,7 +41,7 @@ export function formatWeek(week: string, withYear = false): string {
 }
 
 // The dashboard's range presets. Anything else in ?weeks= falls back to the default.
-export const WEEK_COUNTS = [4, 8, 12] as const;
+export const WEEK_COUNTS = [1, 4, 8, 12] as const;
 export type WeekCount = (typeof WEEK_COUNTS)[number];
 export const DEFAULT_WEEK_COUNT: WeekCount = 8;
 

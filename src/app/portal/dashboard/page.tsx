@@ -115,7 +115,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/portal
                   }`}
                 >
                   {selected && <Check aria-hidden className="size-4" strokeWidth={2.75} />}
-                  {count} weeks
+                  {count} {count === 1 ? "week" : "weeks"}
                 </Link>
               );
             })}
@@ -125,7 +125,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/portal
 
           {groups.length === 0 ? (
             <p className="rounded-xl border bg-card p-6 text-muted-foreground">
-              No teams or check-ins to show for these weeks yet.
+              No teams or check-ins to show for {weekCount === 1 ? "this week" : "these weeks"} yet.
             </p>
           ) : (
             <HeatmapGrid
@@ -135,6 +135,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/portal
               thisWeek={weekStartFor(now)}
               weeksParam={weekCount}
               caption={SCOPE[role].caption}
+              own={role === "member"}
               config={config}
             />
           )}

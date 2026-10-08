@@ -19,6 +19,10 @@ describe("weekStartFor", () => {
 });
 
 describe("recentWeeks", () => {
+  it("is just this week for a one-week view", () => {
+    expect(recentWeeks(new Date("2026-10-08T13:00:00Z"), 1)).toEqual(["2026-10-05"]);
+  });
+
   it("lists the weeks oldest first, ending with this week", () => {
     expect(recentWeeks(new Date("2026-10-08T13:00:00Z"), 4)).toEqual([
       "2026-09-14",
@@ -53,10 +57,12 @@ describe("formatWeek", () => {
 describe("parseWeekCount", () => {
   it.each([
     [undefined, 8],
+    ["1", 1],
     ["4", 4],
     ["12", 12],
     [["12", "4"], 12],
     ["5", 8],
+    ["0", 8],
     ["100000", 8],
     ["abc", 8],
   ] as const)("%s → %s", (raw, expected) => {
