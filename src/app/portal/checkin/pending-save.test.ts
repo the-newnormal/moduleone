@@ -12,6 +12,7 @@ const take: Take = {
   mimeType: "audio/webm",
   durationMs: 1000,
   recordedAt: 1,
+  serverRecordedAt: null,
   uploadedPath: "member/2026-10-05-a.webm",
 };
 const saved: SaveOutcome = { step: "saved" };

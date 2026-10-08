@@ -196,11 +196,14 @@ export async function prepareRecording(mimeType: string): Promise<PrepareRecordi
 
 // Saves an uploaded take as this week's draft, replacing (and deleting) any earlier take. A take
 // recorded before the current draft is dropped instead: it arrived late (a save that timed out,
-// or one retried from another tab or device), and must not replace the newer one. `ageMs` is how
-// long ago the take was recorded, by the browser's clock; the time it was recorded is worked out
-// from this server's clock, so browsers whose clocks disagree still order their takes correctly.
-export async function saveDraft(input: { path: string; durationMs?: number; ageMs?: number }): Promise<SaveDraftResult> {
-  const receivedAt = Date.now(); // before anything that could be slow
+// or one retried from another tab or device), and must not replace the newer one. `recordedAt` is
+// when the take was recorded, by this server's clock (the recorder measures how far its own clock
+// is off; see take.ts).
+export async function saveDraft(input: {
+  path: string;
+  durationMs?: number;
+  recordedAt?: number;
+}): Promise<SaveDraftResult> {
   const session = await sessionMember();
   if ("status" in session) return session;
   const memberId = session.member.id;
@@ -240,7 +243,7 @@ export async function saveDraft(input: { path: string; durationMs?: number; ageM
     p_audio_path: path,
     p_mime_type: mimeType,
     p_duration_ms: clampDuration(input?.durationMs),
-    p_recorded_at: recordedAt(receivedAt, input?.ageMs),
+    p_recorded_at: recordedAt(input?.recordedAt),
   });
   if (raised(error, "newer_draft")) {
     await removeFile(admin, memberId, path);
@@ -302,12 +305,13 @@ export async function submitCheckin(): Promise<SubmitCheckinResult> {
   return submitted();
 }
 
-// When the take was recorded, by this server's clock. Anything odd becomes null (the database then
-// uses now); a negative age (the browser's clock was turned back meanwhile) counts as just now.
-function recordedAt(receivedAt: number, ageMs: unknown): string | null {
-  if (typeof ageMs !== "number" || !Number.isFinite(ageMs)) return null;
-  const date = new Date(receivedAt - Math.max(0, ageMs));
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+// When the take was recorded. Anything that isn't a time within the last week becomes null (the
+// database then uses now); the database also caps it at now.
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+function recordedAt(value: unknown): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  if (value < Date.now() - WEEK_MS || value > Date.now() + 60_000) return null;
+  return new Date(value).toISOString();
 }
 
 // The recorder's own measure of the take's length: only a hint, so anything odd becomes null.

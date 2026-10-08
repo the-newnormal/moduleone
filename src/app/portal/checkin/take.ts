@@ -2,14 +2,16 @@ import type { CheckinErrorCode, PrepareRecordingResult, SaveDraftResult } from "
 import { OFFLINE_MESSAGE, updatedSinceLoad } from "./unreachable";
 
 // A finished recording, kept in memory until it is saved, so a failed upload can be retried.
-// recordedAt is when the recording stopped, by this browser's clock. Saving sends how long ago that
-// was (one clock, so it doesn't matter if it is off), and the server works out the time from its
-// own clock, to keep a newer take when an older one arrives late.
+// recordedAt is when the recording stopped, by this browser's clock; serverRecordedAt the same
+// moment by the server's clock, worked out on the first save (see onServerClock) and kept for
+// retries. The server keeps the newer take when an older one arrives late, comparing takes from
+// different devices, so it needs the one clock.
 export type Take = {
   blob: Blob;
   mimeType: string;
   durationMs: number;
   recordedAt: number;
+  serverRecordedAt: number | null;
   uploadedPath: string | null;
 };
 
@@ -27,7 +29,9 @@ export type SaveSteps = {
   prepare: (mimeType: string) => Promise<PrepareRecordingResult>;
   // Uploads to the signed upload URL prepare made; resolves with Storage's error, if any.
   upload: (ready: ReadyToUpload, body: Blob) => Promise<{ error: unknown }>;
-  saveDraft: (input: { path: string; durationMs: number; ageMs: number }) => Promise<SaveDraftResult>;
+  saveDraft: (input: { path: string; durationMs: number; recordedAt: number }) => Promise<SaveDraftResult>;
+  // The server's clock now, in ms (a plain request, never queued behind a server action).
+  serverNow: () => Promise<number>;
   timeouts?: Timeouts;
 };
 
@@ -35,7 +39,7 @@ export type SaveSteps = {
 // ever failing, which would leave "Saving your recording…" on screen for good. Neither the server
 // actions nor the signed upload can be cancelled, so a step that runs out of time may still finish
 // later; and Next.js sends server actions one at a time, so a retry can queue behind a hung one.
-export const TIMEOUTS = { prepareMs: 30_000, uploadMs: 90_000, saveMs: 30_000 };
+export const TIMEOUTS = { clockMs: 10_000, prepareMs: 30_000, uploadMs: 90_000, saveMs: 30_000 };
 export type Timeouts = typeof TIMEOUTS;
 
 export const UPLOAD_FAILED_MESSAGE = "The upload didn't go through. Check your connection, then try again.";
@@ -63,12 +67,29 @@ export function takeToRetry(code: CheckinErrorCode, take: Take): Take {
   return code === "failed" ? take : { ...take, uploadedPath: null };
 }
 
+// The take with its recording time on the server's clock: this browser's clock plus how far it is
+// off, measured with one quick request (half its round trip either way). Measured when the take is
+// first saved and kept, so a retry, or a save that waits behind another request, doesn't move it.
+// If the server can't be reached the take is left as it is, and saving fails anyway.
+async function onServerClock(take: Take, steps: SaveSteps, timeouts: Timeouts): Promise<Take> {
+  if (take.serverRecordedAt !== null) return take;
+  try {
+    const sent = Date.now();
+    const server = await within(timeouts.clockMs, steps.serverNow());
+    const back = Date.now();
+    if (!Number.isFinite(server)) return take;
+    return { ...take, serverRecordedAt: Math.round(take.recordedAt + server - (sent + back) / 2) };
+  } catch {
+    return take;
+  }
+}
+
 // Saves a take as this week's draft: a signed upload path from the server, the upload straight to
 // Storage, then saveDraft. A take that already has an uploaded path skips straight to saveDraft,
 // which is safe to repeat for the same path.
 export async function saveTake(take: Take, steps: SaveSteps): Promise<SaveOutcome> {
   const { prepare, upload, saveDraft, timeouts = TIMEOUTS } = steps;
-  let current = take;
+  let current = await onServerClock(take, steps, timeouts);
   const reused = take.uploadedPath !== null;
   try {
     let path = current.uploadedPath;
@@ -85,7 +106,7 @@ export async function saveTake(take: Take, steps: SaveSteps): Promise<SaveOutcom
     }
     const saved = await within(
       timeouts.saveMs,
-      saveDraft({ path, durationMs: current.durationMs, ageMs: Date.now() - current.recordedAt }),
+      saveDraft({ path, durationMs: current.durationMs, recordedAt: current.serverRecordedAt ?? current.recordedAt }),
     );
     // An upload kept from an earlier try that is now too old to save: the take itself is fine, so
     // upload it again rather than ask the member to record it again.

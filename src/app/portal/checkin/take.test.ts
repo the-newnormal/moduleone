@@ -20,8 +20,15 @@ const take: Take = {
   mimeType: "audio/webm",
   durationMs: 95_000,
   recordedAt: Date.parse("2026-10-08T03:30:00Z"),
+  serverRecordedAt: null,
   uploadedPath: `${MEMBER}/2026-10-05-take.webm`,
 };
+
+// The server's clock is an hour ahead of this browser's.
+const HOUR = 60 * 60 * 1000;
+function stamp(t: Take): Take {
+  return { ...t, serverRecordedAt: t.recordedAt + HOUR };
+}
 // Five minutes after the take was recorded. Only Date is faked; the timeout tests need real timers.
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-08T03:35:00Z") });
@@ -44,7 +51,7 @@ function hang(): Promise<never> {
 }
 
 // Short limits, so the timeout tests run quickly.
-const QUICK = { prepareMs: 10, uploadMs: 10, saveMs: 10 };
+const QUICK = { clockMs: 10, prepareMs: 10, uploadMs: 10, saveMs: 10 };
 
 // A server and a Storage that accept everything; each test makes one step go wrong.
 function fakes() {
@@ -53,6 +60,7 @@ function fakes() {
     prepare: vi.fn<SaveSteps["prepare"]>(async () => ready(++prepared)),
     upload: vi.fn<SaveSteps["upload"]>(async () => ({ error: null })),
     saveDraft: vi.fn<SaveSteps["saveDraft"]>(async () => ({ status: "saved" })),
+    serverNow: vi.fn<SaveSteps["serverNow"]>(async () => Date.now() + HOUR),
   };
 }
 
@@ -68,7 +76,7 @@ describe("saveTake", () => {
     expect(steps.saveDraft).toHaveBeenCalledWith({
       path: ready(1).path,
       durationMs: 95_000,
-      ageMs: 5 * 60 * 1000,
+      recordedAt: take.recordedAt + HOUR,
     });
   });
 
@@ -76,7 +84,7 @@ describe("saveTake", () => {
     const steps = fakes();
     steps.upload.mockResolvedValueOnce({ error: new Error("Network request failed") });
     const outcome = await saveTake(fresh, steps);
-    expect(outcome).toEqual({ step: "failed", take: fresh, message: UPLOAD_FAILED_MESSAGE, updated: false });
+    expect(outcome).toEqual({ step: "failed", take: stamp(fresh), message: UPLOAD_FAILED_MESSAGE, updated: false });
     if (outcome.step === "failed") expect(outcome.take.blob).toBe(take.blob);
     expect(steps.saveDraft).not.toHaveBeenCalled();
   });
@@ -87,7 +95,7 @@ describe("saveTake", () => {
     const outcome = await saveTake(fresh, steps);
     expect(outcome).toEqual({
       step: "failed",
-      take: { ...fresh, uploadedPath: ready(1).path },
+      take: { ...stamp(fresh), uploadedPath: ready(1).path },
       message: "Something went wrong.",
       updated: false,
     });
@@ -103,7 +111,7 @@ describe("saveTake", () => {
     const steps = fakes();
     steps.saveDraft.mockResolvedValueOnce({ status: "error", code: "upload_missing", message: "Try again." });
     const outcome = await saveTake(fresh, steps);
-    expect(outcome).toEqual({ step: "failed", take: fresh, message: "Try again.", updated: false });
+    expect(outcome).toEqual({ step: "failed", take: stamp(fresh), message: "Try again.", updated: false });
     if (outcome.step !== "failed") return;
 
     expect(await saveTake(outcome.take, steps)).toEqual({ step: "saved" });
@@ -111,7 +119,7 @@ describe("saveTake", () => {
     expect(steps.saveDraft).toHaveBeenLastCalledWith({
       path: ready(2).path,
       durationMs: 95_000,
-      ageMs: 5 * 60 * 1000,
+      recordedAt: take.recordedAt + HOUR,
     });
   });
 
@@ -126,8 +134,53 @@ describe("saveTake", () => {
   it("doesn't upload again by itself when a fresh upload is already too old", async () => {
     const steps = fakes();
     steps.saveDraft.mockResolvedValueOnce({ status: "error", code: "upload_expired", message: "Too old." });
-    expect(await saveTake(fresh, steps)).toEqual({ step: "failed", take: fresh, message: "Too old.", updated: false });
+    expect(await saveTake(fresh, steps)).toEqual({
+      step: "failed",
+      take: stamp(fresh),
+      message: "Too old.",
+      updated: false,
+    });
     expect(steps.upload).toHaveBeenCalledOnce();
+  });
+
+  it("stamps the take with the server's clock once, and keeps it for retries", async () => {
+    const steps = fakes();
+    steps.upload.mockResolvedValueOnce({ error: new Error("Network request failed") });
+    const outcome = await saveTake(fresh, steps);
+    if (outcome.step !== "failed") throw new Error("expected a failed save");
+    expect(outcome.take.serverRecordedAt).toBe(fresh.recordedAt + HOUR);
+
+    // Later the server's clock reads differently (or the save waits in a queue): the stamp stays.
+    steps.serverNow.mockResolvedValue(Date.now() + 5 * HOUR);
+    expect(await saveTake(outcome.take, steps)).toEqual({ step: "saved" });
+    expect(steps.serverNow).toHaveBeenCalledOnce();
+    expect(steps.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ recordedAt: fresh.recordedAt + HOUR }));
+  });
+
+  it("allows for the clock request's round trip", async () => {
+    const steps = fakes();
+    // The answer comes back 2 seconds after the request: the server read its clock halfway.
+    steps.serverNow.mockImplementationOnce(async () => {
+      const server = Date.now() + 1000 + HOUR;
+      vi.setSystemTime(Date.now() + 2000);
+      return server;
+    });
+    await saveTake(fresh, steps);
+    expect(steps.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ recordedAt: fresh.recordedAt + HOUR }));
+  });
+
+  it("falls back to this browser's clock when the server's can't be read", async () => {
+    const steps = fakes();
+    steps.serverNow.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    expect(await saveTake(fresh, steps)).toEqual({ step: "saved" });
+    expect(steps.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ recordedAt: fresh.recordedAt }));
+  });
+
+  it("doesn't wait long for the server's clock", async () => {
+    const steps = { ...fakes(), timeouts: QUICK };
+    steps.serverNow.mockReturnValueOnce(hang());
+    expect(await saveTake(fresh, steps)).toEqual({ step: "saved" });
+    expect(steps.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ recordedAt: fresh.recordedAt }));
   });
 
   it("is done when a take recorded later is already the draft", async () => {
@@ -155,7 +208,12 @@ describe("saveTake", () => {
     const steps = fakes();
     const notice = { status: "error", code: "notice_required", message: "Read the privacy notice first." } as const;
     steps.prepare.mockResolvedValueOnce(notice);
-    expect(await saveTake(fresh, steps)).toEqual({ step: "failed", take: fresh, message: notice.message, updated: false });
+    expect(await saveTake(fresh, steps)).toEqual({
+      step: "failed",
+      take: stamp(fresh),
+      message: notice.message,
+      updated: false,
+    });
     expect(steps.upload).not.toHaveBeenCalled();
     expect(steps.saveDraft).not.toHaveBeenCalled();
   });
@@ -165,7 +223,7 @@ describe("saveTake", () => {
     steps.prepare.mockRejectedValueOnce(new UnrecognizedActionError('Server Action "abc" was not found on the server.'));
     expect(await saveTake(fresh, steps)).toEqual({
       step: "failed",
-      take: fresh,
+      take: stamp(fresh),
       message: REDEPLOYED_MESSAGE,
       updated: true,
     });
@@ -176,7 +234,7 @@ describe("saveTake", () => {
     steps.saveDraft.mockRejectedValueOnce(new TypeError("Failed to fetch"));
     expect(await saveTake(fresh, steps)).toEqual({
       step: "failed",
-      take: { ...fresh, uploadedPath: ready(1).path },
+      take: { ...stamp(fresh), uploadedPath: ready(1).path },
       message: OFFLINE_MESSAGE,
       updated: false,
     });
@@ -187,7 +245,7 @@ describe("saveTake", () => {
     steps.prepare.mockReturnValueOnce(hang());
     expect(await saveTake(fresh, { ...steps, timeouts: QUICK })).toEqual({
       step: "failed",
-      take: fresh,
+      take: stamp(fresh),
       message: TOO_SLOW_MESSAGE,
       updated: false,
     });
@@ -198,7 +256,7 @@ describe("saveTake", () => {
     const steps = { ...fakes(), timeouts: QUICK };
     steps.upload.mockReturnValueOnce(hang());
     const outcome = await saveTake(fresh, steps);
-    expect(outcome).toEqual({ step: "failed", take: fresh, message: TOO_SLOW_MESSAGE, updated: false });
+    expect(outcome).toEqual({ step: "failed", take: stamp(fresh), message: TOO_SLOW_MESSAGE, updated: false });
     if (outcome.step !== "failed") return;
     expect(steps.saveDraft).not.toHaveBeenCalled();
 
@@ -214,7 +272,7 @@ describe("saveTake", () => {
     const outcome = await saveTake(fresh, steps);
     expect(outcome).toEqual({
       step: "failed",
-      take: { ...fresh, uploadedPath: ready(1).path },
+      take: { ...stamp(fresh), uploadedPath: ready(1).path },
       message: TOO_SLOW_MESSAGE,
       updated: false,
     });

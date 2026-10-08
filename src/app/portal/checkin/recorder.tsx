@@ -53,6 +53,15 @@ function microphoneProblem(error: unknown): string {
   return "Couldn't start the microphone. Try again.";
 }
 
+// This server's clock (now/route.ts), to stamp takes with.
+async function serverNow(): Promise<number> {
+  const response = await fetch("/portal/checkin/now", { cache: "no-store" });
+  if (!response.ok) throw new Error(`clock: ${response.status}`);
+  const { now } = (await response.json()) as { now?: unknown };
+  if (typeof now !== "number") throw new Error("clock: no time");
+  return now;
+}
+
 function upload(ready: ReadyToUpload, body: Blob) {
   return createClient()
     .storage.from(BUCKET)
@@ -112,7 +121,7 @@ export function Recorder() {
       }
       release(media);
       const take = failedTake.current;
-      if (take) void trackSave(saveTake(take, { prepare: prepareRecording, upload, saveDraft }));
+      if (take) void trackSave(saveTake(take, { prepare: prepareRecording, upload, saveDraft, serverNow }));
     },
     [],
   );
@@ -186,7 +195,7 @@ export function Recorder() {
 
   async function save(take: Take): Promise<SaveOutcome> {
     setState({ step: "saving" });
-    const outcome = await trackSave(saveTake(take, { prepare: prepareRecording, upload, saveDraft }));
+    const outcome = await trackSave(saveTake(take, { prepare: prepareRecording, upload, saveDraft, serverNow }));
     setState(outcome);
     return outcome;
   }
@@ -253,7 +262,14 @@ export function Recorder() {
         settle(null);
         return setState({ step: "idle", problem: "Nothing was recorded. Check your microphone, then try again." });
       }
-      const take = { blob, mimeType: baseMimeType(type), durationMs, recordedAt: Date.now(), uploadedPath: null };
+      const take: Take = {
+        blob,
+        mimeType: baseMimeType(type),
+        durationMs,
+        recordedAt: Date.now(),
+        serverRecordedAt: null,
+        uploadedPath: null,
+      };
       void save(take).then(settle);
     };
 
