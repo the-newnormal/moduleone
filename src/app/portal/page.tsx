@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,7 +37,10 @@ export default async function PortalPage() {
             <h2 className="text-2xl">Weekly check-in</h2>
           </CardTitle>
           <CardDescription>
-            Five minutes, three questions. The recorder arrives in the next release.
+            Five minutes, three questions.{" "}
+            <Link href="/portal/checkin" className="font-medium text-primary underline-offset-4 hover:underline">
+              Record this week&apos;s check-in
+            </Link>
           </CardDescription>
         </CardHeader>
       </Card>
