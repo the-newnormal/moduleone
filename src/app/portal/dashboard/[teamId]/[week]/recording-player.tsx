@@ -1,29 +1,31 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { mayAutoReload, reloadAddress } from "@/lib/dashboard/playback";
 
 // Plays a check-in recording from its stable address (src/lib/dashboard/recordings.ts), which
 // signs a fresh Storage link on every request. The browser keeps reading from the link it was
 // redirected to for every later byte range, so after a long pause that link can run out
-// mid-listen; then fetch the address again and carry on from the same spot. If that fails too,
-// say so (with a way to try again) rather than retry forever.
+// mid-listen; then fetch the address again and carry on where the listener was. Automatic reloads
+// are rate-limited (src/lib/dashboard/playback.ts); past that, say so, with a way to try again.
 export function RecordingPlayer({ src }: { src: string }) {
   const audio = useRef<HTMLAudioElement>(null);
-  const reloads = useRef(0); // since the recording last played
+  const attempts = useRef(0);
+  const lastAutoReload = useRef<number | null>(null);
   const wantsToPlay = useRef(false);
   const [failed, setFailed] = useState(false);
 
-  // Fetch the stable address again (a new query string, so the browser can't reuse the expired
-  // link) and carry on from the same spot. With preload="none" nothing loads until play(), so
-  // resume straight away when the listener was playing; otherwise their next press of play does.
   const reload = (resume: boolean) => {
     const el = audio.current;
     if (!el) return;
-    const position = el.currentTime;
-    reloads.current += 1;
-    el.src = `${src}?reload=${reloads.current}`;
-    // Before the new source loads, this sets where it starts playing.
+    const { currentTime: position, playbackRate: rate } = el;
+    attempts.current += 1;
+    // Load the new link's metadata even when paused, so the timeline and scrubber come back.
+    el.preload = "metadata";
+    el.src = reloadAddress(src, attempts.current);
+    // A new source resets the position and speed; before it loads, these set where it starts.
     if (position > 0) el.currentTime = position;
+    el.playbackRate = rate;
     if (resume) {
       el.play().catch((error: unknown) => {
         // A pause or another reload interrupting this play() isn't a failure.
@@ -46,13 +48,15 @@ export function RecordingPlayer({ src }: { src: string }) {
         onPause={() => {
           wantsToPlay.current = false;
         }}
-        onPlaying={() => {
-          reloads.current = 0;
-          setFailed(false);
-        }}
+        onPlaying={() => setFailed(false)}
         onError={() => {
-          if (reloads.current === 0) reload(wantsToPlay.current);
-          else setFailed(true);
+          const now = performance.now();
+          if (!mayAutoReload(now, lastAutoReload.current)) {
+            setFailed(true);
+            return;
+          }
+          lastAutoReload.current = now;
+          reload(wantsToPlay.current);
         }}
       >
         <a href={src}>Download the recording</a>
@@ -65,7 +69,6 @@ export function RecordingPlayer({ src }: { src: string }) {
             className="font-medium text-foreground underline underline-offset-4"
             onClick={() => {
               setFailed(false);
-              reloads.current = 0;
               reload(true);
             }}
           >

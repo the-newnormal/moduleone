@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { playableRecordings, recordingPath } from "./recordings";
+import { playableRecordings, recordingCheckinId, recordingPath } from "./recordings";
 
 function storage(result: unknown) {
   const createSignedUrls = vi.fn().mockResolvedValue(result);
@@ -33,7 +33,21 @@ describe("playableRecordings", () => {
 });
 
 describe("recordingPath", () => {
-  it("points at the same-site route that signs on request", () => {
-    expect(recordingPath("abc")).toBe("/portal/dashboard/recording/abc");
+  it("points at the same-site route that signs on request, ending with the file's extension", () => {
+    expect(recordingPath("abc", "member/2026-09-21-take2.webm")).toBe("/portal/dashboard/recording/abc.webm");
+    expect(recordingPath("abc", "member/2026-09-21.MP4")).toBe("/portal/dashboard/recording/abc.MP4");
+  });
+
+  it("leaves the extension off when the file has none", () => {
+    expect(recordingPath("abc", "member/recording")).toBe("/portal/dashboard/recording/abc");
+    expect(recordingPath("abc", "member.dir/recording")).toBe("/portal/dashboard/recording/abc");
+  });
+});
+
+describe("recordingCheckinId", () => {
+  it("takes the check-in id back out of an address, with or without its extension", () => {
+    expect(recordingCheckinId("abc.webm")).toBe("abc");
+    expect(recordingCheckinId("abc")).toBe("abc");
+    expect(recordingCheckinId("abc.webm.webm")).toBe("abc.webm"); // one extension only
   });
 });

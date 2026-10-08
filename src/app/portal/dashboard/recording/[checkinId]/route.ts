@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { recordingLink } from "@/lib/dashboard/recordings";
+import { recordingCheckinId, recordingLink } from "@/lib/dashboard/recordings";
 import { createClient } from "@/lib/supabase/server";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -11,9 +11,10 @@ const PRIVATE = { "Cache-Control": "private, no-store" };
 // short-lived Storage link as the signed-in viewer and redirects to it, so a page left open for
 // hours still plays. Signed out: the proxy sends them to /login first (401 here if it ever
 // doesn't). No recording, or none this viewer may play: 404, the same answer either way, so it
-// says nothing about check-ins they can't see.
+// says nothing about check-ins they can't see. The address ends with the file's extension, for
+// Safari (recordingPath); it's only a hint, since the file to sign comes from the check-in.
 export async function GET(_request: NextRequest, ctx: RouteContext<"/portal/dashboard/recording/[checkinId]">) {
-  const { checkinId } = await ctx.params;
+  const checkinId = recordingCheckinId((await ctx.params).checkinId);
   if (!UUID.test(checkinId)) return new Response(null, { status: 404, headers: PRIVATE });
 
   const supabase = await createClient();

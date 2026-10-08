@@ -1,7 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { type HealthConfig, type ScoringSettingsRow, settingsToConfig } from "@/lib/health/health";
 import type { CheckinRow } from "./heatmap";
-import { playableRecordings } from "./recordings";
+import { playableRecordings, recordingPath } from "./recordings";
+import { PAGE_SIZE, selectAll } from "./select-all";
 import { type TeamNode, teamContext } from "./tree";
 
 // Every loader here takes the signed-in user's client (src/lib/supabase/server.ts), never the
@@ -15,9 +16,6 @@ const SETTINGS_COLUMNS = [
   "green_threshold",
   "yellow_threshold",
 ].join(",");
-
-// PostgREST returns at most 1,000 rows per request (supabase/config.toml max_rows).
-const PAGE_SIZE = 1000;
 
 export async function loadScoringConfig(supabase: SupabaseClient): Promise<HealthConfig> {
   const { data, error } = await supabase.from("scoring_settings").select(SETTINGS_COLUMNS).single();
@@ -66,30 +64,34 @@ const UNDEFINED_COLUMN = "42703";
 // Every team the viewer can see. Before migration 0003 there's no team tree, so the tree columns
 // don't exist yet: load the free-text division instead (see ./tree.ts). Drop that once 0003 is in.
 export async function loadTeams(supabase: SupabaseClient): Promise<TeamNode[]> {
-  const tree = await supabase.from("teams").select(TREE_COLUMNS);
+  const teams = (columns: string) =>
+    selectAll((after) => {
+      let query = supabase.from("teams").select(columns);
+      if (after) query = query.gt("id", after);
+      return query.order("id").limit(PAGE_SIZE).overrideTypes<TeamNode[], { merge: false }>();
+    });
+
+  const tree = await teams(TREE_COLUMNS);
   if (!tree.error) return tree.data.map((t) => ({ ...t, division: null }));
   if (tree.error.code !== UNDEFINED_COLUMN) throw new Error(`Couldn't load teams: ${tree.error.message}`);
 
-  const flat = await supabase.from("teams").select("id, name, archived_at, division");
+  const flat = await teams("id, name, archived_at, division");
   if (flat.error) throw new Error(`Couldn't load teams: ${flat.error.message}`);
   return flat.data.map((t) => ({ ...t, parent_id: null, kind: null, sort_order: null }));
 }
 
 async function loadCheckins(supabase: SupabaseClient, from: string, to: string): Promise<CheckinRow[]> {
-  const rows: CheckinRow[] = [];
-  for (let offset = 0; ; offset += PAGE_SIZE) {
-    const { data, error } = await supabase
+  const { data, error } = await selectAll((after) => {
+    let query = supabase
       .from("checkins")
-      .select("team_id, week_start, activity_score, excellence_score, morale_score")
+      .select("id, team_id, week_start, activity_score, excellence_score, morale_score")
       .gte("week_start", from)
-      .lte("week_start", to)
-      .order("week_start")
-      .order("id")
-      .range(offset, offset + PAGE_SIZE - 1);
-    if (error) throw new Error(`Couldn't load check-ins: ${error.message}`);
-    rows.push(...data);
-    if (data.length < PAGE_SIZE) return rows;
-  }
+      .lte("week_start", to);
+    if (after) query = query.gt("id", after);
+    return query.order("id").limit(PAGE_SIZE);
+  });
+  if (error) throw new Error(`Couldn't load check-ins: ${error.message}`);
+  return data;
 }
 
 export type TeamWeekCheckin = {
@@ -100,9 +102,9 @@ export type TeamWeekCheckin = {
   morale_score: number | null;
   rubric_review: string | null;
   transcript: string | null;
-  // The viewer may play this check-in's recording (the speaker, or the recordings grant). Storage
-  // decides; the player fetches its own link when it plays (src/lib/dashboard/recordings.ts).
-  canPlay: boolean;
+  // Where to play this check-in's recording from, when the viewer may play it (the speaker, or the
+  // recordings grant; Storage decides). It signs a fresh link on every request (./recordings.ts).
+  recording: string | null;
 };
 
 // One team's check-ins for one week, for the drill-in page. teamId null means check-ins made
@@ -112,14 +114,17 @@ export async function loadTeamWeek(
   teamId: string | null,
   week: string,
 ): Promise<{ teamName: string | null; context: string[]; checkins: TeamWeekCheckin[] }> {
-
-  let checkinQuery = supabase
-    .from("checkins")
-    .select(
-      "id, activity_score, excellence_score, morale_score, rubric_review, transcript, audio_path, members(name)",
-    )
-    .eq("week_start", week);
-  checkinQuery = teamId ? checkinQuery.eq("team_id", teamId) : checkinQuery.is("team_id", null);
+  const checkinQuery = selectAll((after) => {
+    let query = supabase
+      .from("checkins")
+      .select(
+        "id, activity_score, excellence_score, morale_score, rubric_review, transcript, audio_path, members(name)",
+      )
+      .eq("week_start", week);
+    query = teamId ? query.eq("team_id", teamId) : query.is("team_id", null);
+    if (after) query = query.gt("id", after);
+    return query.order("id").limit(PAGE_SIZE);
+  });
 
   const [teams, checkins] = await Promise.all([loadTeams(supabase), checkinQuery]);
   if (checkins.error) throw new Error(`Couldn't load check-ins: ${checkins.error.message}`);
@@ -141,7 +146,7 @@ export async function loadTeamWeek(
       morale_score: c.morale_score,
       rubric_review: c.rubric_review,
       transcript: c.transcript,
-      canPlay: c.audio_path !== null && playable.has(c.audio_path),
+      recording: c.audio_path && playable.has(c.audio_path) ? recordingPath(c.id, c.audio_path) : null,
     };
   });
   rows.sort((a, b) => (a.memberName ?? "").localeCompare(b.memberName ?? ""));

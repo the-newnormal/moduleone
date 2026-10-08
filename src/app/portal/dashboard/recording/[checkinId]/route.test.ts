@@ -46,6 +46,13 @@ describe("GET /portal/dashboard/recording/[checkinId]", () => {
     expect(createSignedUrl).toHaveBeenCalledWith(PATH, 600);
   });
 
+  it("accepts the address with the file's extension, which only Safari needs", async () => {
+    const res = await get(`${ID}.webm`);
+    expect(res.status).toBe(307);
+    expect(eq).toHaveBeenCalledWith("id", ID);
+    expect(createSignedUrl).toHaveBeenCalledWith(PATH, 600);
+  });
+
   it("signs a new link on every request, so an open page never goes stale", async () => {
     const first = await get(ID);
     const second = await get(ID);
@@ -74,11 +81,14 @@ describe("GET /portal/dashboard/recording/[checkinId]", () => {
     expect(res.headers.get("cache-control")).toBe("private, no-store");
   });
 
-  it.each(["not-a-uuid", "..%2F..%2Fsecret", ""])("answers 404 for a malformed id (%s)", async (id) => {
-    const res = await get(id);
-    expect(res.status).toBe(404);
-    expect(createClient).not.toHaveBeenCalled();
-  });
+  it.each(["not-a-uuid", "not-a-uuid.webm", `${ID}.webm.webm`, `${ID}x`, "..%2F..%2Fsecret", ""])(
+    "answers 404 for a malformed id (%s)",
+    async (id) => {
+      const res = await get(id);
+      expect(res.status).toBe(404);
+      expect(createClient).not.toHaveBeenCalled();
+    },
+  );
 
   it("fails loudly when the check-in can't be read", async () => {
     maybeSingle.mockResolvedValue({ data: null, error: { message: "boom" } });

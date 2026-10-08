@@ -9,9 +9,19 @@ const BUCKET = "checkin-audio";
 // Long enough to play a check-in through; the player asks for a new link if one runs out.
 export const RECORDING_LINK_SECONDS = 10 * 60;
 
+const EXTENSION = /\.[A-Za-z0-9]{1,8}$/;
+
 // The drill-in's address for a recording. It never goes stale: each request signs a fresh link
 // (src/app/portal/dashboard/recording/[checkinId]/route.ts), so a page left open still plays.
-export const recordingPath = (checkinId: string) => `/portal/dashboard/recording/${checkinId}`;
+// It ends with the file's own extension (".webm"): Safari picks its media engine from the
+// address's extension, not from where the address redirects to.
+export function recordingPath(checkinId: string, audioPath: string): string {
+  const name = audioPath.slice(audioPath.lastIndexOf("/") + 1);
+  return `/portal/dashboard/recording/${checkinId}${EXTENSION.exec(name)?.[0] ?? ""}`;
+}
+
+// The check-in id in the last part of a recording address, without the extension it ends with.
+export const recordingCheckinId = (segment: string) => segment.replace(EXTENSION, "");
 
 // Which of these files the viewer may play: Storage signs only those. The links themselves are
 // thrown away (the player gets its own when it plays), so they live just long enough to check.
