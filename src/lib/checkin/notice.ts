@@ -7,7 +7,7 @@ import type { SttProvider } from "@/lib/stt/types";
 
 const NOTICE_REVISION = "2026-10-09";
 
-/** Which transcription provider the server is configured to use (STT_PROVIDER), as the notice names it. */
+// Which transcription provider the server is configured to use (STT_PROVIDER), as the notice names it.
 export function configuredSttProvider(): SttProvider {
   const value = (process.env.STT_PROVIDER ?? "openai").trim().toLowerCase();
   return value === "local" ? value : "openai";

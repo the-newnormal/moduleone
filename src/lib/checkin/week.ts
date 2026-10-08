@@ -4,7 +4,7 @@
 const SGT_OFFSET_MS = 8 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Monday of the current Singapore week, as YYYY-MM-DD. */
+// Monday of the current Singapore week, as YYYY-MM-DD.
 export function currentWeekStart(now: Date = new Date()): string {
   // Shift to Singapore wall-clock time, then read it back with the UTC getters.
   const sgt = new Date(now.getTime() + SGT_OFFSET_MS);
@@ -13,7 +13,7 @@ export function currentWeekStart(now: Date = new Date()): string {
   return monday.toISOString().slice(0, 10);
 }
 
-/** The three questions, in the order the recorder shows them. */
+// The three questions, in the order the recorder shows them.
 export const QUESTIONS = [
   { id: "activity", text: "What have you done this week?" },
   { id: "excellence", text: "Where did you / your team use your superpower?" },
