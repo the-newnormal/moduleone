@@ -11,9 +11,9 @@ export type Grade = {
   excellence: Score;
   morale: Score;
   category: Category;
-  /** 2–4 sentences for leaders and hq. Members never see it. */
+  // 2–4 sentences for leaders and hq. Members never see it.
   review: string;
-  /** The model that actually produced the grade (after any refusal fallback). */
+  // The model that actually produced the grade (after any refusal fallback).
   model: string;
 };
 
@@ -21,7 +21,7 @@ export type GradingFailure = "empty_transcript" | "refusal" | "invalid_output" |
 
 export class GradingError extends Error {
   readonly reason: GradingFailure;
-  /** True when trying again later might work. */
+  // True when trying again later might work.
   readonly retryable: boolean;
 
   constructor(
