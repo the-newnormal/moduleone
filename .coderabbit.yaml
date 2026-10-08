@@ -7,4 +7,7 @@ reviews:
     - "!**/*.generated.ts"
     - "!**/database.types.ts"
     - "!supabase/migrations/**"        # migrations reviewed by a human, not nitpicked
+  pre_merge_checks:
+    docstrings:
+      mode: "off"                     # counts only /** */ docstrings; this repo explains code in // comments
 language: "en"

@@ -32,6 +32,9 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) * 1.4);
   --radius-2xl: calc(var(--radius) * 1.8);
+  --color-status-good: var(--status-good);
+  --color-status-warning: var(--status-warning);
+  --color-status-critical: var(--status-critical);
 }
 
 /* Normal theme: navy type on pale blue. */
@@ -55,6 +58,11 @@
   --border: oklch(0.88 0.025 240);
   --input: oklch(0.88 0.025 240);
   --ring: oklch(0.38 0.1 250);
+  /* Heat-map R/Y/G. A status palette: reserved for health, and always shown with an icon and a
+     label, never colour alone (yellow sits below 3:1 on a light surface by design). */
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-critical: #d03b3b;
 }
 
 @layer base {

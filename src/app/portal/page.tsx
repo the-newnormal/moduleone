@@ -44,6 +44,19 @@ export default async function PortalPage() {
           </CardDescription>
         </CardHeader>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>
+            <h2 className="text-2xl">
+              <Link href="/portal/dashboard" className="hover:underline">
+                Team health
+              </Link>
+            </h2>
+          </CardTitle>
+          <CardDescription>The red, yellow and green heat-map of check-ins, week by week.</CardDescription>
+        </CardHeader>
+      </Card>
     </main>
   );
 }
