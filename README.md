@@ -17,7 +17,7 @@ pnpm dev
 ```
 
 ## Rules
-See `CLAUDE.md` for the engineering contract. Hygiene is non-negotiable: protected `main`, migrations-in-Git, RLS on every table, CI + required Supabase migration check + human approval before merge. **No direct production changes. No blind auto-merging.**
+See `CLAUDE.md` for the engineering contract. Hygiene is non-negotiable: protected `main`, migrations-in-Git, RLS on every table, CI + required Supabase migration check + an approving review before merge (CodeRabbit's counts). Claude merges a PR once CodeRabbit approves it, Greptile scores it 5/5 and CI passes, all on its latest commit. **No direct production changes. No merging past red CI or unticked pre-merge steps.**
 
 ### Branch protection
 `main` is protected by the GitHub ruleset in `.github/rulesets/protect-main.json`, with no bypass (admins included):
