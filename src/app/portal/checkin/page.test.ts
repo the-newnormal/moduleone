@@ -12,6 +12,8 @@ vi.mock("next/navigation", () => ({
   redirect: vi.fn((url: string) => {
     throw new Error(`NEXT_REDIRECT ${url}`);
   }),
+  // The recorder refreshes the page after a save; rendering it needs only the hook.
+  useRouter: () => ({ refresh: vi.fn() }),
 }));
 vi.mock("next/server", async (importOriginal) => ({
   ...(await importOriginal<typeof import("next/server")>()),

@@ -1,6 +1,7 @@
 "use client";
 
 import { LoaderCircle, Mic } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { baseMimeType, extensionFor } from "@/lib/checkin/audio";
@@ -28,8 +29,23 @@ type State =
   | { step: "saving" }
   | SaveOutcome;
 
-// What is live while recording: the microphone stream, the recorder and the clock.
-type Media = { stream: MediaStream; recorder: MediaRecorder; timer: number };
+// What is live while recording: the microphone stream, the recorder, the clock, and what becomes
+// of the take once the recorder stops (null: nothing to save).
+type Media = { stream: MediaStream; recorder: MediaRecorder; timer: number; saved: Promise<SaveOutcome | null> };
+
+// A take keeps saving after the member leaves the page (see the unmount effect). This module
+// outlives the component across in-app navigation, so coming back finds the save here and waits
+// for it, instead of offering a new recording that the older save could then replace.
+let inFlight: Promise<SaveOutcome | null> | null = null;
+
+function trackSave<T extends SaveOutcome | null>(save: Promise<T>): Promise<T> {
+  inFlight = save;
+  const clear = () => {
+    if (inFlight === save) inFlight = null;
+  };
+  save.then(clear, clear);
+  return save;
+}
 
 function pickMimeType(): string | null {
   if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) return null;
@@ -71,7 +87,8 @@ function release(media: RefObject<Media | null>) {
 }
 
 export function Recorder() {
-  const [state, setState] = useState<State>({ step: "idle", problem: null });
+  const [state, setState] = useState<State>(() => (inFlight ? { step: "saving" } : { step: "idle", problem: null }));
+  const router = useRouter();
   const [elapsedMs, setElapsedMs] = useState(0);
   // The page was hidden, or the microphone muted, while recording, so the take may have a gap.
   const [away, setAway] = useState(false);
@@ -98,15 +115,33 @@ export function Recorder() {
       const live = media.current;
       if (live && live.recorder.state === "recording") {
         window.clearInterval(live.timer);
+        void trackSave(live.saved); // registered now, before onstop runs, so a quick return waits too
         live.recorder.stop(); // onstop saves the take and lets go of the microphone
         return;
       }
       release(media);
       const take = failedTake.current;
-      if (take) void saveTake(take, { prepare: prepareRecording, upload, saveDraft });
+      if (take) void trackSave(saveTake(take, { prepare: prepareRecording, upload, saveDraft }));
     },
     [],
   );
+
+  // Back on the page while a take saved on the way out is still going: wait for it, then show
+  // what it left (the draft, or the take with Try again).
+  useEffect(() => {
+    const pending = inFlight;
+    if (!pending) return;
+    let mounted = true;
+    void pending.then((outcome) => {
+      if (!mounted) return;
+      setState(outcome ?? { step: "idle", problem: null });
+      // The save re-rendered the page while the member was elsewhere; this page hasn't seen it.
+      if (outcome?.step === "saved") router.refresh();
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [router]);
 
   // Closing or reloading the tab ends the page before a save could finish, so ask first while a
   // take exists only in this page.
@@ -147,9 +182,11 @@ export function Recorder() {
     primary.current?.focus();
   }, [step, problem]);
 
-  async function save(take: Take) {
+  async function save(take: Take): Promise<SaveOutcome> {
     setState({ step: "saving" });
-    setState(await saveTake(take, { prepare: prepareRecording, upload, saveDraft }));
+    const outcome = await trackSave(saveTake(take, { prepare: prepareRecording, upload, saveDraft }));
+    setState(outcome);
+    return outcome;
   }
 
   function finish() {
@@ -194,8 +231,14 @@ export function Recorder() {
     recorder.ondataavailable = (event) => {
       if (event.data.size > 0) chunks.push(event.data);
     };
+    // Settles once the take is saved (or there is nothing to save), for a return to the page to wait on.
+    let settle: (outcome: SaveOutcome | null) => void = () => {};
+    const saved = new Promise<SaveOutcome | null>((resolve) => {
+      settle = resolve;
+    });
     recorder.onerror = () => {
       release(media);
+      settle(null);
       setState({ step: "idle", problem: "The recording stopped unexpectedly. Try again." });
     };
     recorder.onstop = () => {
@@ -205,9 +248,10 @@ export function Recorder() {
       const type = recorder.mimeType && extensionFor(recorder.mimeType) ? recorder.mimeType : mimeType;
       const blob = new Blob(chunks, { type });
       if (blob.size === 0) {
+        settle(null);
         return setState({ step: "idle", problem: "Nothing was recorded. Check your microphone, then try again." });
       }
-      void save({ blob, mimeType: baseMimeType(type), durationMs, uploadedPath: null });
+      void save({ blob, mimeType: baseMimeType(type), durationMs, uploadedPath: null }).then(settle);
     };
 
     const timer = window.setInterval(() => {
@@ -215,7 +259,7 @@ export function Recorder() {
       setElapsedMs(ms);
       if (ms >= MAX_MS) finish();
     }, 250);
-    media.current = { stream, recorder, timer };
+    media.current = { stream, recorder, timer, saved };
     setElapsedMs(0);
     setAway(false);
     try {
@@ -223,6 +267,7 @@ export function Recorder() {
     } catch {
       // The microphone went away between the prompt and here (unplugged, or taken by another app).
       release(media);
+      settle(null);
       return setState({ step: "idle", problem: "Couldn't start the microphone. Try again." });
     }
     setState({ step: "recording", question: 0 });
