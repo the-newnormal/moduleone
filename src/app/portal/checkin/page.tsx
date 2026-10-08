@@ -30,7 +30,7 @@ const CHECKIN_COLUMNS = "id, submitted_at, graded_at, processing_started_at, pro
 const PLAYBACK_SECONDS = 2 * 60 * 60;
 
 type CheckinRow = ProcessingState & { id: string };
-type DraftRow = { audio_path: string; duration_ms: number | null; created_at: string };
+type DraftRow = { audio_path: string; duration_ms: number | null; recorded_at: string; created_at: string };
 
 type View =
   | { state: "no_member" }
@@ -97,7 +97,7 @@ async function loadView(
       .maybeSingle<CheckinRow>(),
     supabase
       .from("checkin_drafts")
-      .select("audio_path, duration_ms, created_at")
+      .select("audio_path, duration_ms, recorded_at, created_at")
       .eq("member_id", member.id)
       .eq("week_start", weekStart)
       .maybeSingle<DraftRow>(),
@@ -127,7 +127,8 @@ async function loadView(
     path: draft.data.audio_path,
     playbackUrl: signed?.signedUrl ?? null,
     durationMs: draft.data.duration_ms,
-    recordedAt: draft.data.created_at,
+    // When the take was recorded; when that is unknown ('-infinity', see 0004), when it was saved.
+    recordedAt: Number.isFinite(Date.parse(draft.data.recorded_at)) ? draft.data.recorded_at : draft.data.created_at,
   };
 }
 

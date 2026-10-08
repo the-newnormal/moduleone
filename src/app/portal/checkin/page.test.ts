@@ -159,7 +159,12 @@ describe("/portal/checkin", () => {
 
   it("shows the draft with playback, its length and when it was recorded", async () => {
     reads.checkin_drafts = {
-      data: { audio_path: DRAFT_PATH, duration_ms: 192_000, created_at: "2026-10-08T03:30:00Z" },
+      data: {
+        audio_path: DRAFT_PATH,
+        duration_ms: 192_000,
+        recorded_at: "2026-10-08T03:30:00Z",
+        created_at: "2026-10-08T03:45:00Z", // saved later, e.g. after a retry
+      },
       error: null,
     };
     const html = await render();
@@ -172,8 +177,19 @@ describe("/portal/checkin", () => {
     expect(html).not.toContain("Start recording");
   });
 
+  it("shows when the draft was saved when its recording time is unknown", async () => {
+    reads.checkin_drafts = {
+      data: { audio_path: DRAFT_PATH, duration_ms: null, recorded_at: "-infinity", created_at: "2026-10-08T03:45:00Z" },
+      error: null,
+    };
+    expect(await render()).toContain("Recorded Thursday 8 October at 11:45 am");
+  });
+
   it("still offers submit and delete when playback can't be signed", async () => {
-    reads.checkin_drafts = { data: { audio_path: DRAFT_PATH, duration_ms: null, created_at: NOW.toISOString() }, error: null };
+    reads.checkin_drafts = {
+      data: { audio_path: DRAFT_PATH, duration_ms: null, recorded_at: NOW.toISOString(), created_at: NOW.toISOString() },
+      error: null,
+    };
     createSignedUrl.mockResolvedValue({ data: null, error: { name: "StorageApiError", message: "nope" } });
     const html = await render();
     expect(html).not.toContain("<audio");
