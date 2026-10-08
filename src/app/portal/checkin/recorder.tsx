@@ -20,7 +20,6 @@ const BUCKET = "checkin-audio";
 
 const UNSUPPORTED = "This browser can't record audio here. Use an up-to-date Chrome, Edge, Firefox or Safari.";
 const AWAY = "Your phone may have paused the recording while you were away. Listen back before you submit.";
-const LEAVE_MESSAGE = "Leave this page? Your recording hasn't been saved yet, so it will be lost.";
 
 type State =
   | { step: "idle"; problem: string | null }
@@ -58,7 +57,7 @@ function upload(ready: ReadyToUpload, body: Blob) {
 }
 
 // Stops the clock, the recorder and the microphone. Detaches the recorder's handlers first, so a
-// recording stopped this way (leaving the page, say) is dropped rather than uploaded.
+// recording stopped this way (after an error, say) is dropped rather than uploaded.
 function release(media: RefObject<Media | null>) {
   const live = media.current;
   if (!live) return;
@@ -83,38 +82,41 @@ export function Recorder() {
   const primary = useRef<HTMLButtonElement>(null);
   const firstStep = useRef(true);
 
-  // Let go of the microphone if the member leaves the page mid-recording.
+  // A take whose save failed, kept so leaving the page can still try to save it.
+  const failedTake = useRef<Take | null>(null);
+  useEffect(() => {
+    failedTake.current = state.step === "failed" && !state.updated ? state.take : null;
+  }, [state]);
+
+  // Leaving the page within the app (a link, Back or Forward) keeps the take: a recording is
+  // finished and saved as a draft, as Finish would, and a take that failed to save is tried once
+  // more. Next.js can't hold such a navigation, so this is what stops the take being lost; the
+  // member finds the draft when they come back. A save already under way carries on by itself.
   useEffect(
     () => () => {
       startCount.current += 1;
+      const live = media.current;
+      if (live && live.recorder.state === "recording") {
+        window.clearInterval(live.timer);
+        live.recorder.stop(); // onstop saves the take and lets go of the microphone
+        return;
+      }
       release(media);
+      const take = failedTake.current;
+      if (take) void saveTake(take, { prepare: prepareRecording, upload, saveDraft });
     },
     [],
   );
 
-  // Ask before leaving (or reloading) while a take exists only in this page.
+  // Closing or reloading the tab ends the page before a save could finish, so ask first while a
+  // take exists only in this page.
   const unsaved =
     state.step === "recording" || state.step === "saving" || (state.step === "failed" && !state.updated);
   useEffect(() => {
     if (!unsaved) return;
     const warn = (event: BeforeUnloadEvent) => event.preventDefault();
-    // App links (← Portal) change pages without unloading this one, so beforeunload doesn't see
-    // them. This runs before Next's own click handler, and stops it if the member stays.
-    const confirmLeave = (event: MouseEvent) => {
-      const link = event.target instanceof Element ? event.target.closest("a[href]") : null;
-      if (!link || event.defaultPrevented || event.button !== 0) return;
-      // A new tab or window leaves this page, and the take, where it is.
-      if (event.metaKey || event.ctrlKey || event.shiftKey || link.getAttribute("target") === "_blank") return;
-      if (window.confirm(LEAVE_MESSAGE)) return;
-      event.preventDefault();
-      event.stopPropagation();
-    };
     window.addEventListener("beforeunload", warn);
-    document.addEventListener("click", confirmLeave, true);
-    return () => {
-      window.removeEventListener("beforeunload", warn);
-      document.removeEventListener("click", confirmLeave, true);
-    };
+    return () => window.removeEventListener("beforeunload", warn);
   }, [unsaved]);
 
   // iOS Safari mutes the microphone while the page is hidden (another app, a locked screen), so
