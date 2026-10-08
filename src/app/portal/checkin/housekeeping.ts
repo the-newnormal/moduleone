@@ -114,6 +114,35 @@ export async function tidyMemberAudio(memberId: string, weekStart: string): Prom
   }
 }
 
+// Recordings are kept 90 days: the privacy notice says so. forget_expired_checkin_audio (0004)
+// takes every file older than that off the check-in or draft that points at it and returns the
+// files, which this then deletes. A file it fails to delete is returned again on the next run.
+// Run daily with processPendingCheckins. Never throws.
+const REMOVE_BATCH = 100;
+
+export async function deleteExpiredRecordings(): Promise<{ deleted: number } | null> {
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin.rpc("forget_expired_checkin_audio");
+    if (error) {
+      console.error("deleteExpiredRecordings: finding expired recordings failed", { code: error.code });
+      return null;
+    }
+    const names = (data ?? []) as string[];
+    for (let i = 0; i < names.length; i += REMOVE_BATCH) {
+      const { error: removeError } = await admin.storage.from(BUCKET).remove(names.slice(i, i + REMOVE_BATCH));
+      if (removeError) {
+        console.error("deleteExpiredRecordings: removing files failed", { code: removeError.name });
+        return null;
+      }
+    }
+    return { deleted: names.length };
+  } catch (error) {
+    console.error("deleteExpiredRecordings failed", { code: error instanceof Error ? error.name : "unknown" });
+    return null;
+  }
+}
+
 // How many submitted check-ins one sweep picks up, oldest first. They are processed side by side,
 // and each attempt stops transcribing well within the function's 300 seconds (see process.ts).
 const SWEEP_LIMIT = 20;

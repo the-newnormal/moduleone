@@ -1,9 +1,9 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { processPendingCheckins } from "@/app/portal/checkin/housekeeping";
+import { deleteExpiredRecordings, processPendingCheckins } from "@/app/portal/checkin/housekeeping";
 import { GET } from "./route";
 
-vi.mock("@/app/portal/checkin/housekeeping", () => ({ processPendingCheckins: vi.fn() }));
+vi.mock("@/app/portal/checkin/housekeeping", () => ({ processPendingCheckins: vi.fn(), deleteExpiredRecordings: vi.fn() }));
 
 const SECRET = "cron-secret-for-tests";
 const call = (authorization?: string) =>
@@ -16,6 +16,7 @@ const call = (authorization?: string) =>
 beforeEach(() => {
   vi.stubEnv("CRON_SECRET", SECRET);
   vi.mocked(processPendingCheckins).mockReset().mockResolvedValue({ due: 2, graded: 1 });
+  vi.mocked(deleteExpiredRecordings).mockReset().mockResolvedValue({ deleted: 3 });
 });
 
 afterEach(() => {
@@ -23,11 +24,12 @@ afterEach(() => {
 });
 
 describe("GET /api/cron/process-checkins", () => {
-  it("processes the check-ins that are due when Vercel Cron calls with the secret", async () => {
+  it("processes the check-ins that are due and deletes expired recordings when Vercel Cron calls with the secret", async () => {
     const response = await call(`Bearer ${SECRET}`);
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true, due: 2, graded: 1 });
+    expect(await response.json()).toEqual({ ok: true, due: 2, graded: 1, deleted: 3 });
     expect(processPendingCheckins).toHaveBeenCalledOnce();
+    expect(deleteExpiredRecordings).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -39,6 +41,7 @@ describe("GET /api/cron/process-checkins", () => {
     const response = await call(authorization);
     expect(response.status).toBe(401);
     expect(processPendingCheckins).not.toHaveBeenCalled();
+    expect(deleteExpiredRecordings).not.toHaveBeenCalled();
   });
 
   it("refuses every call when CRON_SECRET isn't set", async () => {
@@ -48,9 +51,17 @@ describe("GET /api/cron/process-checkins", () => {
     expect(processPendingCheckins).not.toHaveBeenCalled();
   });
 
-  it("reports a sweep that couldn't read the check-ins", async () => {
+  it("reports a sweep that couldn't read the check-ins, and still deletes expired recordings", async () => {
     vi.mocked(processPendingCheckins).mockResolvedValue(null);
     const response = await call(`Bearer ${SECRET}`);
     expect(response.status).toBe(500);
+    expect(deleteExpiredRecordings).toHaveBeenCalledOnce();
+  });
+
+  it("reports a failed deletion of expired recordings", async () => {
+    vi.mocked(deleteExpiredRecordings).mockResolvedValue(null);
+    const response = await call(`Bearer ${SECRET}`);
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ ok: false, due: 2, graded: 1 });
   });
 });

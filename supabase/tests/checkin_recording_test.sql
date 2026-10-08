@@ -5,7 +5,7 @@
 --   team R: leader lead_r, members m1 and m2      hq      role hq, no team, no grants
 --   auditor no team, recordings grant             outsider signed in, but no members row
 begin;
-select plan(96);
+select plan(102);
 
 -- ---------- fixtures ----------
 insert into auth.users (id, email) values
@@ -354,6 +354,40 @@ select is(
   0, 'a take no check-in points at stays private after the member submits another'
 );
 reset role;
+
+-- ---------- retention: recordings are deleted after 90 days ----------
+select function_privs_are('public', 'forget_expired_checkin_audio', array['integer'], r, array[]::text[],
+    format('%s cannot call forget_expired_checkin_audio', r))
+  from unnest(array['anon', 'authenticated']) r;
+-- m2's submitted recording and an old draft of lead_r's are 91 days old; m1's recording is new.
+set local role service_role;
+insert into checkin_drafts (member_id, audio_path, mime_type)
+  values ('c1000000-0000-4000-8000-000000000001', pg_temp.take('c1000000-0000-4000-8000-000000000001', 'old.webm'), 'audio/webm');
+insert into storage.objects (bucket_id, name, created_at)
+  values ('checkin-audio', pg_temp.take('c1000000-0000-4000-8000-000000000001', 'old.webm'), now() - interval '91 days');
+update storage.objects set created_at = now() - interval '91 days'
+  where bucket_id = 'checkin-audio' and name = pg_temp.take('c1000000-0000-4000-8000-000000000003', 'draft.webm');
+create temp table expired (name text);
+insert into expired select * from forget_expired_checkin_audio();
+reset role;
+select is(
+  (select array_agg(name order by name) from expired where name like 'c1000000-%'),
+  array[pg_temp.take('c1000000-0000-4000-8000-000000000001', 'old.webm'),
+        pg_temp.take('c1000000-0000-4000-8000-000000000003', 'draft.webm')],
+  'the recordings older than 90 days are handed over for deletion, and only those'
+);
+select is(
+  (select audio_path from checkins where member_id = 'c1000000-0000-4000-8000-000000000003' and week_start = pg_temp.this_week()),
+  null, 'the check-in stops pointing at its expired recording (the check-in itself stays)'
+);
+select isnt(
+  (select audio_path from checkins where member_id = 'c1000000-0000-4000-8000-000000000002' and week_start = pg_temp.this_week()),
+  null, 'a recording under 90 days old is kept'
+);
+select is(
+  pg_temp.n($$select 1 from checkin_drafts where member_id = 'c1000000-0000-4000-8000-000000000001'$$),
+  0, 'a draft whose recording expired is removed'
+);
 
 select * from finish();
 rollback;

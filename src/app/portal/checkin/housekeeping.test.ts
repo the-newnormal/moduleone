@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { processCheckin } from "@/lib/checkin/process";
 import { createAdminClient } from "@/lib/supabase/admin";
 import {
+  deleteExpiredRecordings,
   needsProcessing,
   orphanedFiles,
   processPendingCheckins,
@@ -278,5 +279,52 @@ describe("processPendingCheckins", () => {
       throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
     });
     await expect(processPendingCheckins(NOW)).resolves.toBeNull();
+  });
+});
+
+describe("deleteExpiredRecordings", () => {
+  const rpc = vi.fn();
+  const remove = vi.fn();
+  const storageFrom = vi.fn(() => ({ remove }));
+  const files = (n: number) => Array.from({ length: n }, (_, i) => `${MEMBER}/2026-07-0${i % 7}-take-${i}.webm`);
+
+  beforeEach(() => {
+    vi.mocked(createAdminClient).mockReset().mockReturnValue({ rpc, storage: { from: storageFrom } } as never);
+    rpc.mockReset().mockResolvedValue({ data: files(3), error: null });
+    remove.mockReset().mockResolvedValue({ data: [], error: null });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("deletes the recordings the database has taken off their check-ins and drafts", async () => {
+    expect(await deleteExpiredRecordings()).toEqual({ deleted: 3 });
+    expect(rpc).toHaveBeenCalledExactlyOnceWith("forget_expired_checkin_audio");
+    expect(storageFrom).toHaveBeenCalledWith("checkin-audio");
+    expect(remove).toHaveBeenCalledExactlyOnceWith(files(3));
+  });
+
+  it("deletes in batches of 100", async () => {
+    rpc.mockResolvedValue({ data: files(250), error: null });
+    expect(await deleteExpiredRecordings()).toEqual({ deleted: 250 });
+    expect(remove.mock.calls.map(([batch]) => batch.length)).toEqual([100, 100, 50]);
+  });
+
+  it("does nothing when nothing has expired", async () => {
+    rpc.mockResolvedValue({ data: [], error: null });
+    expect(await deleteExpiredRecordings()).toEqual({ deleted: 0 });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("reports a failure without throwing, so the next run tries again", async () => {
+    remove.mockResolvedValue({ data: null, error: { name: "StorageApiError", message: "boom" } });
+    expect(await deleteExpiredRecordings()).toBeNull();
+    rpc.mockResolvedValue({ data: null, error: { code: "42501", message: "denied" } });
+    expect(await deleteExpiredRecordings()).toBeNull();
+    vi.mocked(createAdminClient).mockImplementation(() => {
+      throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
+    });
+    expect(await deleteExpiredRecordings()).toBeNull();
   });
 });

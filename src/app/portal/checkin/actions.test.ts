@@ -126,7 +126,7 @@ afterEach(() => {
 });
 
 const ACTIONS = [
-  ["acceptNotice", () => acceptNotice()],
+  ["acceptNotice", () => acceptNotice(noticeVersion())],
   ["prepareRecording", () => prepareRecording("audio/webm")],
   ["saveDraft", () => saveDraft({ path: PATH, durationMs: 1000 })],
   ["deleteDraft", () => deleteDraft()],
@@ -164,7 +164,7 @@ describe("every check-in action", () => {
 
 describe("acceptNotice", () => {
   it("records the current notice version for the session's member, once", async () => {
-    expect(await acceptNotice()).toEqual({ status: "accepted" });
+    expect(await acceptNotice(noticeVersion())).toEqual({ status: "accepted" });
     expect(upsert).toHaveBeenCalledExactlyOnceWith(
       { member_id: MEMBER, notice_version: noticeVersion() },
       { onConflict: "member_id,notice_version", ignoreDuplicates: true },
@@ -174,8 +174,14 @@ describe("acceptNotice", () => {
 
   it("reports a failed write", async () => {
     upsert.mockResolvedValue({ data: null, error: { code: "42501", message: "denied" } });
-    expect(await acceptNotice()).toMatchObject({ status: "error", code: "failed" });
+    expect(await acceptNotice(noticeVersion())).toMatchObject({ status: "error", code: "failed" });
     expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("records nothing for a notice that has changed since the member read it, and shows the new one", async () => {
+    expect(await acceptNotice("2026-10-01.local")).toMatchObject({ status: "error", code: "notice_required" });
+    expect(upsert).not.toHaveBeenCalled();
+    expect(revalidatePath).toHaveBeenCalledExactlyOnceWith(PAGE);
   });
 });
 

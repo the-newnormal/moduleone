@@ -135,9 +135,12 @@ async function removeFile(admin: ReturnType<typeof createAdminClient>, memberId:
   if (removeError) console.error("checkin: removing a file failed", { code: removeError.name });
 }
 
-export async function acceptNotice(): Promise<AcceptNoticeResult> {
+// `version` is the notice the member was shown. If the notice has changed since (a different
+// transcription setup), they are shown the new one instead of agreeing to text they never saw.
+export async function acceptNotice(version: string): Promise<AcceptNoticeResult> {
   const session = await sessionMember();
   if ("status" in session) return session;
+  if (version !== noticeVersion()) return noticeRequired();
   const { error } = await createAdminClient()
     .from("recording_notices")
     .upsert(

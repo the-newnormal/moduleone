@@ -170,7 +170,7 @@ function CheckinCard({ view }: { view: View }) {
                 </div>
               ))}
             </dl>
-            <NoticeForm />
+            <NoticeForm version={noticeVersion()} />
           </CardContent>
         </Card>
       );

@@ -238,3 +238,28 @@ grant execute on function
   save_checkin_draft(uuid, text, text, int), delete_checkin_draft(uuid),
   submit_checkin_draft(uuid), claim_checkin_processing(uuid)
   to service_role;
+
+-- ---------- retention: recordings are deleted after 90 days ----------
+-- The privacy notice promises it. Each night the server (src/app/api/cron/process-checkins) calls
+-- this, then deletes the returned files through the Storage API (Storage doesn't let SQL delete
+-- its files). It takes every 'checkin-audio' file older than 90 days off the check-in or draft
+-- that points at it, so nothing refers to a deleted file; transcripts and scores stay. A file the
+-- server fails to delete is still in storage.objects, so the next run returns it again.
+create function forget_expired_checkin_audio(p_limit int default 500) returns setof text
+  language plpgsql set search_path = '' as $$
+declare
+  v_names text[];
+begin
+  select coalesce(array_agg(o.name order by o.created_at), '{}') into v_names
+    from (
+      select s.name, s.created_at from storage.objects s
+        where s.bucket_id = 'checkin-audio' and s.created_at < now() - interval '90 days'
+        order by s.created_at
+        limit p_limit
+    ) o;
+  update public.checkins c set audio_path = null where c.audio_path = any(v_names);
+  delete from public.checkin_drafts d where d.audio_path = any(v_names);
+  return query select unnest(v_names);
+end $$;
+revoke execute on function forget_expired_checkin_audio(int) from public, anon, authenticated;
+grant execute on function forget_expired_checkin_audio(int) to service_role;
