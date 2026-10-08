@@ -71,7 +71,9 @@ grant insert (parent_id, kind, domain_type, division_type, code, sort_order, not
 -- subtree in one UPDATE works.
 --
 -- Every check of the tree or of who sits where first takes this transaction-scoped lock, so
--- structural changes (rare, admin-only) run one at a time. Without it, two changes that each pass
+-- structural changes (rare, admin-only) run one at a time. Each structural statement also takes it
+-- before it locks any row (the *_tree_lock statement triggers below), so every path takes the tree
+-- lock first and rows second, like admin_move_team; otherwise a drag and an archive could deadlock. Without it, two changes that each pass
 -- alone could together break a rule (archive a domain while someone is placed into it). Under
 -- READ COMMITTED each statement in these volatile functions takes a new snapshot, so a transaction
 -- that waited for the lock checks against what the other one committed. Under REPEATABLE READ or
@@ -320,6 +322,29 @@ revoke execute on function members_drop_team_leads() from public, anon, authenti
 
 create trigger members_drop_team_leads after update of role on members
   for each row execute function members_drop_team_leads();
+
+-- ---------- the tree lock, taken first ----------
+-- The row triggers above check after RLS, so they run once a write already holds its rows' locks.
+-- If they were the first to take the tree lock, a direct archive (row X, then the tree lock) and a
+-- drag (admin_move_team: the tree lock, then renumbering X) would wait on each other, and Postgres
+-- would abort one with a deadlock. These BEFORE STATEMENT triggers take the tree lock before the
+-- statement touches any row, so every path locks in the same order. They only take the lock: the
+-- checks, and their messages, stay after RLS. (Signed-in users who can't make these changes take
+-- it too, for the length of a refused statement.)
+create function team_tree_lock() returns trigger
+  language plpgsql set search_path = '' as $$
+begin
+  perform pg_advisory_xact_lock(hashtextextended('moduleone:team_tree', 0));
+  return null;
+end $$;
+revoke execute on function team_tree_lock() from public, anon, authenticated;
+
+create trigger teams_tree_lock before insert or update of parent_id, kind, archived_at on teams
+  for each statement execute function team_tree_lock();
+create trigger members_tree_lock before insert or update of team_id, role on members
+  for each statement execute function team_tree_lock();
+create trigger team_leads_tree_lock before insert or update of team_id, member_id on team_leads
+  for each statement execute function team_tree_lock();
 
 -- ---------- helpers for the policies ----------
 -- The nodes a signed-in leader leads: their own team and their team_leads rows, plus everything

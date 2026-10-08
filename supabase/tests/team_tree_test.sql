@@ -22,7 +22,7 @@
 -- team. The admin sections add more nodes by name (admins can't choose ids) and look them up with
 -- pg_temp.team().
 begin;
-select plan(313);
+select plan(316);
 
 -- ---------- tree lock ----------
 -- Whether running sql takes the tree lock. It runs in a subtransaction that is rolled back, which
@@ -47,27 +47,36 @@ begin
   return took;
 end $$;
 
--- A leader with no team and a lead row, made without the lock (the lead row with its trigger off).
+-- Fixtures made with this file's triggers off (user triggers only; foreign keys still apply), so
+-- none of them takes the lock and the statements below are the first to: a leader with no team
+-- and a lead row; someone in IP.1; a domain at the top level and an archived team under IP.X.
+alter table members disable trigger user;
+alter table team_leads disable trigger user;
+alter table teams disable trigger user;
 insert into members (id, name, role) values ('e1000000-0000-4000-8000-000000000001', 'TT lock leader', 'leader');
-alter table team_leads disable trigger team_leads_check;
 insert into team_leads (team_id, member_id)
   select id, 'e1000000-0000-4000-8000-000000000001' from teams where code = 'IP.1';
-alter table team_leads enable trigger team_leads_check;
--- Someone in IP.1, a domain at the top level and an archived team under IP.X, made the same way
--- (checking triggers off), so the moves, archives and restores below are the first to lock.
-alter table members disable trigger members_check_team;
 insert into members (id, name, team_id)
   select 'e1000000-0000-4000-8000-000000000002', 'TT lock placed', id from teams where code = 'IP.1';
-alter table members enable trigger members_check_team;
-alter table teams disable trigger teams_check_tree;
 insert into teams (id, name, kind, parent_id, archived_at) values
   ('e1000000-0000-4000-8000-000000000011', 'TT lock unplaced', 'domain', null, null),
   ('e1000000-0000-4000-8000-000000000012', 'TT lock archived', 'team', (select id from teams where code = 'IP.X'), now());
-alter table teams enable trigger teams_check_tree;
+alter table members enable trigger user;
+alter table team_leads enable trigger user;
+alter table teams enable trigger user;
 select ok(
   not exists (select 1 from pg_locks where locktype = 'advisory' and pid = pg_backend_pid()),
-  'no advisory lock is held before any structural change (adding someone with no team takes none)'
+  'no advisory lock is held before any structural change'
 );
+-- Each structural statement takes the lock before it touches a row (a BEFORE STATEMENT trigger),
+-- so it never holds a row another session's drag needs while waiting for the lock: these change
+-- no rows at all and still take it.
+select is(pg_temp.takes_tree_lock($$update teams set archived_at = now() where false$$), true,
+  'an archive, move or kind change takes the tree lock before it locks any row (teams_tree_lock)');
+select is(pg_temp.takes_tree_lock($$update members set team_id = null where false$$), true,
+  'so does placing or moving someone (members_tree_lock)');
+select is(pg_temp.takes_tree_lock($$insert into team_leads (team_id, member_id) select team_id, member_id from team_leads where false$$), true,
+  'and adding a lead (team_leads_tree_lock)');
 select is(pg_temp.takes_tree_lock($$insert into teams (name) values ('TT lock domain')$$), true,
   'adding a team takes the tree lock (teams_check_tree)');
 select is(pg_temp.takes_tree_lock($$update teams set name = 'TT lock rename' where code = 'IP.1'$$), false,
