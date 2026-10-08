@@ -92,7 +92,10 @@ function release(media: RefObject<Media | null>) {
 }
 
 export function Recorder() {
-  const [state, setState] = useState<State>(() => (inFlight ? { step: "saving" } : { step: "idle", problem: null }));
+  // The save this recorder came back to, if any. Read once, so the first render and the effect that
+  // waits for it agree even if the save settles in between.
+  const [returnedTo] = useState(() => inFlight);
+  const [state, setState] = useState<State>(() => (returnedTo ? { step: "saving" } : { step: "idle", problem: null }));
   const router = useRouter();
   const [elapsedMs, setElapsedMs] = useState(0);
   // The page was hidden, or the microphone muted, while recording, so the take may have a gap.
@@ -135,7 +138,7 @@ export function Recorder() {
   // Back on the page while a take saved on the way out is still going: wait for it, then show
   // what it left (the draft, or the take with Try again).
   useEffect(() => {
-    const pending = inFlight;
+    const pending = returnedTo;
     if (!pending) return;
     let mounted = true;
     void pending.then((outcome) => {
@@ -149,7 +152,7 @@ export function Recorder() {
     return () => {
       mounted = false;
     };
-  }, [router]);
+  }, [returnedTo, router]);
 
   // Closing or reloading the tab ends the page before a save could finish, so ask first while a
   // take exists only in this page.
