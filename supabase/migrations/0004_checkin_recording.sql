@@ -15,6 +15,17 @@
 -- takes the member from the session. The functions below are for that server code only.
 
 -- ---------- checkins: who transcribed and graded it, and processing state ----------
+-- category was free text until now, and nothing in the app wrote it, so any value is a hand edit.
+-- Keep one that names a theme (in any case or spacing); anything else can't be a theme, and is
+-- cleared rather than let the constraint below fail this migration.
+update checkins
+  set category = case
+    when lower(btrim(category)) in ('delivery', 'collaboration', 'growth', 'wellbeing', 'blockers')
+      then lower(btrim(category))
+  end
+  where category is not null
+    and category not in ('delivery', 'collaboration', 'growth', 'wellbeing', 'blockers');
+
 alter table checkins
   -- When the member pressed Submit. Null for check-ins made before this migration.
   add column submitted_at timestamptz,
