@@ -198,7 +198,7 @@ export async function prepareRecording(mimeType: string): Promise<PrepareRecordi
 // recorded before the current draft is dropped instead: it arrived late (a save that timed out,
 // or one retried from another tab or device), and must not replace the newer one. `recordedAt` is
 // when the take was recorded, by this server's clock (see take.ts); without a plausible one, the
-// take replaces no other take.
+// take can't replace another take either way.
 export async function saveDraft(input: {
   path: string;
   durationMs?: number;
@@ -250,6 +250,9 @@ export async function saveDraft(input: {
     revalidatePath(PAGE);
     return { status: "superseded" };
   }
+  // No plausible recording time, and another take is the draft: which is newer can't be told, so
+  // save neither way. The recorder always sends one, so this is a bad request; the take is kept.
+  if (raised(error, "unknown_order")) return fail("failed");
   if (raised(error, "already_submitted")) {
     // Too late for this take: the week's check-in is in.
     await removeFile(admin, memberId, path);
@@ -306,7 +309,7 @@ export async function submitCheckin(): Promise<SubmitCheckinResult> {
 }
 
 // When the take was recorded. Anything that isn't a time within the last week becomes null:
-// unknown, so the database won't let the take replace another one. It also caps the time at now.
+// unknown, so the database won't compare it with another take. It also caps the time at now.
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 function recordedAt(value: unknown): string | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;

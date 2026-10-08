@@ -189,18 +189,39 @@ describe("saveTake", () => {
     expect(steps.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ recordedAt: fresh.recordedAt + HOUR }));
   });
 
-  it("sends no recording time when the server's clock can't be read", async () => {
+  it("reads the server's clock again before saving when the first read failed", async () => {
     const steps = fakes();
     steps.serverNow.mockRejectedValueOnce(new TypeError("Failed to fetch"));
     expect(await saveTake(fresh, steps)).toEqual({ step: "saved" });
-    expect(steps.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ recordedAt: null }));
+    expect(steps.serverNow).toHaveBeenCalledTimes(2);
+    expect(steps.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ recordedAt: fresh.recordedAt + HOUR }));
+  });
+
+  it("keeps the take, uploaded, when the server's clock can't be read, and saves it on retry", async () => {
+    const steps = fakes();
+    steps.serverNow.mockRejectedValue(new TypeError("Failed to fetch"));
+    const outcome = await saveTake(fresh, steps);
+    expect(outcome).toEqual({
+      step: "failed",
+      take: { ...fresh, uploadedPath: ready(1).path },
+      message: OFFLINE_MESSAGE,
+      updated: false,
+    });
+    expect(steps.saveDraft).not.toHaveBeenCalled();
+    if (outcome.step !== "failed") return;
+
+    steps.serverNow.mockImplementation(async () => Date.now() + HOUR);
+    expect(await saveTake(outcome.take, steps)).toEqual({ step: "saved" });
+    expect(steps.upload).toHaveBeenCalledOnce();
+    expect(steps.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ recordedAt: fresh.recordedAt + HOUR }));
   });
 
   it("doesn't wait long for the server's clock", async () => {
     const steps = { ...fakes(), timeouts: QUICK };
-    steps.serverNow.mockReturnValueOnce(hang());
-    expect(await saveTake(fresh, steps)).toEqual({ step: "saved" });
-    expect(steps.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ recordedAt: null }));
+    steps.serverNow.mockReturnValue(hang());
+    const outcome = await saveTake(fresh, steps);
+    expect(outcome).toMatchObject({ step: "failed", message: OFFLINE_MESSAGE });
+    expect(steps.saveDraft).not.toHaveBeenCalled();
   });
 
   it("is done when a take recorded later is already the draft", async () => {

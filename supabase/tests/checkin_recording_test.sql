@@ -178,7 +178,7 @@ select is(
 );
 select throws_ok(
   $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-4.webm'), 'audio/webm', null)$$,
-  'P0001', 'newer_draft', 'a take whose recording time is unknown never replaces another take'
+  'P0001', 'unknown_order', 'a take whose recording time is unknown neither replaces nor yields to another take'
 );
 select is(
   delete_checkin_draft('c1000000-0000-4000-8000-000000000002'),

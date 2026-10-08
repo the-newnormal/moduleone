@@ -366,6 +366,12 @@ describe("saveDraft", () => {
     expect(revalidatePath).toHaveBeenCalledExactlyOnceWith(PAGE);
   });
 
+  it("keeps the take, and saves nothing, when which take is newer can't be told", async () => {
+    rpc.mockResolvedValue(raised("unknown_order"));
+    expect(await saveDraft({ path: PATH })).toMatchObject({ status: "error", code: "failed" });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
   it("deletes the take it replaced", async () => {
     rpc.mockResolvedValue({ data: OLD_PATH, error: null });
     expect(await saveDraft({ path: PATH })).toEqual({ status: "saved" });

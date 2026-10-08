@@ -31,7 +31,7 @@ export type SaveSteps = {
   prepare: (mimeType: string) => Promise<PrepareRecordingResult>;
   // Uploads to the signed upload URL prepare made; resolves with Storage's error, if any.
   upload: (ready: ReadyToUpload, body: Blob) => Promise<{ error: unknown }>;
-  saveDraft: (input: { path: string; durationMs: number; recordedAt: number | null }) => Promise<SaveDraftResult>;
+  saveDraft: (input: { path: string; durationMs: number; recordedAt: number }) => Promise<SaveDraftResult>;
   // The server's clock now, in ms (a plain request, never queued behind a server action).
   serverNow: () => Promise<number>;
   timeouts?: Timeouts;
@@ -75,7 +75,7 @@ export function takeToRetry(code: CheckinErrorCode, take: Take): Take {
 // move it. How long ago is the longer of the two clocks' answers: the browser's clock may have been
 // turned back meanwhile, and the steady clock stops while the device sleeps; either alone could
 // make an older take look newer than it is. If the server can't be reached the take keeps no
-// server time, and the server won't let it replace another take.
+// server time, and isn't saved until it has one (see saveTake).
 async function onServerClock(take: Take, steps: SaveSteps, timeouts: Timeouts): Promise<Take> {
   if (take.serverRecordedAt !== null) return take;
   try {
@@ -113,6 +113,12 @@ export async function saveTake(take: Take, steps: SaveSteps): Promise<SaveOutcom
       if (error) return failed(current, UPLOAD_FAILED_MESSAGE);
       path = prepared.path;
       current = { ...current, uploadedPath: path };
+    }
+    // Without the server's time there's no telling whether this take is newer than a draft saved
+    // from elsewhere, so read the clock again, and if that fails too keep the take for Try again.
+    if (current.serverRecordedAt === null) {
+      current = await onServerClock(current, steps, timeouts);
+      if (current.serverRecordedAt === null) return failed(current, OFFLINE_MESSAGE);
     }
     const saved = await within(
       timeouts.saveMs,
