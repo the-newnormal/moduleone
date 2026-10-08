@@ -5,7 +5,7 @@
 --   team R: leader lead_r, members m1 and m2      hq      role hq, no team, no grants
 --   auditor no team, recordings grant             outsider signed in, but no members row
 begin;
-select plan(102);
+select plan(110);
 
 -- ---------- fixtures ----------
 insert into auth.users (id, email) values
@@ -56,7 +56,7 @@ select is(
   true, 'RLS is on for checkin_drafts and recording_notices'
 );
 select columns_are('public', 'checkin_drafts',
-  array['member_id', 'week_start', 'audio_path', 'mime_type', 'duration_ms', 'created_at'],
+  array['member_id', 'week_start', 'audio_path', 'mime_type', 'duration_ms', 'recorded_at', 'created_at'],
   'checkin_drafts has exactly the expected columns');
 select has_column('public', 'checkins', c, format('checkins has %s', c))
   from unnest(array['submitted_at', 'audio_duration_ms', 'transcript_model', 'transcript_warnings', 'grader_model', 'graded_at',
@@ -71,7 +71,7 @@ select table_privs_are(
 ) from unnest(array['checkin_drafts', 'recording_notices']) t;
 select function_privs_are('public', f, args, r, array[]::text[], format('%s cannot call %s', r, f))
   from (values
-    ('save_checkin_draft', array['uuid', 'text', 'text', 'integer']),
+    ('save_checkin_draft', array['uuid', 'text', 'text', 'integer', 'timestamp with time zone']),
     ('delete_checkin_draft', array['uuid']),
     ('submit_checkin_draft', array['uuid']),
     ('claim_checkin_processing', array['uuid'])
@@ -79,7 +79,7 @@ select function_privs_are('public', f, args, r, array[]::text[], format('%s cann
   cross join unnest(array['anon', 'authenticated']) r;
 select function_privs_are('public', f, args, 'service_role', array['EXECUTE'], format('the server can call %s', f))
   from (values
-    ('save_checkin_draft', array['uuid', 'text', 'text', 'integer']),
+    ('save_checkin_draft', array['uuid', 'text', 'text', 'integer', 'timestamp with time zone']),
     ('delete_checkin_draft', array['uuid']),
     ('submit_checkin_draft', array['uuid']),
     ('claim_checkin_processing', array['uuid'])
@@ -90,7 +90,7 @@ select is(
   (select proconfig from pg_proc where oid = f::regprocedure),
   array['search_path=""'], format('%s runs with an empty search_path', f)
 ) from unnest(array[
-  'public.app_checkin_audio_is_checkin(text)', 'public.save_checkin_draft(uuid,text,text,integer)',
+  'public.app_checkin_audio_is_checkin(text)', 'public.save_checkin_draft(uuid,text,text,integer,timestamptz)',
   'public.delete_checkin_draft(uuid)', 'public.submit_checkin_draft(uuid)', 'public.claim_checkin_processing(uuid)'
 ]) f;
 
@@ -145,6 +145,41 @@ select is(
   0, 'the draft is gone'
 );
 select is(delete_checkin_draft('c1000000-0000-4000-8000-000000000002'), null, 'deleting when there is no draft returns nothing');
+
+-- A take that arrives late (its save timed out and finished anyway, or it was retried from another
+-- tab or device) never replaces one recorded after it.
+select is(
+  save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-1.webm'), 'audio/webm', null, now() - interval '1 hour'),
+  null, 'with no draft, any take of this week becomes the draft'
+);
+select is(
+  save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-2.webm'), 'audio/webm', null, now() - interval '30 minutes'),
+  pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-1.webm'), 'a take recorded later replaces the draft'
+);
+select throws_ok(
+  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-1.webm'), 'audio/webm', null, now() - interval '1 hour')$$,
+  'P0001', 'newer_draft', 'a take recorded before the draft cannot replace it'
+);
+select is(
+  (select audio_path from checkin_drafts where member_id = 'c1000000-0000-4000-8000-000000000002'),
+  pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-2.webm'), 'the newer take stays the draft'
+);
+select is(
+  save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-2.webm'), 'audio/webm', null, now() - interval '30 minutes'),
+  null, 'saving the draft''s own take again is fine'
+);
+select is(
+  save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-3.webm'), 'audio/webm', null, now() + interval '1 day'),
+  pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-2.webm'), 'a take from a browser whose clock runs fast still saves'
+);
+select is(
+  (select recorded_at from checkin_drafts where member_id = 'c1000000-0000-4000-8000-000000000002'),
+  now(), 'its recording time is capped at now'
+);
+select is(
+  delete_checkin_draft('c1000000-0000-4000-8000-000000000002'),
+  pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-3.webm'), 'deleting removes the latest take'
+);
 
 -- ---------- submitting ----------
 select throws_ok(

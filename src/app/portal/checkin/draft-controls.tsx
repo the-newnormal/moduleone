@@ -3,12 +3,21 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { deleteDraft, submitCheckin, type DeleteDraftResult, type SubmitCheckinResult } from "./actions";
+import { forgetDeletedTake } from "./pending-save";
 import { settled } from "./unreachable";
+
+const deleteTake = settled(async () => {
+  const result = await deleteDraft();
+  // A save of this take may still be held in this tab, failed because its reply was lost after it
+  // had saved; it must not come back as a take to save again.
+  if (result.status === "deleted" && result.path) forgetDeletedTake(result.path);
+  return result;
+});
 
 // Delete the take and record again, or submit it, with a confirm step because a submitted check-in
 // can't be changed. On success each action re-renders the page, which replaces these controls.
 export function DraftControls() {
-  const [deleted, deleteAction, deleting] = useActionState<DeleteDraftResult | null>(settled(deleteDraft), null);
+  const [deleted, deleteAction, deleting] = useActionState<DeleteDraftResult | null>(deleteTake, null);
   const [sent, submitAction, submitting] = useActionState<SubmitCheckinResult | null>(settled(submitCheckin), null);
   const [confirming, setConfirming] = useState(false);
   const submitButton = useRef<HTMLButtonElement>(null);

@@ -55,6 +55,9 @@ create table checkin_drafts (
   mime_type    text not null,
   -- From the recorder; only used to sanity-check the transcript's length.
   duration_ms  int,
+  -- When the take was recorded, by the browser's clock (capped at now). A take recorded earlier
+  -- that arrives late never replaces this one (save_checkin_draft).
+  recorded_at  timestamptz not null default now(),
   created_at   timestamptz not null default now(),
   primary key (member_id, week_start),
   constraint checkin_drafts_week_start_monday check (extract(isodow from week_start) = 1),
@@ -120,16 +123,22 @@ create policy checkin_audio_unsubmitted_speaker_only on storage.objects as restr
 -- Called by server code with the service role after it has taken the member from the session.
 -- Each works on the current Singapore week, worked out exactly as the column defaults do, so a
 -- draft and its check-in can't land in different weeks. Errors use SQLSTATE P0001 with a stable
--- message ('already_submitted', 'no_draft', 'bad_path') for the app to act on.
+-- message ('already_submitted', 'no_draft', 'bad_path', 'newer_draft') for the app to act on.
 
 -- Saves the member's take for this week, replacing any earlier one. Returns the replaced take's
--- audio_path (or null) so the caller can delete that file.
-create function save_checkin_draft(p_member_id uuid, p_audio_path text, p_mime_type text, p_duration_ms int)
+-- audio_path (or null) so the caller can delete that file. A take recorded before the current
+-- draft raises 'newer_draft' instead: it arrived late (a save that timed out and finished anyway,
+-- or one retried from another tab or device), and must not replace the newer take.
+create function save_checkin_draft(
+  p_member_id uuid, p_audio_path text, p_mime_type text, p_duration_ms int, p_recorded_at timestamptz default null
+)
   returns text
   language plpgsql set search_path = '' as $$
 declare
   v_week date := (date_trunc('week', now() at time zone 'Asia/Singapore'))::date;
+  v_recorded timestamptz := least(coalesce(p_recorded_at, now()), now());
   v_old text;
+  v_old_recorded timestamptz;
 begin
   -- Only a take made for this week ('<member_id>/<yyyy-mm-dd>-…', as the server names it), and
   -- never a file a check-in already uses. The app checks the week too, but on its own clock: a
@@ -144,15 +153,19 @@ begin
   if exists (select 1 from public.checkins c where c.member_id = p_member_id and c.week_start = v_week) then
     raise exception using errcode = 'P0001', message = 'already_submitted';
   end if;
-  select d.audio_path into v_old
+  select d.audio_path, d.recorded_at into v_old, v_old_recorded
     from public.checkin_drafts d
     where d.member_id = p_member_id and d.week_start = v_week;
-  insert into public.checkin_drafts (member_id, week_start, audio_path, mime_type, duration_ms)
-    values (p_member_id, v_week, p_audio_path, p_mime_type, p_duration_ms)
+  if v_old is distinct from p_audio_path and v_old_recorded > v_recorded then
+    raise exception using errcode = 'P0001', message = 'newer_draft';
+  end if;
+  insert into public.checkin_drafts (member_id, week_start, audio_path, mime_type, duration_ms, recorded_at)
+    values (p_member_id, v_week, p_audio_path, p_mime_type, p_duration_ms, v_recorded)
     on conflict (member_id, week_start) do update
       set audio_path = excluded.audio_path,
           mime_type = excluded.mime_type,
           duration_ms = excluded.duration_ms,
+          recorded_at = excluded.recorded_at,
           created_at = now();
   return case when v_old is distinct from p_audio_path then v_old end;
 end $$;
@@ -231,11 +244,11 @@ create function claim_checkin_processing(p_checkin_id uuid)
 $$;
 
 revoke execute on function
-  save_checkin_draft(uuid, text, text, int), delete_checkin_draft(uuid),
+  save_checkin_draft(uuid, text, text, int, timestamptz), delete_checkin_draft(uuid),
   submit_checkin_draft(uuid), claim_checkin_processing(uuid)
   from public, anon, authenticated;
 grant execute on function
-  save_checkin_draft(uuid, text, text, int), delete_checkin_draft(uuid),
+  save_checkin_draft(uuid, text, text, int, timestamptz), delete_checkin_draft(uuid),
   submit_checkin_draft(uuid), claim_checkin_processing(uuid)
   to service_role;
 

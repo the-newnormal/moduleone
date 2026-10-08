@@ -2,7 +2,15 @@ import type { CheckinErrorCode, PrepareRecordingResult, SaveDraftResult } from "
 import { OFFLINE_MESSAGE, updatedSinceLoad } from "./unreachable";
 
 // A finished recording, kept in memory until it is saved, so a failed upload can be retried.
-export type Take = { blob: Blob; mimeType: string; durationMs: number; uploadedPath: string | null };
+// recordedAt (ms since the epoch, when the recording stopped) lets the server keep a newer take
+// when an older one arrives late.
+export type Take = {
+  blob: Blob;
+  mimeType: string;
+  durationMs: number;
+  recordedAt: number;
+  uploadedPath: string | null;
+};
 
 // Where saving a take ends. On "saved" the page re-renders with the draft (or the submitted
 // check-in) in the recorder's place; on "failed" the take is kept for "Try again".
@@ -18,7 +26,7 @@ export type SaveSteps = {
   prepare: (mimeType: string) => Promise<PrepareRecordingResult>;
   // Uploads to the signed upload URL prepare made; resolves with Storage's error, if any.
   upload: (ready: ReadyToUpload, body: Blob) => Promise<{ error: unknown }>;
-  saveDraft: (input: { path: string; durationMs: number }) => Promise<SaveDraftResult>;
+  saveDraft: (input: { path: string; durationMs: number; recordedAt: number }) => Promise<SaveDraftResult>;
   timeouts?: Timeouts;
 };
 
@@ -60,6 +68,7 @@ export function takeToRetry(code: CheckinErrorCode, take: Take): Take {
 export async function saveTake(take: Take, steps: SaveSteps): Promise<SaveOutcome> {
   const { prepare, upload, saveDraft, timeouts = TIMEOUTS } = steps;
   let current = take;
+  const reused = take.uploadedPath !== null;
   try {
     let path = current.uploadedPath;
     if (path === null) {
@@ -73,8 +82,17 @@ export async function saveTake(take: Take, steps: SaveSteps): Promise<SaveOutcom
       path = prepared.path;
       current = { ...current, uploadedPath: path };
     }
-    const saved = await within(timeouts.saveMs, saveDraft({ path, durationMs: current.durationMs }));
+    const saved = await within(
+      timeouts.saveMs,
+      saveDraft({ path, durationMs: current.durationMs, recordedAt: current.recordedAt }),
+    );
+    // An upload kept from an earlier try that is now too old to save: the take itself is fine, so
+    // upload it again rather than ask the member to record it again.
+    if (saved.status === "error" && saved.code === "upload_expired" && reused) {
+      return saveTake({ ...current, uploadedPath: null }, steps);
+    }
     if (saved.status === "error") return failed(takeToRetry(saved.code, current), saved.message);
+    // "superseded": a take recorded later is already the draft, and the page now shows it.
     return { step: "saved" };
   } catch (error) {
     // An upload that ran out of time may or may not have landed, so the take still has no uploaded

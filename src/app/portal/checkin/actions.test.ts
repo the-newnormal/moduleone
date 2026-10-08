@@ -248,13 +248,15 @@ describe("prepareRecording", () => {
 
 describe("saveDraft", () => {
   it("checks the upload, then saves it as this week's draft", async () => {
-    expect(await saveDraft({ path: PATH, durationMs: 95_000 })).toEqual({ status: "saved" });
+    const recordedAt = Date.parse("2026-10-08T03:30:00Z");
+    expect(await saveDraft({ path: PATH, durationMs: 95_000, recordedAt })).toEqual({ status: "saved" });
     expect(info).toHaveBeenCalledExactlyOnceWith(PATH);
     expect(rpc).toHaveBeenCalledExactlyOnceWith("save_checkin_draft", {
       p_member_id: MEMBER,
       p_audio_path: PATH,
       p_mime_type: "audio/webm",
       p_duration_ms: 95_000,
+      p_recorded_at: "2026-10-08T03:30:00.000Z",
     });
     expect(remove).not.toHaveBeenCalled();
     expect(revalidatePath).toHaveBeenCalledExactlyOnceWith(PAGE);
@@ -344,6 +346,21 @@ describe("saveDraft", () => {
     expect(rpc.mock.calls[0][1]).toMatchObject({ p_duration_ms: stored });
   });
 
+  it.each([undefined, Number.NaN, -1, 0, 1e20, "2026-10-08T03:30:00Z"])(
+    "leaves the recording time to the database when the browser sends %s",
+    async (recordedAt) => {
+      await saveDraft({ path: PATH, recordedAt: recordedAt as number });
+      expect(rpc).toHaveBeenCalledWith("save_checkin_draft", expect.objectContaining({ p_recorded_at: null }));
+    },
+  );
+
+  it("drops a take recorded before the current draft, deleting its upload, and shows the draft", async () => {
+    rpc.mockResolvedValue(raised("newer_draft"));
+    expect(await saveDraft({ path: PATH, recordedAt: 1 })).toEqual({ status: "superseded" });
+    expect(remove).toHaveBeenCalledExactlyOnceWith([PATH]);
+    expect(revalidatePath).toHaveBeenCalledExactlyOnceWith(PAGE);
+  });
+
   it("deletes the take it replaced", async () => {
     rpc.mockResolvedValue({ data: OLD_PATH, error: null });
     expect(await saveDraft({ path: PATH })).toEqual({ status: "saved" });
@@ -402,14 +419,14 @@ describe("saveDraft", () => {
 describe("deleteDraft", () => {
   it("deletes this week's draft and its file", async () => {
     rpc.mockResolvedValue({ data: PATH, error: null });
-    expect(await deleteDraft()).toEqual({ status: "deleted" });
+    expect(await deleteDraft()).toEqual({ status: "deleted", path: PATH });
     expect(rpc).toHaveBeenCalledExactlyOnceWith("delete_checkin_draft", { p_member_id: MEMBER });
     expect(remove).toHaveBeenCalledExactlyOnceWith([PATH]);
     expect(revalidatePath).toHaveBeenCalledExactlyOnceWith(PAGE);
   });
 
   it("is fine when there was no draft", async () => {
-    expect(await deleteDraft()).toEqual({ status: "deleted" });
+    expect(await deleteDraft()).toEqual({ status: "deleted", path: null });
     expect(remove).not.toHaveBeenCalled();
   });
 

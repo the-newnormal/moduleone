@@ -37,8 +37,10 @@ export type PrepareRecordingResult =
   | { status: "ready"; path: string; token: string; contentType: string }
   | Submitted
   | CheckinError;
-export type SaveDraftResult = { status: "saved" } | Submitted | CheckinError;
-export type DeleteDraftResult = { status: "deleted" } | CheckinError;
+// superseded: a take recorded later is already this week's draft, so this one was dropped.
+export type SaveDraftResult = { status: "saved" } | { status: "superseded" } | Submitted | CheckinError;
+// path: the deleted take's recording, so the recorder can drop a failed save of that same take.
+export type DeleteDraftResult = { status: "deleted"; path: string | null } | CheckinError;
 export type SubmitCheckinResult = Submitted | CheckinError;
 
 const PAGE = "/portal/checkin";
@@ -52,7 +54,7 @@ const MESSAGES: Record<CheckinErrorCode, string> = {
   unsupported_audio: "This browser records in a format we can't use. Try Chrome or Safari.",
   bad_path: "That recording can't be saved. Record it again.",
   upload_missing: "The recording didn't finish uploading. Try again.",
-  upload_expired: "That recording is too old to save. Record it again.",
+  upload_expired: "Saving took too long, so the recording has to be uploaded again. Try again.",
   upload_too_big: "That recording is too long to save. Record a shorter one.",
   upload_not_audio: "That file isn't a recording. Record it again.",
   no_draft: "Record your answers before you submit.",
@@ -192,8 +194,14 @@ export async function prepareRecording(mimeType: string): Promise<PrepareRecordi
   return { status: "ready", path, token: signed.token, contentType: baseMimeType(mimeType) };
 }
 
-// Saves an uploaded take as this week's draft, replacing (and deleting) any earlier take.
-export async function saveDraft(input: { path: string; durationMs?: number }): Promise<SaveDraftResult> {
+// Saves an uploaded take as this week's draft, replacing (and deleting) any earlier take. A take
+// recorded before the current draft is dropped instead: it arrived late (a save that timed out,
+// or one retried from another tab or device), and must not replace the newer one.
+export async function saveDraft(input: {
+  path: string;
+  durationMs?: number;
+  recordedAt?: number;
+}): Promise<SaveDraftResult> {
   const session = await sessionMember();
   if ("status" in session) return session;
   const memberId = session.member.id;
@@ -233,7 +241,13 @@ export async function saveDraft(input: { path: string; durationMs?: number }): P
     p_audio_path: path,
     p_mime_type: mimeType,
     p_duration_ms: clampDuration(input?.durationMs),
+    p_recorded_at: recordedAt(input?.recordedAt),
   });
+  if (raised(error, "newer_draft")) {
+    await removeFile(admin, memberId, path);
+    revalidatePath(PAGE);
+    return { status: "superseded" };
+  }
   if (raised(error, "already_submitted")) {
     // Too late for this take: the week's check-in is in.
     await removeFile(admin, memberId, path);
@@ -262,7 +276,7 @@ export async function deleteDraft(): Promise<DeleteDraftResult> {
   }
   if (typeof path === "string") await removeFile(admin, session.member.id, path);
   revalidatePath(PAGE);
-  return { status: "deleted" };
+  return { status: "deleted", path: typeof path === "string" ? path : null };
 }
 
 // Turns this week's draft into the check-in, then transcribes and grades it after the response
@@ -287,6 +301,14 @@ export async function submitCheckin(): Promise<SubmitCheckinResult> {
   }
   after(() => processCheckin(id));
   return submitted();
+}
+
+// When the browser says the take was recorded. Its clock may be off, so anything odd becomes null
+// (the database then uses now), and the database caps it at now.
+function recordedAt(value: unknown): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 // The recorder's own measure of the take's length: only a hint, so anything odd becomes null.

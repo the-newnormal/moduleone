@@ -19,6 +19,7 @@ const take: Take = {
   blob: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm;codecs=opus" }),
   mimeType: "audio/webm",
   durationMs: 95_000,
+  recordedAt: Date.parse("2026-10-08T03:30:00Z"),
   uploadedPath: `${MEMBER}/2026-10-05-take.webm`,
 };
 // Just recorded: nothing uploaded yet.
@@ -56,7 +57,11 @@ describe("saveTake", () => {
     expect(target).toEqual(ready(1));
     expect(body.type).toBe("audio/webm"); // the plain type the server allowed, not the recorder's
     expect(body.size).toBe(3);
-    expect(steps.saveDraft).toHaveBeenCalledWith({ path: ready(1).path, durationMs: 95_000 });
+    expect(steps.saveDraft).toHaveBeenCalledWith({
+      path: ready(1).path,
+      durationMs: 95_000,
+      recordedAt: take.recordedAt,
+    });
   });
 
   it("keeps the recording, with nothing uploaded, when the upload fails", async () => {
@@ -95,7 +100,33 @@ describe("saveTake", () => {
 
     expect(await saveTake(outcome.take, steps)).toEqual({ step: "saved" });
     expect(steps.upload.mock.calls.map(([target]) => target.path)).toEqual([ready(1).path, ready(2).path]);
-    expect(steps.saveDraft).toHaveBeenLastCalledWith({ path: ready(2).path, durationMs: 95_000 });
+    expect(steps.saveDraft).toHaveBeenLastCalledWith({
+      path: ready(2).path,
+      durationMs: 95_000,
+      recordedAt: take.recordedAt,
+    });
+  });
+
+  it("uploads a kept take again by itself when its earlier upload is too old to save", async () => {
+    const steps = fakes();
+    steps.saveDraft.mockResolvedValueOnce({ status: "error", code: "upload_expired", message: "Too old." });
+    expect(await saveTake(take, steps)).toEqual({ step: "saved" });
+    expect(steps.upload.mock.calls.map(([target]) => target.path)).toEqual([ready(1).path]);
+    expect(steps.saveDraft.mock.calls.map(([input]) => input.path)).toEqual([take.uploadedPath, ready(1).path]);
+  });
+
+  it("doesn't upload again by itself when a fresh upload is already too old", async () => {
+    const steps = fakes();
+    steps.saveDraft.mockResolvedValueOnce({ status: "error", code: "upload_expired", message: "Too old." });
+    expect(await saveTake(fresh, steps)).toEqual({ step: "failed", take: fresh, message: "Too old.", updated: false });
+    expect(steps.upload).toHaveBeenCalledOnce();
+  });
+
+  it("is done when a take recorded later is already the draft", async () => {
+    const steps = fakes();
+    steps.saveDraft.mockResolvedValueOnce({ status: "superseded" });
+    expect(await saveTake(take, steps)).toEqual({ step: "saved" });
+    expect(steps.saveDraft).toHaveBeenCalledOnce();
   });
 
   it("stops when this week's check-in is already in", async () => {

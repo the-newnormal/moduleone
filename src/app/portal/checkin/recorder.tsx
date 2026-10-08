@@ -2,13 +2,14 @@
 
 import { LoaderCircle, Mic } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, useTransition, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { baseMimeType, extensionFor } from "@/lib/checkin/audio";
 import { QUESTIONS } from "@/lib/checkin/week";
 import { createClient } from "@/lib/supabase/client";
 import { prepareRecording, saveDraft } from "./actions";
 import { formatClock } from "./format";
+import { currentSave, releaseSave, trackSave, wasDeleted } from "./pending-save";
 import { saveTake, type ReadyToUpload, type SaveOutcome, type Take } from "./take";
 
 // Opus in WebM where the browser has it (Chrome, Edge, Firefox), AAC in MP4 on Safari. Speech at
@@ -32,25 +33,6 @@ type State =
 // What is live while recording: the microphone stream, the recorder, the clock, and what becomes
 // of the take once the recorder stops (null: nothing to save).
 type Media = { stream: MediaStream; recorder: MediaRecorder; timer: number; saved: Promise<SaveOutcome | null> };
-
-// A take keeps saving after the member leaves the page (see the unmount effect). This module
-// outlives the component across in-app navigation, so coming back finds the save here and waits
-// for it, instead of offering a new recording that the older save could then replace. A save that
-// failed stays here, take and all, until a recorder shows it (with Try again) or it's discarded.
-let inFlight: Promise<SaveOutcome | null> | null = null;
-
-function trackSave<T extends SaveOutcome | null>(save: Promise<T>): Promise<T> {
-  inFlight = save;
-  save.then(
-    (outcome) => {
-      if (inFlight === save && outcome?.step !== "failed") inFlight = null;
-    },
-    () => {
-      if (inFlight === save) inFlight = null;
-    },
-  );
-  return save;
-}
 
 function pickMimeType(): string | null {
   if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) return null;
@@ -92,9 +74,9 @@ function release(media: RefObject<Media | null>) {
 }
 
 export function Recorder() {
-  // The save this recorder came back to, if any. Read once, so the first render and the effect that
-  // waits for it agree even if the save settles in between.
-  const [returnedTo] = useState(() => inFlight);
+  // The save this recorder came back to, if any (see pending-save.ts). Read once, so the first
+  // render and the effect that waits for it agree even if the save settles in between.
+  const [returnedTo] = useState(currentSave);
   const [state, setState] = useState<State>(() => (returnedTo ? { step: "saving" } : { step: "idle", problem: null }));
   const router = useRouter();
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -105,7 +87,7 @@ export function Recorder() {
   // member has moved on (or started again) is let go instead of recording in the background.
   const startCount = useRef(0);
   const primary = useRef<HTMLButtonElement>(null);
-  const firstStep = useRef(true);
+  const [refreshing, startRefresh] = useTransition();
 
   // A take whose save failed, kept so leaving the page can still try to save it.
   const failedTake = useRef<Take | null>(null);
@@ -144,15 +126,24 @@ export function Recorder() {
     void pending.then((outcome) => {
       if (!mounted) return;
       // This recorder holds the outcome now (a failed take included), so it's no longer pending.
-      if (inFlight === pending) inFlight = null;
-      setState(outcome ?? { step: "idle", problem: null });
+      releaseSave(pending);
+      // A failed save of the draft the member has since deleted: nothing to offer again.
+      setState(outcome && !wasDeleted(outcome) ? outcome : { step: "idle", problem: null });
       // The save re-rendered the page while the member was elsewhere; this page hasn't seen it.
-      if (outcome?.step === "saved") router.refresh();
+      if (outcome?.step === "saved") startRefresh(() => router.refresh());
     });
     return () => {
       mounted = false;
     };
   }, [returnedTo, router]);
+
+  // Still here once that refresh has landed: the draft has gone since (deleted, or the week
+  // turned), so offer a new recording rather than stay on "Saved.".
+  const refreshed = useRef(false);
+  useEffect(() => {
+    if (refreshing) refreshed.current = true;
+    else if (refreshed.current) setState((s) => (s.step === "saved" ? { step: "idle", problem: null } : s));
+  }, [refreshing]);
 
   // Closing or reloading the tab ends the page before a save could finish, so ask first while a
   // take exists only in this page.
@@ -182,14 +173,14 @@ export function Recorder() {
   }, [recording]);
 
   // Move keyboard and screen-reader focus to each step's main button as the steps change, since
-  // the button that was pressed has usually gone. Not on first load, when nothing has happened.
+  // the button that was pressed has usually gone. Not on first load, when nothing has happened
+  // (compared with the last step shown, so React's double effects in development don't count).
   const step = state.step;
   const problem = state.step === "idle" ? state.problem : null;
+  const shown = useRef({ step, problem });
   useEffect(() => {
-    if (firstStep.current) {
-      firstStep.current = false;
-      return;
-    }
+    if (shown.current.step === step && shown.current.problem === problem) return;
+    shown.current = { step, problem };
     primary.current?.focus();
   }, [step, problem]);
 
@@ -262,7 +253,8 @@ export function Recorder() {
         settle(null);
         return setState({ step: "idle", problem: "Nothing was recorded. Check your microphone, then try again." });
       }
-      void save({ blob, mimeType: baseMimeType(type), durationMs, uploadedPath: null }).then(settle);
+      const take = { blob, mimeType: baseMimeType(type), durationMs, recordedAt: Date.now(), uploadedPath: null };
+      void save(take).then(settle);
     };
 
     const timer = window.setInterval(() => {
@@ -289,7 +281,7 @@ export function Recorder() {
   }
 
   function discard() {
-    inFlight = null; // the failed take this recorder was showing, if it was still kept there
+    releaseSave(); // the failed take this recorder was showing, if it was still kept there
     setElapsedMs(0);
     setState({ step: "idle", problem: null });
   }

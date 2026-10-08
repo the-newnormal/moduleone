@@ -1,10 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { createClient } from "@/lib/supabase/server";
-import { signOut } from "./actions";
+import { SignOutButton } from "./sign-out-button";
 
 export const metadata: Metadata = { title: "Portal · Module One" };
 
@@ -24,11 +23,7 @@ export default async function PortalPage() {
             Signed in as <span className="font-medium text-foreground">{data.claims.email}</span>
           </p>
         </div>
-        <form action={signOut}>
-          <Button type="submit" variant="outline" size="sm">
-            Sign out
-          </Button>
-        </form>
+        <SignOutButton />
       </header>
 
       <Card>
