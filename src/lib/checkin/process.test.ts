@@ -84,7 +84,7 @@ describe("processCheckin", () => {
       },
       { signal: expect.any(AbortSignal) },
     );
-    expect(gradeCheckin).toHaveBeenCalledExactlyOnceWith({ transcript: TRANSCRIPT });
+    expect(gradeCheckin).toHaveBeenCalledExactlyOnceWith({ transcript: TRANSCRIPT, signal: expect.any(AbortSignal) });
     expect(updates).toEqual([
       {
         table: "checkins",
@@ -121,7 +121,7 @@ describe("processCheckin", () => {
     expect(await processCheckin(CHECKIN)).toBe("graded");
     expect(download).not.toHaveBeenCalled();
     expect(transcribe).not.toHaveBeenCalled();
-    expect(gradeCheckin).toHaveBeenCalledExactlyOnceWith({ transcript: TRANSCRIPT });
+    expect(gradeCheckin).toHaveBeenCalledExactlyOnceWith({ transcript: TRANSCRIPT, signal: expect.any(AbortSignal) });
     expect(updates.map((u) => Object.keys(u.values))).toEqual([expect.arrayContaining(["activity_score", "graded_at"])]);
   });
 
@@ -129,7 +129,7 @@ describe("processCheckin", () => {
     rpc.mockResolvedValue(claim({ transcript: "" }));
     await processCheckin(CHECKIN);
     expect(transcribe).not.toHaveBeenCalled();
-    expect(gradeCheckin).toHaveBeenCalledExactlyOnceWith({ transcript: "" });
+    expect(gradeCheckin).toHaveBeenCalledExactlyOnceWith({ transcript: "", signal: expect.any(AbortSignal) });
   });
 
   it("works out the type from the file name when Storage doesn't say", async () => {
@@ -151,14 +151,23 @@ describe("processCheckin", () => {
     ]);
   });
 
-  it("gives transcription a deadline well inside the function's 300 seconds", async () => {
-    const timeout = vi.spyOn(AbortSignal, "timeout");
+  it("keeps the whole attempt inside the function's 300 seconds", async () => {
+    const controllers: AbortController[] = [];
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+      const controller = new AbortController();
+      controllers.push(controller);
+      return controller.signal;
+    });
     await processCheckin(CHECKIN);
-    expect(timeout).toHaveBeenCalledOnce();
-    const [budget] = timeout.mock.calls[0];
-    expect(budget).toBeGreaterThanOrEqual(120_000);
-    expect(budget).toBeLessThanOrEqual(240_000);
-    expect(vi.mocked(transcribe).mock.calls[0][1]?.signal).toBe(timeout.mock.results[0].value);
+    const [[attemptMs], [transcribeMs]] = timeout.mock.calls;
+    expect(attemptMs).toBeLessThanOrEqual(280_000);
+    expect(transcribeMs).toBeLessThanOrEqual(120_000);
+    // Grading gets what's left of the attempt; running out of it also stops transcription.
+    expect(vi.mocked(gradeCheckin).mock.calls[0][0].signal).toBe(controllers[0].signal);
+    const transcribeSignal = vi.mocked(transcribe).mock.calls[0][1]?.signal;
+    expect(transcribeSignal?.aborted).toBe(false);
+    controllers[0].abort();
+    expect(transcribeSignal?.aborted).toBe(true);
   });
 
   it("records a transcription that ran out of time, so it is retried", async () => {

@@ -35,9 +35,11 @@ export const GRADER_TIMEOUT_MS = 300_000;
 const REFUSAL_FALLBACK_BETA = "server-side-fallback-2026-07-01";
 
 // Grades one check-in transcript against the rubric with Claude. Only the transcript is sent.
+// `signal` lets the caller stop sooner than GRADER_TIMEOUT_MS (processCheckin keeps a whole attempt
+// inside the time its function may run).
 // Throws GradingError: "empty_transcript" (nothing to grade; the API is not called), "refusal",
 // "invalid_output" (the reply was cut off or didn't match the schema) or "api".
-export async function gradeCheckin(input: { transcript: string }): Promise<Grade> {
+export async function gradeCheckin(input: { transcript: string; signal?: AbortSignal }): Promise<Grade> {
   const transcript = input.transcript.trim();
   if (countWords(transcript) < MIN_TRANSCRIPT_WORDS) {
     throw new GradingError(`The transcript has fewer than ${MIN_TRANSCRIPT_WORDS} words`, {
@@ -59,6 +61,7 @@ export async function gradeCheckin(input: { transcript: string }): Promise<Grade
   const client = new Anthropic({ apiKey, authToken: null, timeout: GRADER_TIMEOUT_MS, maxRetries: 2 });
   // The SDK's timeout is per try; this bounds all the tries together.
   const deadline = AbortSignal.timeout(GRADER_TIMEOUT_MS);
+  const signal = input.signal ? AbortSignal.any([input.signal, deadline]) : deadline;
 
   let response;
   try {
@@ -77,10 +80,10 @@ export async function gradeCheckin(input: { transcript: string }): Promise<Grade
         system: GRADER_SYSTEM_PROMPT,
         messages: [{ role: "user", content: transcriptMessage(transcript) }],
       },
-      { signal: deadline },
+      { signal },
     );
   } catch (error) {
-    throw apiFailure(error, deadline);
+    throw apiFailure(error, deadline, input.signal);
   }
 
   // A refusal or a cut-off reply still comes back as a 200 whose text needn't match the schema,
@@ -108,16 +111,12 @@ export async function gradeCheckin(input: { transcript: string }): Promise<Grade
 }
 
 // The SDK's abort and network errors are subclasses of APIError, so they're checked first.
-function apiFailure(error: unknown, deadline: AbortSignal): GradingError {
+function apiFailure(error: unknown, deadline: AbortSignal, callerSignal?: AbortSignal): GradingError {
   const wrap = (message: string, retryable: boolean) =>
     new GradingError(message, { reason: "api", retryable, cause: error });
   if (error instanceof APIUserAbortError) {
-    return wrap(
-      deadline.aborted
-        ? `No grade from the Anthropic API within ${GRADER_TIMEOUT_MS / 1000} s`
-        : "The grading request was cancelled",
-      true,
-    );
+    if (deadline.aborted) return wrap(`No grade from the Anthropic API within ${GRADER_TIMEOUT_MS / 1000} s`, true);
+    return wrap(callerSignal?.aborted ? "Ran out of time for this attempt" : "The grading request was cancelled", true);
   }
   if (error instanceof APIConnectionTimeoutError) return wrap("Timed out waiting for the Anthropic API", true);
   if (error instanceof APIConnectionError) return wrap("Couldn't reach the Anthropic API", true);

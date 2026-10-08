@@ -344,6 +344,18 @@ describe("gradeCheckin API errors", () => {
     expect(error.retryable).toBe(true);
     expect(error.message).toBe("No grade from the Anthropic API within 300 s");
   });
+
+  it("stops when the caller's time runs out first, and says so", async () => {
+    const caller = new AbortController();
+    create.mockImplementation(async (_body: unknown, options: { signal: AbortSignal }) => {
+      caller.abort();
+      expect(options.signal.aborted).toBe(true);
+      throw new APIUserAbortError();
+    });
+    const error = await gradingError(gradeCheckin({ transcript: TRANSCRIPT, signal: caller.signal }));
+    expect(error.retryable).toBe(true);
+    expect(error.message).toBe("Ran out of time for this attempt");
+  });
 });
 
 describe("gradeCheckin without anything to grade", () => {
