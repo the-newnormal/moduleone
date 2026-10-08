@@ -8,8 +8,7 @@ import { QUESTIONS } from "@/lib/checkin/week";
 import { createClient } from "@/lib/supabase/client";
 import { prepareRecording, saveDraft } from "./actions";
 import { formatClock } from "./format";
-import { takeToRetry, type Take } from "./take";
-import { OFFLINE_MESSAGE, updatedSinceLoad } from "./unreachable";
+import { saveTake, type ReadyToUpload, type SaveOutcome, type Take } from "./take";
 
 // Opus in WebM where the browser has it (Chrome, Edge, Firefox), AAC in MP4 on Safari. Speech at
 // 32 kbit/s is about 0.25 MB a minute, far below the bucket's 25 MB limit.
@@ -20,17 +19,14 @@ const WARN_MS = 9 * 60 * 1000;
 const BUCKET = "checkin-audio";
 
 const UNSUPPORTED = "This browser can't record audio here. Use an up-to-date Chrome, Edge, Firefox or Safari.";
-const UPDATED =
-  "Module One was updated while you were recording, so this page can't save the take any more. Refresh the page and record again.";
+const AWAY = "Your phone may have paused the recording while you were away. Listen back before you submit.";
 
 type State =
   | { step: "idle"; problem: string | null }
   | { step: "starting" }
   | { step: "recording"; question: number }
   | { step: "saving" }
-  // updated: the app was redeployed since the page loaded, so no retry from this page can work.
-  | { step: "failed"; take: Take; message: string; updated: boolean }
-  | { step: "saved" };
+  | SaveOutcome;
 
 // What is live while recording: the microphone stream, the recorder and the clock.
 type Media = { stream: MediaStream; recorder: MediaRecorder; timer: number };
@@ -54,6 +50,12 @@ function microphoneProblem(error: unknown): string {
   return "Couldn't start the microphone. Try again.";
 }
 
+function upload(ready: ReadyToUpload, body: Blob) {
+  return createClient()
+    .storage.from(BUCKET)
+    .uploadToSignedUrl(ready.path, ready.token, body, { contentType: ready.contentType });
+}
+
 // Stops the clock, the recorder and the microphone. Detaches the recorder's handlers first, so a
 // recording stopped this way (leaving the page, say) is dropped rather than uploaded.
 function release(media: RefObject<Media | null>) {
@@ -71,6 +73,8 @@ function release(media: RefObject<Media | null>) {
 export function Recorder() {
   const [state, setState] = useState<State>({ step: "idle", problem: null });
   const [elapsedMs, setElapsedMs] = useState(0);
+  // The page was hidden, or the microphone muted, while recording, so the take may have a gap.
+  const [away, setAway] = useState(false);
   const media = useRef<Media | null>(null);
   // Bumped by every start and by leaving the page, so a microphone that is granted only after the
   // member has moved on (or started again) is let go instead of recording in the background.
@@ -97,6 +101,22 @@ export function Recorder() {
     return () => window.removeEventListener("beforeunload", warn);
   }, [unsaved]);
 
+  // iOS Safari mutes the microphone while the page is hidden (another app, a locked screen), so
+  // anything said meanwhile is missing from the take. Any visibility change while recording means
+  // the page is or was hidden. Once muted, the gap is in the take, so unmuting changes nothing.
+  const recording = state.step === "recording";
+  useEffect(() => {
+    if (!recording) return;
+    const tracks = media.current?.stream.getAudioTracks() ?? [];
+    const left = () => setAway(true);
+    document.addEventListener("visibilitychange", left);
+    tracks.forEach((track) => track.addEventListener("mute", left));
+    return () => {
+      document.removeEventListener("visibilitychange", left);
+      tracks.forEach((track) => track.removeEventListener("mute", left));
+    };
+  }, [recording]);
+
   // Move keyboard and screen-reader focus to each step's main button as the steps change, since
   // the button that was pressed has usually gone. Not on first load, when nothing has happened.
   const step = state.step;
@@ -111,41 +131,7 @@ export function Recorder() {
 
   async function save(take: Take) {
     setState({ step: "saving" });
-    let current = take;
-    try {
-      let path = current.uploadedPath;
-      if (path === null) {
-        const prepared = await prepareRecording(current.mimeType);
-        if (prepared.status === "submitted") return setState({ step: "saved" });
-        if (prepared.status === "error") {
-          return setState({ step: "failed", take: current, message: prepared.message, updated: false });
-        }
-        // Storage records the file's type from the Blob itself; send the plain type the server allowed.
-        const body = new Blob([current.blob], { type: prepared.contentType });
-        const { error } = await createClient()
-          .storage.from(BUCKET)
-          .uploadToSignedUrl(prepared.path, prepared.token, body, { contentType: prepared.contentType });
-        if (error) {
-          return setState({
-            step: "failed",
-            take: current,
-            message: "The upload didn't go through. Check your connection, then try again.",
-            updated: false,
-          });
-        }
-        path = prepared.path;
-        current = { ...current, uploadedPath: path };
-      }
-      const saved = await saveDraft({ path, durationMs: current.durationMs });
-      if (saved.status === "error") {
-        return setState({ step: "failed", take: takeToRetry(saved.code, current), message: saved.message, updated: false });
-      }
-      // The page re-renders with the saved draft (or the submitted check-in) in its place.
-      setState({ step: "saved" });
-    } catch (error) {
-      const updated = updatedSinceLoad(error);
-      setState({ step: "failed", take: current, message: updated ? UPDATED : OFFLINE_MESSAGE, updated });
-    }
+    setState(await saveTake(take, { prepare: prepareRecording, upload, saveDraft }));
   }
 
   function finish() {
@@ -213,6 +199,7 @@ export function Recorder() {
     }, 250);
     media.current = { stream, recorder, timer };
     setElapsedMs(0);
+    setAway(false);
     try {
       recorder.start(1000); // a chunk a second, so a crash loses little
     } catch {
@@ -244,12 +231,18 @@ export function Recorder() {
           : state.step === "saved"
             ? "Saved."
             : "";
+  // Kept on screen until the take is saved (or can't be). In the live region it is a node of its
+  // own, so it is announced when it appears and not again with every later step.
+  const awayNote = away && unsaved;
 
   return (
     <div className="grid gap-4">
       <p aria-live="polite" className="sr-only">
-        {announcement}
+        <span>{announcement}</span>
+        {awayNote && <span> {AWAY}</span>}
       </p>
+
+      {awayNote && <p className="rounded-md bg-muted px-3 py-2 text-sm">{AWAY}</p>}
 
       {state.step === "idle" && (
         <>
