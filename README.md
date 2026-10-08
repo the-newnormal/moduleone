@@ -25,8 +25,10 @@ See `CLAUDE.md` for the engineering contract. Hygiene is non-negotiable: protect
 - the `ci / check` job must pass, on a branch that is up to date with `main`
 - no force-pushes, no deleting `main`
 
+A classic branch-protection rule on `main` also applies until it is removed (required `check` on an up-to-date branch, conversations resolved, admins included). GitHub enforces both, so changing the JSON alone can't loosen what the classic rule requires.
+
 To change the rules, edit the JSON in a PR. Once it merges, a repo admin re-applies it:
 ```bash
 scripts/protect-main.sh           # needs `gh` logged in as a repo admin; creates or updates the ruleset
 ```
-Without the CLI: Settings → Rules → Rulesets → New ruleset → Import a ruleset, then pick the JSON file.
+Without the CLI, first-time setup only: Settings → Rules → Rulesets → New ruleset → Import a ruleset, then pick the JSON file (an import always creates a new ruleset). For later changes, edit the existing `protect-main` ruleset on that page.
