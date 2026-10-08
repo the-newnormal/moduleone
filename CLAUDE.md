@@ -15,6 +15,9 @@ Stack: **Next.js (App Router) + TypeScript + Tailwind + shadcn/ui + Supabase + V
 - Never modify the production schema by hand. **All schema changes are migrations in `supabase/migrations/`.**
 - **RLS ON for every table** (see 0001_init.sql). Members see their own + their team's rows; `hq` sees all.
 - Never expose the service-role key to the client — server-only.
+- Signed-in users only **read**, through the Data API and Storage (see 0002). Every write (check-ins, transcripts, scores, mentions, recordings) goes through server code using the service-role key, which takes the member from the session, never from the request. Don't add insert/update/delete grants or policies for `authenticated`.
+- New tables, views and functions get no grants by default (as on hosted Supabase): grant what's needed in the same migration, `revoke execute … from public` on new functions, and create views `with (security_invoker = true)` so RLS still applies.
+- Recordings: private `checkin-audio` bucket, `<member_id>/<file>`. To record, the server creates a signed upload URL (upsert off) for a path it builds from the session, and the browser uploads straight to it. Only the speaker and `hq` can play recordings. RLS tests live in `supabase/tests/` (`supabase test db`).
 
 ## Security
 - Never commit secrets (`.env*` is git-ignored; use `.env.example`).

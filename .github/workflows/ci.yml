@@ -28,3 +28,5 @@ jobs:
       # Fresh local Postgres; applies every file in supabase/migrations/ and fails on the first error.
       - run: supabase db start
       - run: scripts/check-migrations.sh
+      # RLS tests in supabase/tests/: who can read and write what, as anon, member, leader and hq.
+      - run: supabase test db
