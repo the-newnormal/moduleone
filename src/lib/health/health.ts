@@ -1,9 +1,18 @@
-import { HEALTH_CONFIG } from "./config";
-
 export type Band = "green" | "yellow" | "red";
 
+type Score = 1 | 2 | 3 | 4 | 5;
+
+// What each 1–5 score of one metric counts for.
+export type ScoreValues = Readonly<Record<Score, number>>;
+
+// The R/Y/G rules. The live values are the single row in the scoring_settings table, which admins
+// edit; read them with settingsToConfig(). A check-in's score is
+// activity[a] × excellence[e] × morale[m]; at or above thresholds.green it is green, at or above
+// thresholds.yellow yellow, otherwise red.
 export type HealthConfig = {
-  moraleMultiplier: Readonly<Record<1 | 2 | 3 | 4 | 5, number>>;
+  activity: ScoreValues;
+  excellence: ScoreValues;
+  morale: ScoreValues;
   thresholds: Readonly<{ green: number; yellow: number }>;
 };
 
@@ -23,31 +32,43 @@ export type CellHealth = {
   bands: Record<Band, number>;
 };
 
-const SCORES = [1, 2, 3, 4, 5] as const;
+// The scoring_settings row. Postgres numeric may arrive as a number or a numeric string.
+type Numeric = number | string;
+export type ScoringSettingsRow = Record<
+  `${"activity" | "excellence" | "morale"}_${Score}` | "green_threshold" | "yellow_threshold",
+  Numeric
+>;
 
-function assertScore(name: string, value: number): asserts value is 1 | 2 | 3 | 4 | 5 {
-  if (!SCORES.includes(value as 1)) {
-    throw new RangeError(`${name} must be a whole number from 1 to 5, got ${value}`);
-  }
-}
+const SCORES = [1, 2, 3, 4, 5] as const;
+const METRICS = ["activity", "excellence", "morale"] as const;
 
 // Floating-point products land a hair off the true value (3 × 0.6 is 1.7999999999999998), so a
 // score counts as reaching a threshold within this tolerance. Bands always use the exact score;
 // rounding is for display only, so a mean of 5.995 stays red rather than rounding up to 6.
 const TOLERANCE = 1e-9;
 
+function assertScore(name: string, value: number): asserts value is Score {
+  if (!SCORES.includes(value as Score)) {
+    throw new RangeError(`${name} must be a whole number from 1 to 5, got ${value}`);
+  }
+}
+
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-export function healthScore(scores: Scores, config: HealthConfig = HEALTH_CONFIG): number {
+export function healthScore(scores: Scores, config: HealthConfig): number {
   assertScore("activity", scores.activity);
   assertScore("excellence", scores.excellence);
   assertScore("morale", scores.morale);
-  return scores.activity * scores.excellence * config.moraleMultiplier[scores.morale];
+  return (
+    config.activity[scores.activity] *
+    config.excellence[scores.excellence] *
+    config.morale[scores.morale]
+  );
 }
 
-export function healthBand(score: number, config: HealthConfig = HEALTH_CONFIG): Band {
+export function healthBand(score: number, config: HealthConfig): Band {
   if (score + TOLERANCE >= config.thresholds.green) return "green";
   if (score + TOLERANCE >= config.thresholds.yellow) return "yellow";
   return "red";
@@ -59,7 +80,7 @@ export function healthBand(score: number, config: HealthConfig = HEALTH_CONFIG):
 // show that someone on the team is red.
 export function teamWeekHealth(
   checkins: readonly MaybeScores[],
-  config: HealthConfig = HEALTH_CONFIG,
+  config: HealthConfig,
 ): CellHealth | null {
   const bands: Record<Band, number> = { green: 0, yellow: 0, red: 0 };
   let total = 0;
@@ -81,33 +102,66 @@ export function teamWeekHealth(
   return { band: healthBand(mean, config), score: round2(mean), graded, bands };
 }
 
-// Problems with a config, as readable sentences. Empty means the config is usable.
+// Problems with a config, as readable sentences. Empty means the config is usable. The database
+// enforces the same rules on scoring_settings (plus two decimals and a 0.01–1000 range, which keep
+// every product clear of TOLERANCE); the admin settings form can show these before saving.
 export function healthConfigProblems(config: HealthConfig): string[] {
   const problems: string[] = [];
-  const { green, yellow } = config.thresholds;
 
-  for (const morale of SCORES) {
-    const m = config.moraleMultiplier[morale];
-    if (!Number.isFinite(m) || m <= 0) {
-      problems.push(`moraleMultiplier[${morale}] must be a positive number, got ${m}`);
-    }
-    if (morale > 1 && m < config.moraleMultiplier[(morale - 1) as 1]) {
-      problems.push(`moraleMultiplier[${morale}] is lower than moraleMultiplier[${morale - 1}]`);
+  for (const metric of METRICS) {
+    for (const score of SCORES) {
+      const value = config[metric][score];
+      if (!Number.isFinite(value) || value <= 0) {
+        problems.push(`${metric} ${score} must be a positive number, got ${value}`);
+      } else if (score > 1 && value < config[metric][(score - 1) as Score]) {
+        problems.push(`${metric} ${score} counts for less than ${metric} ${score - 1}`);
+      }
     }
   }
+
+  const { green, yellow } = config.thresholds;
   if (!Number.isFinite(green) || !Number.isFinite(yellow)) {
-    problems.push("thresholds.green and thresholds.yellow must be numbers");
+    problems.push("the green and yellow thresholds must be numbers");
   } else if (yellow >= green) {
-    problems.push(`thresholds.yellow (${yellow}) must be below thresholds.green (${green})`);
-  } else {
-    const lowest = 1 * 1 * config.moraleMultiplier[1];
-    const highest = 5 * 5 * config.moraleMultiplier[5];
-    if (healthBand(highest, config) !== "green") {
-      problems.push(`no check-in can be green: the highest score is ${round2(highest)}`);
+    problems.push(`the yellow threshold (${yellow}) must be below the green one (${green})`);
+  }
+  if (problems.length > 0) return problems;
+
+  // Score all 125 possible check-ins; every colour must come up at least once.
+  const reachable = new Set<Band>();
+  for (const activity of SCORES) {
+    for (const excellence of SCORES) {
+      for (const morale of SCORES) {
+        reachable.add(healthBand(healthScore({ activity, excellence, morale }, config), config));
+      }
     }
-    if (healthBand(lowest, config) !== "red") {
-      problems.push(`no check-in can be red: the lowest score is ${round2(lowest)}`);
-    }
+  }
+  for (const band of ["green", "yellow", "red"] as const) {
+    if (!reachable.has(band)) problems.push(`no check-in can be ${band} with these settings`);
   }
   return problems;
+}
+
+function scoreValues(row: ScoringSettingsRow, metric: (typeof METRICS)[number]): ScoreValues {
+  return {
+    1: Number(row[`${metric}_1`]),
+    2: Number(row[`${metric}_2`]),
+    3: Number(row[`${metric}_3`]),
+    4: Number(row[`${metric}_4`]),
+    5: Number(row[`${metric}_5`]),
+  };
+}
+
+// The scoring_settings row as a HealthConfig. Throws if the row is unusable, which the database's
+// own checks should make impossible.
+export function settingsToConfig(row: ScoringSettingsRow): HealthConfig {
+  const config: HealthConfig = {
+    activity: scoreValues(row, "activity"),
+    excellence: scoreValues(row, "excellence"),
+    morale: scoreValues(row, "morale"),
+    thresholds: { green: Number(row.green_threshold), yellow: Number(row.yellow_threshold) },
+  };
+  const problems = healthConfigProblems(config);
+  if (problems.length > 0) throw new Error(`Unusable scoring settings: ${problems.join("; ")}`);
+  return config;
 }

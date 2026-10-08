@@ -4,12 +4,12 @@
 --
 -- Sign in at http://localhost:3000/login as any of these, then open the link from Mailpit
 -- (http://127.0.0.1:54324):
---   hq@example.com      hq: sees every team
---   leader@example.com  leader of Product: sees Product's check-ins
+--   hq@example.com      hq and admin, with the recordings and big_five grants: sees and edits everything
+--   leader@example.com  leader of Product: sees Product's check-ins (transcripts, not recordings)
 --   member@example.com  member of Product: sees only their own check-ins (none yet this week)
 --
--- Eight weeks of check-ins, ending this week, tell a story on the heat-map under the default rules
--- in src/lib/health/config.ts: Product stays green apart from a yellow dip, Sales slides from green
+-- Eight weeks of check-ins, ending this week, tell a story on the heat-map under the default scoring
+-- settings (scoring_settings): Product stays green apart from a yellow dip, Sales slides from green
 -- to red, and Ops climbs from red to green. Some weeks are missed, and one check-in from this week
 -- is still waiting for the grader. Re-running `db reset` moves the weeks to end at the current one.
 
@@ -34,7 +34,11 @@ insert into auth.identities (provider_id, user_id, identity_data, provider, last
 select id::text, id, jsonb_build_object('sub', id::text, 'email', email, 'email_verified', true),
        'email', now(), now(), now()
 from auth.users
-where email like '%@example.com';
+where id in (
+  '5eed0000-0000-4000-8000-000000000001',
+  '5eed0000-0000-4000-8000-000000000002',
+  '5eed0000-0000-4000-8000-000000000003'
+);
 
 -- ---------- teams and members ----------
 insert into teams (id, name, division) values
@@ -54,6 +58,12 @@ insert into members (id, auth_user_id, name, team_id, role) values
   ('3e3b0000-0000-4000-8000-000000000009', null,                                   'Wei Chen',    '7ea30000-0000-4000-8000-000000000003', 'leader'),
   ('3e3b0000-0000-4000-8000-000000000010', null,                                   'Priya Nair',  '7ea30000-0000-4000-8000-000000000003', 'member'),
   ('3e3b0000-0000-4000-8000-000000000011', null,                                   'Farah Aziz',  '7ea30000-0000-4000-8000-000000000003', 'member');
+
+-- In production the project owner adds grants in the Supabase dashboard; here hq gets all three.
+insert into member_grants (member_id, grant_name) values
+  ('3e3b0000-0000-4000-8000-000000000001', 'admin'),
+  ('3e3b0000-0000-4000-8000-000000000001', 'recordings'),
+  ('3e3b0000-0000-4000-8000-000000000001', 'big_five');
 
 -- ---------- check-ins ----------
 -- Each team's typical (activity, excellence, morale) for each week, by weeks before this one.

@@ -1,17 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { HEALTH_CONFIG } from "./config";
 import {
   type HealthConfig,
+  type ScoringSettingsRow,
   healthBand,
   healthConfigProblems,
   healthScore,
+  settingsToConfig,
   teamWeekHealth,
 } from "./health";
 
-// The tests own their rules, so retuning config.ts never breaks them. Only the first test looks at
-// the shipped config, and it checks consistency, not the numbers.
+// The defaults the 0002 migration installs in scoring_settings: activity × excellence × a morale
+// multiplier, green ≥ 12, yellow ≥ 6.
 const RULES: HealthConfig = Object.freeze({
-  moraleMultiplier: Object.freeze({ 1: 0.6, 2: 0.8, 3: 1.0, 4: 1.1, 5: 1.2 }),
+  activity: Object.freeze({ 1: 1, 2: 2, 3: 3, 4: 4, 5: 5 }),
+  excellence: Object.freeze({ 1: 1, 2: 2, 3: 3, 4: 4, 5: 5 }),
+  morale: Object.freeze({ 1: 0.6, 2: 0.8, 3: 1.0, 4: 1.1, 5: 1.2 }),
   thresholds: Object.freeze({ green: 12, yellow: 6 }),
 });
 
@@ -22,18 +25,17 @@ const graded = (activity: number, excellence: number, morale: number) => ({
 });
 const ungraded = { activity_score: null, excellence_score: null, morale_score: null };
 
-describe("HEALTH_CONFIG (config.ts)", () => {
-  it("is consistent: edit the numbers freely, but this must stay empty", () => {
-    expect(healthConfigProblems(HEALTH_CONFIG)).toEqual([]);
-  });
-});
-
 describe("healthScore", () => {
-  it("is activity × excellence × the morale multiplier", () => {
+  it("multiplies the value of each metric's score", () => {
     expect(healthScore({ activity: 3, excellence: 3, morale: 3 }, RULES)).toBe(9);
     expect(healthScore({ activity: 4, excellence: 4, morale: 1 }, RULES)).toBeCloseTo(9.6);
     expect(healthScore({ activity: 5, excellence: 5, morale: 5 }, RULES)).toBe(30);
     expect(healthScore({ activity: 1, excellence: 1, morale: 1 }, RULES)).toBeCloseTo(0.6);
+  });
+
+  it("uses each metric's own values", () => {
+    const activityHeavy: HealthConfig = { ...RULES, activity: { 1: 1, 2: 3, 3: 5, 4: 7, 5: 9 } };
+    expect(healthScore({ activity: 5, excellence: 2, morale: 3 }, activityHeavy)).toBe(18);
   });
 
   it.each([
@@ -66,7 +68,7 @@ describe("healthBand", () => {
     expect(healthBand(score, rules)).toBe("yellow");
   });
 
-  it("applies the rules end to end", () => {
+  it("applies the default rules end to end", () => {
     const band = (a: number, e: number, m: number) =>
       healthBand(healthScore({ activity: a, excellence: e, morale: m }, RULES), RULES);
     expect(band(4, 3, 3)).toBe("green"); // 12
@@ -127,7 +129,7 @@ describe("healthConfigProblems", () => {
     thresholds: { green, yellow },
   });
 
-  it("accepts the rules the tests use", () => {
+  it("accepts the default rules", () => {
     expect(healthConfigProblems(RULES)).toEqual([]);
   });
 
@@ -136,23 +138,43 @@ describe("healthConfigProblems", () => {
     expect(healthConfigProblems(withThresholds(6, 6))).toHaveLength(1);
   });
 
-  it("flags colours no check-in can reach", () => {
-    expect(healthConfigProblems(withThresholds(31, 6))[0]).toMatch(/no check-in can be green/);
-    expect(healthConfigProblems(withThresholds(12, 0.6))[0]).toMatch(/no check-in can be red/);
+  it("flags green or red that no check-in can reach", () => {
+    expect(healthConfigProblems(withThresholds(31, 6))).toEqual(["no check-in can be green with these settings"]);
+    expect(healthConfigProblems(withThresholds(12, 0.6))).toEqual(["no check-in can be red with these settings"]);
   });
 
-  it("flags a non-positive or decreasing morale multiplier", () => {
-    const zero: HealthConfig = {
+  it("flags yellow that no check-in can reach, even with green and red reachable", () => {
+    // Every score is a whole number here, so nothing lands between 1.2 and 1.5.
+    const flat: HealthConfig = {
       ...RULES,
-      moraleMultiplier: { ...RULES.moraleMultiplier, 1: 0 },
+      morale: { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1 },
+      thresholds: { green: 1.5, yellow: 1.2 },
     };
-    const decreasing: HealthConfig = {
-      ...RULES,
-      moraleMultiplier: { ...RULES.moraleMultiplier, 4: 0.9 },
-    };
-    expect(healthConfigProblems(zero)).toContain("moraleMultiplier[1] must be a positive number, got 0");
-    expect(healthConfigProblems(decreasing)).toContain(
-      "moraleMultiplier[4] is lower than moraleMultiplier[3]",
-    );
+    expect(healthConfigProblems(flat)).toEqual(["no check-in can be yellow with these settings"]);
+  });
+
+  it("flags a non-positive or decreasing value", () => {
+    const zero: HealthConfig = { ...RULES, morale: { ...RULES.morale, 1: 0 } };
+    const decreasing: HealthConfig = { ...RULES, activity: { ...RULES.activity, 4: 2.5 } };
+    expect(healthConfigProblems(zero)).toContain("morale 1 must be a positive number, got 0");
+    expect(healthConfigProblems(decreasing)).toContain("activity 4 counts for less than activity 3");
+  });
+});
+
+describe("settingsToConfig", () => {
+  const row: ScoringSettingsRow = {
+    activity_1: 1, activity_2: 2, activity_3: 3, activity_4: 4, activity_5: 5,
+    excellence_1: 1, excellence_2: 2, excellence_3: 3, excellence_4: 4, excellence_5: 5,
+    // Postgres numeric can come back as a string.
+    morale_1: "0.6", morale_2: "0.8", morale_3: "1.0", morale_4: "1.1", morale_5: "1.2",
+    green_threshold: "12", yellow_threshold: 6,
+  };
+
+  it("reads the scoring_settings row", () => {
+    expect(settingsToConfig(row)).toEqual(RULES);
+  });
+
+  it("refuses an unusable row", () => {
+    expect(() => settingsToConfig({ ...row, yellow_threshold: 20 })).toThrow(/Unusable scoring settings/);
   });
 });

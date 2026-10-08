@@ -13,11 +13,14 @@ Stack: **Next.js (App Router) + TypeScript + Tailwind + shadcn/ui + Supabase + V
 
 ## Database
 - Never modify the production schema by hand. **All schema changes are migrations in `supabase/migrations/`.**
-- **RLS ON for every table** (see 0001_init.sql). Members see their own + their team's rows; `hq` sees all.
+- **RLS ON for every table** (see 0001_init.sql, 0002). Members see their own check-ins and their team's members; leaders see check-ins made in their team; `hq` sees every team, member and check-in. Recordings and Big Five need the `recordings` / `big_five` grants, even for `hq`.
 - Never expose the service-role key to the client — server-only.
-- Signed-in users only **read**, through the Data API and Storage (see 0002). Every write (check-ins, transcripts, scores, mentions, recordings) goes through server code using the service-role key, which takes the member from the session, never from the request. Don't add insert/update/delete grants or policies for `authenticated`.
+- Members only **read**, through the Data API and Storage (see 0002). Check-in writes (transcripts, scores, mentions, recordings) go through server code using the service-role key, which takes the member from the session, never from the request.
+- Admin edits are allowed by RLS only for holders of the matching grant in `member_grants` (`admin`: teams, other members' name/team/role except hq and themselves, `scoring_settings`; `big_five`: Big Five profiles). Only the project owner makes someone `hq`. Grants themselves are changed only by the project owner in the Supabase dashboard; never add an API write path for them. Linking a member to a login (`auth_user_id`) is server-side.
 - New tables, views and functions get no grants by default (as on hosted Supabase): grant what's needed in the same migration, `revoke execute … from public` on new functions, and create views `with (security_invoker = true)` so RLS still applies.
-- Recordings: private `checkin-audio` bucket, `<member_id>/<file>`. To record, the server creates a signed upload URL (upsert off) for a path it builds from the session, and the browser uploads straight to it. Only the speaker and `hq` can play recordings. RLS tests live in `supabase/tests/` (`supabase test db`).
+- Recordings: private `checkin-audio` bucket, `<member_id>/<file>`. To record, the server creates a signed upload URL (upsert off) for a path it builds from the session, and the browser uploads straight to it. Only the speaker and holders of the `recordings` grant can play recordings. RLS tests live in `supabase/tests/` (`supabase test db`).
+- Each check-in stores the team it was made in (`checkins.team_id`, filled from the member's team on insert). The heat-map groups by it, and leaders see check-ins by it. Teams are archived (`archived_at`), never deleted.
+- Heat-map colours come from `src/lib/health` with the `scoring_settings` row (`settingsToConfig`), never from `checkins.category`.
 
 ## Security
 - Never commit secrets (`.env*` is git-ignored; use `.env.example`).
