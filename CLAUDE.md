@@ -9,6 +9,7 @@ Stack: **Next.js (App Router) + TypeScript + Tailwind + shadcn/ui + Supabase + V
 - Claude may merge a PR without asking once all three hold on its latest commit: CodeRabbit has approved it, Greptile's review scores it 5/5, and the CI `check` passed. Hold it while the PR lists unticked "Before merging" steps.
 - Never bypass CI or branch protection. Don't post `@coderabbitai approve` unless the user asks; the approval must come from CodeRabbit's own review.
 - Small, focused PRs.
+- `main` protection lives in `.github/rulesets/protect-main.json` (applied with `scripts/protect-main.sh`), plus a classic branch-protection rule until that is removed. Change it only by PR; never loosen it in the GitHub UI.
 
 ## Database
 - Never modify the production schema by hand. **All schema changes are migrations in `supabase/migrations/`.**
