@@ -5,7 +5,7 @@
 --   team R: leader lead_r, members m1 and m2      hq      role hq, no team, no grants
 --   auditor no team, recordings grant             outsider signed in, but no members row
 begin;
-select plan(91);
+select plan(96);
 
 -- ---------- fixtures ----------
 insert into auth.users (id, email) values
@@ -40,7 +40,13 @@ begin
   return result;
 end $$;
 
-grant execute on function pg_temp.n(text), pg_temp.this_week() to anon, authenticated, service_role;
+-- A take's path as the server names it: '<member_id>/<this week's Monday>-<name>'.
+create function pg_temp.take(member uuid, name text) returns text language sql stable as $$
+  select member::text || '/' || to_char(pg_temp.this_week(), 'YYYY-MM-DD') || '-' || name;
+$$;
+
+grant execute on function pg_temp.n(text), pg_temp.this_week(), pg_temp.take(uuid, text)
+  to anon, authenticated, service_role;
 
 -- ---------- schema and privileges ----------
 select has_table('public', 'checkin_drafts', 'checkin_drafts exists');
@@ -78,13 +84,13 @@ select function_privs_are('public', f, args, 'service_role', array['EXECUTE'], f
     ('submit_checkin_draft', array['uuid']),
     ('claim_checkin_processing', array['uuid'])
   ) fn (f, args);
-select function_privs_are('public', 'app_checkin_audio_is_draft', array['text'], 'anon', array[]::text[],
-  'anon cannot call app_checkin_audio_is_draft');
+select function_privs_are('public', 'app_checkin_audio_is_checkin', array['text'], 'anon', array[]::text[],
+  'anon cannot call app_checkin_audio_is_checkin');
 select is(
   (select proconfig from pg_proc where oid = f::regprocedure),
   array['search_path=""'], format('%s runs with an empty search_path', f)
 ) from unnest(array[
-  'public.app_checkin_audio_is_draft(text)', 'public.save_checkin_draft(uuid,text,text,integer)',
+  'public.app_checkin_audio_is_checkin(text)', 'public.save_checkin_draft(uuid,text,text,integer)',
   'public.delete_checkin_draft(uuid)', 'public.submit_checkin_draft(uuid)', 'public.claim_checkin_processing(uuid)'
 ]) f;
 
@@ -92,7 +98,7 @@ select is(
 set local role service_role;
 
 select is(
-  save_checkin_draft('c1000000-0000-4000-8000-000000000002', 'c1000000-0000-4000-8000-000000000002/take-1.webm', 'audio/webm', 61000),
+  save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-1.webm'), 'audio/webm', 61000),
   null, 'a first take replaces nothing'
 );
 select is(
@@ -100,32 +106,39 @@ select is(
   pg_temp.this_week(), 'a draft belongs to this Singapore week'
 );
 select is(
-  save_checkin_draft('c1000000-0000-4000-8000-000000000002', 'c1000000-0000-4000-8000-000000000002/take-2.webm', 'audio/webm', 59000),
-  'c1000000-0000-4000-8000-000000000002/take-1.webm', 'a new take returns the replaced one, for the server to delete'
+  save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-2.webm'), 'audio/webm', 59000),
+  pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-1.webm'), 'a new take returns the replaced one, for the server to delete'
 );
 select is(
   (select audio_path from checkin_drafts where member_id = 'c1000000-0000-4000-8000-000000000002'),
-  'c1000000-0000-4000-8000-000000000002/take-2.webm', 'one draft per member per week: the latest take'
+  pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-2.webm'), 'one draft per member per week: the latest take'
 );
 select is(
-  save_checkin_draft('c1000000-0000-4000-8000-000000000002', 'c1000000-0000-4000-8000-000000000002/take-2.webm', 'audio/webm', 59000),
+  save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-2.webm'), 'audio/webm', 59000),
   null, 'saving the same take again returns nothing to delete'
 );
 select throws_ok(
-  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', 'c1000000-0000-4000-8000-000000000003/take.webm', 'audio/webm', null)$$,
-  '23514', null, 'a draft cannot point at another member''s folder'
+  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000003', 'take.webm'), 'audio/webm', null)$$,
+  'P0001', 'bad_path', 'a draft cannot point at another member''s folder'
 );
 select throws_ok(
-  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', 'c1000000-0000-4000-8000-000000000002/../c1000000-0000-4000-8000-000000000003/take.webm', 'audio/webm', null)$$,
+  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', '../c1000000-0000-4000-8000-000000000003/take.webm'), 'audio/webm', null)$$,
   '23514', null, 'a draft path cannot climb out of the member''s folder'
 );
 select throws_ok(
-  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', 'c1000000-0000-4000-8000-000000000002/take-3.webm', 'video/webm', null)$$,
+  format(
+    $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', %L, 'audio/webm', null)$$,
+    'c1000000-0000-4000-8000-000000000002/' || to_char(pg_temp.this_week() - 7, 'YYYY-MM-DD') || '-take.webm'
+  ),
+  'P0001', 'bad_path', 'a take made for last week cannot become this week''s draft'
+);
+select throws_ok(
+  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-3.webm'), 'video/webm', null)$$,
   '23514', null, 'a draft must be audio'
 );
 select is(
   delete_checkin_draft('c1000000-0000-4000-8000-000000000002'),
-  'c1000000-0000-4000-8000-000000000002/take-2.webm', 'deleting a draft returns its recording, for the server to delete'
+  pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-2.webm'), 'deleting a draft returns its recording, for the server to delete'
 );
 select is(
   pg_temp.n($$select 1 from checkin_drafts where member_id = 'c1000000-0000-4000-8000-000000000002'$$),
@@ -139,7 +152,7 @@ select throws_ok(
   'P0001', 'no_draft', 'nothing to submit without a draft'
 );
 select lives_ok(
-  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', 'c1000000-0000-4000-8000-000000000002/take-4.webm', 'audio/webm', 70000)$$,
+  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-4.webm'), 'audio/webm', 70000)$$,
   'm1 records again'
 );
 create temp table submitted as
@@ -149,7 +162,7 @@ select is(
   (select (week_start, team_id, audio_path, audio_duration_ms, submitted_at is not null, activity_score is null)::text
      from checkins where id = (select id from submitted)),
   (pg_temp.this_week(), 'b1000000-0000-4000-8000-000000000001'::uuid,
-   'c1000000-0000-4000-8000-000000000002/take-4.webm', 70000, true, true)::text,
+   pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-4.webm'), 70000, true, true)::text,
   'the check-in takes this week, the member''s team, the recording, its length and the submit time, ungraded'
 );
 select is(
@@ -161,15 +174,24 @@ select throws_ok(
   'P0001', 'already_submitted', 'a week is submitted once'
 );
 select throws_ok(
-  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', 'c1000000-0000-4000-8000-000000000002/retake.webm', 'audio/webm', null)$$,
+  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'retake.webm'), 'audio/webm', null)$$,
   'P0001', 'already_submitted', 'no retake after submitting'
 );
+-- A recording a check-in already uses never becomes a draft again (here, a check-in from last week
+-- whose file happens to carry this week's name).
+insert into checkins (member_id, week_start, audio_path)
+  values ('c1000000-0000-4000-8000-000000000003', pg_temp.this_week() - 7, pg_temp.take('c1000000-0000-4000-8000-000000000003', 'reused.webm'));
+select throws_ok(
+  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000003', pg_temp.take('c1000000-0000-4000-8000-000000000003', 'reused.webm'), 'audio/webm', null)$$,
+  'P0001', 'bad_path', 'a check-in''s recording cannot become a draft'
+);
+delete from checkins where member_id = 'c1000000-0000-4000-8000-000000000003' and week_start = pg_temp.this_week() - 7;
 
 -- ---------- processing claims ----------
 select is(
   (select (attempts, audio_path, audio_duration_ms, transcript)::text
      from claim_checkin_processing((select id from submitted))),
-  (1, 'c1000000-0000-4000-8000-000000000002/take-4.webm', 70000, null::text)::text,
+  (1, pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-4.webm'), 70000, null::text)::text,
   'the first claim gets attempt 1, with the recording and its length'
 );
 select is(
@@ -220,15 +242,17 @@ select throws_ok(
   '23514', null, 'category is one of the five themes'
 );
 
--- m2 keeps a draft for the visibility checks below; m1's submitted recording and m2's draft are in
--- Storage. A privacy-notice acknowledgement for m1.
+-- m2 keeps a draft for the visibility checks below. In Storage: m1's submitted recording, m2's
+-- draft, and a take m2 uploaded but never saved (or threw away), which nothing points at. A
+-- privacy-notice acknowledgement for m1.
 select lives_ok(
-  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000003', 'c1000000-0000-4000-8000-000000000003/draft.webm', 'audio/webm', 30000)$$,
+  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000003', pg_temp.take('c1000000-0000-4000-8000-000000000003', 'draft.webm'), 'audio/webm', 30000)$$,
   'm2 records a draft'
 );
 insert into storage.objects (bucket_id, name) values
-  ('checkin-audio', 'c1000000-0000-4000-8000-000000000002/take-4.webm'),
-  ('checkin-audio', 'c1000000-0000-4000-8000-000000000003/draft.webm');
+  ('checkin-audio', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-4.webm')),
+  ('checkin-audio', pg_temp.take('c1000000-0000-4000-8000-000000000003', 'draft.webm')),
+  ('checkin-audio', pg_temp.take('c1000000-0000-4000-8000-000000000003', 'unsaved.webm'));
 insert into recording_notices (member_id, notice_version) values ('c1000000-0000-4000-8000-000000000002', 'test.openai');
 reset role;
 
@@ -238,8 +262,12 @@ set local request.jwt.claims to '{"sub": "a1000000-0000-4000-8000-000000000003",
 select is(pg_temp.n($$select 1 from checkin_drafts where member_id::text like 'c1000000-%'$$), 1, 'm2 sees their own draft');
 select is(pg_temp.n($$select 1 from recording_notices where member_id::text like 'c1000000-%'$$), 0, 'm2 sees no one else''s notice');
 select is(
-  pg_temp.n($$select 1 from storage.objects where bucket_id = 'checkin-audio' and name like 'c1000000-0000-4000-8000-000000000003/%'$$),
+  pg_temp.n($$select 1 from storage.objects where bucket_id = 'checkin-audio' and name = pg_temp.take('c1000000-0000-4000-8000-000000000003', 'draft.webm')$$),
   1, 'm2 can play their own draft'
+);
+select is(
+  pg_temp.n($$select 1 from storage.objects where bucket_id = 'checkin-audio' and name = pg_temp.take('c1000000-0000-4000-8000-000000000003', 'unsaved.webm')$$),
+  1, 'm2 can still see a take they never saved'
 );
 select throws_ok(
   $$insert into checkin_drafts (member_id, audio_path, mime_type) values ('c1000000-0000-4000-8000-000000000003', 'c1000000-0000-4000-8000-000000000003/x.webm', 'audio/webm')$$,
@@ -295,12 +323,16 @@ select is(pg_temp.n($$select 1 from recording_notices where member_id::text like
 set local request.jwt.claims to '{"sub": "a1000000-0000-4000-8000-000000000005", "role": "authenticated"}';
 select is(pg_temp.n($$select 1 from checkin_drafts where member_id::text like 'c1000000-%'$$), 0, 'the auditor cannot see drafts');
 select is(
-  pg_temp.n($$select 1 from storage.objects where bucket_id = 'checkin-audio' and name = 'c1000000-0000-4000-8000-000000000002/take-4.webm'$$),
+  pg_temp.n($$select 1 from storage.objects where bucket_id = 'checkin-audio' and name = pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-4.webm')$$),
   1, 'the recordings grant plays a submitted recording'
 );
 select is(
-  pg_temp.n($$select 1 from storage.objects where bucket_id = 'checkin-audio' and name = 'c1000000-0000-4000-8000-000000000003/draft.webm'$$),
+  pg_temp.n($$select 1 from storage.objects where bucket_id = 'checkin-audio' and name = pg_temp.take('c1000000-0000-4000-8000-000000000003', 'draft.webm')$$),
   0, 'the recordings grant cannot play a draft'
+);
+select is(
+  pg_temp.n($$select 1 from storage.objects where bucket_id = 'checkin-audio' and name = pg_temp.take('c1000000-0000-4000-8000-000000000003', 'unsaved.webm')$$),
+  0, 'the recordings grant cannot play a take that was never saved or was thrown away'
 );
 
 set local request.jwt.claims to '{"sub": "a1000000-0000-4000-8000-000000000006", "role": "authenticated"}';
@@ -314,8 +346,12 @@ reset role;
 set local role authenticated;
 set local request.jwt.claims to '{"sub": "a1000000-0000-4000-8000-000000000005", "role": "authenticated"}';
 select is(
-  pg_temp.n($$select 1 from storage.objects where bucket_id = 'checkin-audio' and name = 'c1000000-0000-4000-8000-000000000003/draft.webm'$$),
+  pg_temp.n($$select 1 from storage.objects where bucket_id = 'checkin-audio' and name = pg_temp.take('c1000000-0000-4000-8000-000000000003', 'draft.webm')$$),
   1, 'the recordings grant plays it once it is submitted'
+);
+select is(
+  pg_temp.n($$select 1 from storage.objects where bucket_id = 'checkin-audio' and name = pg_temp.take('c1000000-0000-4000-8000-000000000003', 'unsaved.webm')$$),
+  0, 'a take no check-in points at stays private after the member submits another'
 );
 reset role;
 

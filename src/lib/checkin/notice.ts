@@ -1,20 +1,32 @@
 // The one-time privacy notice shown before a member's first recording (Singapore PDPA: tell people
 // what is collected, why, who it goes to and how long it is kept, before collecting it).
-// Changing what the notice says, or which transcription provider is used, changes the version, and
-// members are asked to read it again.
+// Changing what the notice says, or where recordings may be sent for transcription, changes the
+// version, and members are asked to read it again.
 
+import { sttConfig } from "@/lib/stt/config";
 import type { SttProvider } from "@/lib/stt/types";
 
 const NOTICE_REVISION = "2026-10-09";
 
-// Which transcription provider the server is configured to use (STT_PROVIDER), as the notice names it.
-export function configuredSttProvider(): SttProvider {
-  const value = (process.env.STT_PROVIDER ?? "openai").trim().toLowerCase();
-  return value === "local" ? value : "openai";
+type Env = Record<string, string | undefined>;
+
+// Every service a recording may be sent to, in the order transcribe() tries them: the configured
+// one (STT_PROVIDER) and, when that one fails, the fallback (STT_FALLBACK). Both are named in the
+// notice, since either may receive the audio.
+export function sttDestinations(env: Env = process.env): SttProvider[] {
+  let config;
+  try {
+    config = sttConfig(env);
+  } catch {
+    // A configuration transcribe() can't use sends nothing anywhere; name the default.
+    return ["openai"];
+  }
+  const providers = [config.primary.provider, config.fallback?.provider];
+  return [...new Set(providers.filter((provider): provider is SttProvider => provider !== undefined))];
 }
 
-export function noticeVersion(provider: SttProvider = configuredSttProvider()): string {
-  return `${NOTICE_REVISION}.${provider}`;
+export function noticeVersion(env: Env = process.env): string {
+  return `${NOTICE_REVISION}.${sttDestinations(env).join("+")}`;
 }
 
 const TRANSCRIBER: Record<SttProvider, string> = {
@@ -24,7 +36,15 @@ const TRANSCRIBER: Record<SttProvider, string> = {
 
 export type NoticeSection = { heading: string; body: string };
 
-export function noticeSections(provider: SttProvider = configuredSttProvider()): NoticeSection[] {
+function processors(destinations: readonly SttProvider[]): string {
+  const [first, ...rest] = destinations;
+  const fallback = rest.length
+    ? ` If that service is unavailable, it goes instead to ${rest.map((provider) => TRANSCRIBER[provider]).join(" or ")}.`
+    : "";
+  return `When you submit, your recording is sent to ${TRANSCRIBER[first]}, to turn it into text.${fallback} The text is then sent to Anthropic, in the United States, which scores it for activity, excellence and morale and writes a short summary.`;
+}
+
+export function noticeSections(env: Env = process.env): NoticeSection[] {
   return [
     {
       heading: "What we record",
@@ -36,11 +56,11 @@ export function noticeSections(provider: SttProvider = configuredSttProvider()):
     },
     {
       heading: "Who processes it",
-      body: `When you submit, your recording is sent to ${TRANSCRIBER[provider]}, to turn it into text. The text is then sent to Anthropic, in the United States, which scores it for activity, excellence and morale and writes a short summary.`,
+      body: processors(sttDestinations(env)),
     },
     {
       heading: "Who sees what",
-      body: "Your team leader and HQ see your transcript, the scores and the summary. You won't see the scores. Your recording can be played back only by you and by the few people HQ has given permission to listen to recordings. Until you submit, your recording is visible to you alone, and you can delete it and record again.",
+      body: "Your team leader and HQ see your transcript, the scores and the summary. You won't see the scores. Your recording can be played back only by you and by the few people the project owner has given permission to listen to recordings. Until you submit, your recording is visible to you alone, and you can delete it and record again.",
     },
     {
       heading: "How long we keep it",

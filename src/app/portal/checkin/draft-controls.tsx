@@ -3,12 +3,13 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { deleteDraft, submitCheckin, type DeleteDraftResult, type SubmitCheckinResult } from "./actions";
+import { settled } from "./unreachable";
 
 // Delete the take and record again, or submit it, with a confirm step because a submitted check-in
 // can't be changed. On success each action re-renders the page, which replaces these controls.
 export function DraftControls() {
-  const [deleted, deleteAction, deleting] = useActionState<DeleteDraftResult | null>(() => deleteDraft(), null);
-  const [sent, submitAction, submitting] = useActionState<SubmitCheckinResult | null>(() => submitCheckin(), null);
+  const [deleted, deleteAction, deleting] = useActionState<DeleteDraftResult | null>(settled(deleteDraft), null);
+  const [sent, submitAction, submitting] = useActionState<SubmitCheckinResult | null>(settled(submitCheckin), null);
   const [confirming, setConfirming] = useState(false);
   const submitButton = useRef<HTMLButtonElement>(null);
   const confirmButton = useRef<HTMLButtonElement>(null);

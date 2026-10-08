@@ -8,6 +8,8 @@ import { QUESTIONS } from "@/lib/checkin/week";
 import { createClient } from "@/lib/supabase/client";
 import { prepareRecording, saveDraft } from "./actions";
 import { formatClock } from "./format";
+import { takeToRetry, type Take } from "./take";
+import { OFFLINE_MESSAGE, updatedSinceLoad } from "./unreachable";
 
 // Opus in WebM where the browser has it (Chrome, Edge, Firefox), AAC in MP4 on Safari. Speech at
 // 32 kbit/s is about 0.25 MB a minute, far below the bucket's 25 MB limit.
@@ -18,17 +20,16 @@ const WARN_MS = 9 * 60 * 1000;
 const BUCKET = "checkin-audio";
 
 const UNSUPPORTED = "This browser can't record audio here. Use an up-to-date Chrome, Edge, Firefox or Safari.";
-const OFFLINE = "Couldn't reach the server. Check your connection, then try again.";
-
-// A finished recording, kept in memory until it is saved, so a failed upload can be retried.
-type Take = { blob: Blob; mimeType: string; durationMs: number; uploadedPath: string | null };
+const UPDATED =
+  "Module One was updated while you were recording, so this page can't save the take any more. Refresh the page and record again.";
 
 type State =
   | { step: "idle"; problem: string | null }
   | { step: "starting" }
   | { step: "recording"; question: number }
   | { step: "saving" }
-  | { step: "failed"; take: Take; message: string }
+  // updated: the app was redeployed since the page loaded, so no retry from this page can work.
+  | { step: "failed"; take: Take; message: string; updated: boolean }
   | { step: "saved" };
 
 // What is live while recording: the microphone stream, the recorder and the clock.
@@ -71,11 +72,30 @@ export function Recorder() {
   const [state, setState] = useState<State>({ step: "idle", problem: null });
   const [elapsedMs, setElapsedMs] = useState(0);
   const media = useRef<Media | null>(null);
+  // Bumped by every start and by leaving the page, so a microphone that is granted only after the
+  // member has moved on (or started again) is let go instead of recording in the background.
+  const startCount = useRef(0);
   const primary = useRef<HTMLButtonElement>(null);
   const firstStep = useRef(true);
 
   // Let go of the microphone if the member leaves the page mid-recording.
-  useEffect(() => () => release(media), []);
+  useEffect(
+    () => () => {
+      startCount.current += 1;
+      release(media);
+    },
+    [],
+  );
+
+  // Ask before leaving (or reloading) while a take exists only in this page.
+  const unsaved =
+    state.step === "recording" || state.step === "saving" || (state.step === "failed" && !state.updated);
+  useEffect(() => {
+    if (!unsaved) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [unsaved]);
 
   // Move keyboard and screen-reader focus to each step's main button as the steps change, since
   // the button that was pressed has usually gone. Not on first load, when nothing has happened.
@@ -97,7 +117,9 @@ export function Recorder() {
       if (path === null) {
         const prepared = await prepareRecording(current.mimeType);
         if (prepared.status === "submitted") return setState({ step: "saved" });
-        if (prepared.status === "error") return setState({ step: "failed", take: current, message: prepared.message });
+        if (prepared.status === "error") {
+          return setState({ step: "failed", take: current, message: prepared.message, updated: false });
+        }
         // Storage records the file's type from the Blob itself; send the plain type the server allowed.
         const body = new Blob([current.blob], { type: prepared.contentType });
         const { error } = await createClient()
@@ -108,6 +130,7 @@ export function Recorder() {
             step: "failed",
             take: current,
             message: "The upload didn't go through. Check your connection, then try again.",
+            updated: false,
           });
         }
         path = prepared.path;
@@ -115,14 +138,13 @@ export function Recorder() {
       }
       const saved = await saveDraft({ path, durationMs: current.durationMs });
       if (saved.status === "error") {
-        // Only a failure on our side after a good upload is worth retrying with the same file.
-        const retake = saved.code === "failed" ? current : { ...current, uploadedPath: null };
-        return setState({ step: "failed", take: retake, message: saved.message });
+        return setState({ step: "failed", take: takeToRetry(saved.code, current), message: saved.message, updated: false });
       }
       // The page re-renders with the saved draft (or the submitted check-in) in its place.
       setState({ step: "saved" });
-    } catch {
-      setState({ step: "failed", take: current, message: OFFLINE });
+    } catch (error) {
+      const updated = updatedSinceLoad(error);
+      setState({ step: "failed", take: current, message: updated ? UPDATED : OFFLINE_MESSAGE, updated });
     }
   }
 
@@ -138,6 +160,7 @@ export function Recorder() {
     const mimeType = pickMimeType();
     if (!mimeType) return setState({ step: "idle", problem: UNSUPPORTED });
     setState({ step: "starting" });
+    const attempt = ++startCount.current;
 
     let stream: MediaStream;
     try {
@@ -145,7 +168,13 @@ export function Recorder() {
         audio: { echoCancellation: true, noiseSuppression: true },
       });
     } catch (error) {
+      if (attempt !== startCount.current) return;
       return setState({ step: "idle", problem: microphoneProblem(error) });
+    }
+    // Granted after the member left the page (the browser's prompt can outlive it): let it go.
+    if (attempt !== startCount.current) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
     }
 
     let recorder: MediaRecorder;
@@ -184,7 +213,13 @@ export function Recorder() {
     }, 250);
     media.current = { stream, recorder, timer };
     setElapsedMs(0);
-    recorder.start(1000); // a chunk a second, so a crash loses little
+    try {
+      recorder.start(1000); // a chunk a second, so a crash loses little
+    } catch {
+      // The microphone went away between the prompt and here (unplugged, or taken by another app).
+      release(media);
+      return setState({ step: "idle", problem: "Couldn't start the microphone. Try again." });
+    }
     setState({ step: "recording", question: 0 });
   }
 
@@ -284,7 +319,7 @@ export function Recorder() {
         </p>
       )}
 
-      {state.step === "failed" && (
+      {state.step === "failed" && !state.updated && (
         <>
           <p role="alert" className="text-sm text-destructive">
             {state.message}
@@ -298,6 +333,17 @@ export function Recorder() {
               Discard
             </Button>
           </div>
+        </>
+      )}
+
+      {state.step === "failed" && state.updated && (
+        <>
+          <p role="alert" className="text-sm text-destructive">
+            {state.message}
+          </p>
+          <Button ref={primary} type="button" className="justify-self-start" onClick={() => window.location.reload()}>
+            Refresh the page
+          </Button>
         </>
       )}
     </div>

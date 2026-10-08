@@ -1,9 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { processCheckin } from "@/lib/checkin/process";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { needsProcessing, orphanedFiles, tidyMemberAudio, type ProcessingState } from "./housekeeping";
+import {
+  needsProcessing,
+  orphanedFiles,
+  processPendingCheckins,
+  tidyMemberAudio,
+  type ProcessingState,
+} from "./housekeeping";
 
-// Mocked whole, so its `import "server-only"` never runs.
+// Mocked whole, so their `import "server-only"` never runs.
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
+vi.mock("@/lib/checkin/process", () => ({ processCheckin: vi.fn() }));
 
 const NOW = new Date("2026-10-08T04:00:00Z");
 const MEMBER = "3e3b0000-0000-4000-8000-000000000003";
@@ -135,10 +143,32 @@ describe("tidyMemberAudio", () => {
     expect(order).toEqual(["checkin_drafts.select", "checkin_drafts.select", "checkins.select"]);
   });
 
-  it("deletes no orphans when it can't see every draft and check-in", async () => {
+  it("deletes no files when it can't see every draft and check-in", async () => {
     results["checkins.select"] = { data: null, error: { code: "57014" } };
     await tidyMemberAudio(MEMBER, WEEK);
-    expect(remove).toHaveBeenCalledExactlyOnceWith([`${MEMBER}/2026-09-28-stale.webm`]);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("deletes no files when it can't list the folder", async () => {
+    list.mockResolvedValue({ data: null, error: { name: "StorageUnknownError" } });
+    await tidyMemberAudio(MEMBER, WEEK);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("never deletes a check-in's recording, even when an old draft pointed at it", async () => {
+    // Submitted just before midnight while this ran, or a draft that reused a check-in's file.
+    results["checkins.select"] = {
+      data: [{ audio_path: `${MEMBER}/2026-09-21-checkin.webm` }, { audio_path: `${MEMBER}/2026-09-28-stale.webm` }],
+      error: null,
+    };
+    await tidyMemberAudio(MEMBER, WEEK);
+    expect(remove).toHaveBeenCalledExactlyOnceWith([`${MEMBER}/${WEEK}-orphan.webm`]);
+  });
+
+  it("reads the check-ins after deleting the old drafts", async () => {
+    await tidyMemberAudio(MEMBER, WEEK);
+    const names = calls.map(([name]) => name);
+    expect(names.indexOf("checkins.select")).toBeGreaterThan(names.indexOf("checkin_drafts.delete"));
   });
 
   it("stops if old drafts can't be deleted", async () => {
@@ -161,5 +191,92 @@ describe("tidyMemberAudio", () => {
     });
     await expect(tidyMemberAudio(MEMBER, WEEK)).resolves.toBeUndefined();
     expect(console.error).toHaveBeenCalledWith("tidyMemberAudio failed", { code: "Error" });
+  });
+});
+
+describe("processPendingCheckins", () => {
+  type Call = [string, ...unknown[]];
+  let calls: Call[];
+  let result: { data: unknown; error: unknown };
+
+  function from(table: string) {
+    const builder: Record<string, unknown> = {};
+    for (const method of ["select", "not", "is", "lt", "order", "limit"]) {
+      builder[method] = (...args: unknown[]) => {
+        calls.push([`${table}.${method}`, ...args]);
+        return builder;
+      };
+    }
+    builder.then = (resolve: (r: unknown) => void) => resolve(result);
+    return builder;
+  }
+
+  const row = (id: string, overrides: Partial<ProcessingState> = {}) => ({
+    id,
+    submitted_at: minutesAgo(3000),
+    graded_at: null,
+    processing_started_at: minutesAgo(2990),
+    processing_error: "transcription_failed: 503",
+    processing_attempts: 1,
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    calls = [];
+    result = { data: [], error: null };
+    vi.mocked(createAdminClient).mockReset().mockReturnValue({ from } as never);
+    vi.mocked(processCheckin).mockReset().mockResolvedValue("graded");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("asks for submitted, ungraded check-ins with attempts left, oldest first", async () => {
+    await processPendingCheckins(NOW);
+    expect(calls).toEqual([
+      ["checkins.select", "id, submitted_at, graded_at, processing_started_at, processing_error, processing_attempts"],
+      ["checkins.not", "submitted_at", "is", null],
+      ["checkins.is", "graded_at", null],
+      ["checkins.lt", "processing_attempts", 5],
+      ["checkins.order", "submitted_at", { ascending: true }],
+      ["checkins.limit", 100],
+    ]);
+  });
+
+  it("processes the ones due an attempt, for any member, whenever the sweep runs", async () => {
+    result = {
+      data: [
+        row("failed-last-week"),
+        row("never-started", { processing_started_at: null, processing_error: null, processing_attempts: 0 }),
+        row("running", { processing_started_at: minutesAgo(2), processing_error: null }),
+        row("in-its-pause", { processing_started_at: minutesAgo(1), processing_attempts: 3 }),
+        row("stalled", { processing_started_at: minutesAgo(30), processing_error: null }),
+      ],
+      error: null,
+    };
+    vi.mocked(processCheckin).mockImplementation(async (id) => (id === "stalled" ? "failed" : "graded"));
+    expect(await processPendingCheckins(NOW)).toEqual({ due: 3, graded: 2 });
+    expect(vi.mocked(processCheckin).mock.calls.map(([id]) => id)).toEqual(["failed-last-week", "never-started", "stalled"]);
+  });
+
+  it("takes at most 20 in one run", async () => {
+    result = { data: Array.from({ length: 30 }, (_, i) => row(`c${i}`)), error: null };
+    expect(await processPendingCheckins(NOW)).toEqual({ due: 20, graded: 20 });
+  });
+
+  it("reports a failed read and processes nothing", async () => {
+    result = { data: null, error: { code: "PGRST000" } };
+    expect(await processPendingCheckins(NOW)).toBeNull();
+    expect(processCheckin).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledWith("processPendingCheckins: reading check-ins failed", { code: "PGRST000" });
+  });
+
+  it("never throws", async () => {
+    vi.mocked(createAdminClient).mockImplementation(() => {
+      throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
+    });
+    await expect(processPendingCheckins(NOW)).resolves.toBeNull();
   });
 });

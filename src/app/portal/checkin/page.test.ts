@@ -161,7 +161,8 @@ describe("/portal/checkin", () => {
       error: null,
     };
     const html = await render();
-    expect(createSignedUrl).toHaveBeenCalledExactlyOnceWith(DRAFT_PATH, 600);
+    // Two hours: long enough to come back to the tab and listen before submitting.
+    expect(createSignedUrl).toHaveBeenCalledExactlyOnceWith(DRAFT_PATH, 7200);
     expect(html).toContain(`src="${PLAYBACK}"`);
     expect(html).toContain("Recorded Thursday 8 October at 11:30 am · 3 min 12 s");
     expect(html).toContain("Delete and record again");

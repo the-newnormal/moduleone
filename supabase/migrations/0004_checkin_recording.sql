@@ -8,8 +8,8 @@
 --     both submit. After that there is no retake.
 --   * The server transcribes and grades each submitted check-in, and records which models did so.
 --     A failed attempt is retried on the same recording, up to five times.
---   * Drafts are the speaker's alone: not leaders, not hq, and not the recordings grant, until the
---     member submits.
+--   * A recording is the speaker's alone (not leaders, not hq, not the recordings grant) until the
+--     member submits it: drafts, and takes that were uploaded but never saved or were thrown away.
 --   * Members acknowledge a privacy notice once (per notice version) before their first recording.
 -- As in 0002, members only read: every write goes through server code with the service role, which
 -- takes the member from the session. The functions below are for that server code only.
@@ -43,6 +43,8 @@ alter table checkins
 
 -- The server looks for check-ins that were submitted but never graded.
 create index checkins_ungraded on checkins (submitted_at) where submitted_at is not null and graded_at is null;
+-- Storage asks whether a file is a check-in's recording (app_checkin_audio_is_checkin below).
+create index checkins_audio_path on checkins (audio_path) where audio_path is not null;
 
 -- ---------- checkin_drafts: this week's take, before it is submitted ----------
 create table checkin_drafts (
@@ -92,30 +94,33 @@ grant all on table recording_notices to service_role;
 create policy recording_notices_select on recording_notices for select to authenticated
   using (member_id = app_current_member_id());
 
--- ---------- storage: drafts are private to the speaker ----------
--- 0002 lets holders of the recordings grant play every file in 'checkin-audio'. A draft isn't a
--- check-in yet, so this restrictive policy (AND-ed with every other select policy) keeps drafts to
--- their speaker. Submitting deletes the draft row in the same transaction as it creates the
--- check-in, so the recording becomes playable by grant holders exactly when it is submitted.
-create function app_checkin_audio_is_draft(object_name text) returns boolean
+-- ---------- storage: a recording is private to the speaker until it is submitted ----------
+-- 0002 lets holders of the recordings grant play every file in 'checkin-audio'. This restrictive
+-- policy (AND-ed with every other select policy) narrows that to files a check-in points at, so
+-- everything else stays with its speaker: a draft, a take that was uploaded but never saved (the
+-- save failed, or the member threw it away), and a replaced take whose removal failed. Naming what
+-- others may see, rather than what they may not, keeps a file nothing points at private by
+-- default. Submitting creates the check-in in one transaction, so a recording becomes playable by
+-- grant holders exactly when it is submitted.
+create function app_checkin_audio_is_checkin(object_name text) returns boolean
   language sql stable security definer set search_path = '' as $$
-    select exists (select 1 from public.checkin_drafts d where d.audio_path = app_checkin_audio_is_draft.object_name);
+    select exists (select 1 from public.checkins c where c.audio_path = app_checkin_audio_is_checkin.object_name);
 $$;
-revoke execute on function app_checkin_audio_is_draft(text) from public, anon;
-grant execute on function app_checkin_audio_is_draft(text) to authenticated, service_role;
+revoke execute on function app_checkin_audio_is_checkin(text) from public, anon;
+grant execute on function app_checkin_audio_is_checkin(text) to authenticated, service_role;
 
-create policy checkin_audio_drafts_speaker_only on storage.objects as restrictive for select to authenticated
+create policy checkin_audio_unsubmitted_speaker_only on storage.objects as restrictive for select to authenticated
   using (
     bucket_id is distinct from 'checkin-audio'
     or (storage.foldername(objects.name))[1] = public.app_current_member_id()::text
-    or not public.app_checkin_audio_is_draft(objects.name)
+    or public.app_checkin_audio_is_checkin(objects.name)
   );
 
 -- ---------- server-only functions: save, delete and submit drafts; claim processing ----------
 -- Called by server code with the service role after it has taken the member from the session.
 -- Each works on the current Singapore week, worked out exactly as the column defaults do, so a
 -- draft and its check-in can't land in different weeks. Errors use SQLSTATE P0001 with a stable
--- message ('already_submitted', 'no_draft') for the app to act on.
+-- message ('already_submitted', 'no_draft', 'bad_path') for the app to act on.
 
 -- Saves the member's take for this week, replacing any earlier one. Returns the replaced take's
 -- audio_path (or null) so the caller can delete that file.
@@ -126,6 +131,14 @@ declare
   v_week date := (date_trunc('week', now() at time zone 'Asia/Singapore'))::date;
   v_old text;
 begin
+  -- Only a take made for this week ('<member_id>/<yyyy-mm-dd>-…', as the server names it), and
+  -- never a file a check-in already uses. The app checks the week too, but on its own clock: a
+  -- request that crosses Sunday midnight would otherwise turn an old take, or a submitted check-in's
+  -- recording, into next week's draft, which housekeeping later deletes.
+  if not starts_with(p_audio_path, p_member_id::text || '/' || to_char(v_week, 'YYYY-MM-DD') || '-')
+     or exists (select 1 from public.checkins c where c.audio_path = p_audio_path) then
+    raise exception using errcode = 'P0001', message = 'bad_path';
+  end if;
   -- Serialise this member's draft changes for the week (also covers the no-draft-yet case).
   perform pg_advisory_xact_lock(hashtextextended(p_member_id::text || v_week::text, 0));
   if exists (select 1 from public.checkins c where c.member_id = p_member_id and c.week_start = v_week) then
@@ -168,9 +181,13 @@ declare
   v_id uuid;
 begin
   perform pg_advisory_xact_lock(hashtextextended(p_member_id::text || v_week::text, 0));
+  -- Locked as well: housekeeping deletes old drafts without the advisory lock, so a submit just
+  -- before midnight either waits for that delete (and finds no draft) or makes it wait until the
+  -- draft has become the check-in.
   select * into v_draft
     from public.checkin_drafts d
-    where d.member_id = p_member_id and d.week_start = v_week;
+    where d.member_id = p_member_id and d.week_start = v_week
+    for update;
   if not found then
     -- Already submitted (the draft is gone) or nothing recorded yet.
     if exists (select 1 from public.checkins c where c.member_id = p_member_id and c.week_start = v_week) then

@@ -7,7 +7,9 @@ import { noticeSections, noticeVersion } from "@/lib/checkin/notice";
 import { processCheckin } from "@/lib/checkin/process";
 import { currentWeekStart } from "@/lib/checkin/week";
 import { createClient } from "@/lib/supabase/server";
+import { CardFocus } from "./card-focus";
 import { DraftControls } from "./draft-controls";
+import { DraftPlayer } from "./draft-player";
 import { formatDateTime, formatLength, formatWeekEnd, formatWeekStart } from "./format";
 import { needsProcessing, tidyMemberAudio, type ProcessingState } from "./housekeeping";
 import { NoticeForm } from "./notice-form";
@@ -22,7 +24,9 @@ export const maxDuration = 300;
 // Members never see their grade, so this page reads only the processing columns of their check-in:
 // never the scores, category, review or transcript.
 const CHECKIN_COLUMNS = "id, submitted_at, graded_at, processing_started_at, processing_error, processing_attempts";
-const PLAYBACK_SECONDS = 10 * 60;
+// Long enough to come back to the tab and listen before submitting (iOS fetches the audio only when
+// play is pressed). It's the member's own draft, and RLS is checked when the link is signed.
+const PLAYBACK_SECONDS = 2 * 60 * 60;
 
 type CheckinRow = ProcessingState & { id: string };
 type DraftRow = { audio_path: string; duration_ms: number | null; created_at: string };
@@ -57,7 +61,9 @@ export default async function CheckinPage() {
           time.
         </p>
       </header>
-      <CheckinCard view={view} />
+      <CardFocus state={view.state}>
+        <CheckinCard view={view} />
+      </CardFocus>
     </main>
   );
 }
@@ -151,7 +157,7 @@ function CheckinCard({ view }: { view: View }) {
         <Card>
           <CardHeader>
             <CardTitle>
-              <h2 className="text-2xl">Before you record</h2>
+              <h2 tabIndex={-1} className="text-2xl outline-none">Before you record</h2>
             </CardTitle>
             <CardDescription>How your recording is used. You&apos;ll only see this once.</CardDescription>
           </CardHeader>
@@ -173,7 +179,7 @@ function CheckinCard({ view }: { view: View }) {
         <Card>
           <CardHeader>
             <CardTitle>
-              <h2 className="text-2xl">Done for this week</h2>
+              <h2 tabIndex={-1} className="text-2xl outline-none">Done for this week</h2>
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -190,7 +196,7 @@ function CheckinCard({ view }: { view: View }) {
         <Card>
           <CardHeader>
             <CardTitle>
-              <h2 className="text-2xl">Your recording</h2>
+              <h2 tabIndex={-1} className="text-2xl outline-none">Your recording</h2>
             </CardTitle>
             <CardDescription>
               Listen back, then submit it or record again. Only you can hear it until you submit.
@@ -198,9 +204,7 @@ function CheckinCard({ view }: { view: View }) {
           </CardHeader>
           <CardContent className="grid gap-4">
             {view.playbackUrl ? (
-              <audio controls preload="metadata" src={view.playbackUrl} className="w-full">
-                Your browser can&apos;t play this recording.
-              </audio>
+              <DraftPlayer key={view.playbackUrl} src={view.playbackUrl} />
             ) : (
               <p className="text-sm text-muted-foreground">
                 Couldn&apos;t load the recording for playback. Refresh the page to try again.
@@ -219,7 +223,7 @@ function CheckinCard({ view }: { view: View }) {
         <Card>
           <CardHeader>
             <CardTitle>
-              <h2 className="text-2xl">Record your check-in</h2>
+              <h2 tabIndex={-1} className="text-2xl outline-none">Record your check-in</h2>
             </CardTitle>
           </CardHeader>
           <CardContent>

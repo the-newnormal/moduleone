@@ -232,6 +232,9 @@ export async function saveDraft(input: { path: string; durationMs?: number }): P
     await removeFile(admin, memberId, path);
     return submitted();
   }
+  // The database's own week check: the week turned while this request was on its way, or the path
+  // is a check-in's recording. Housekeeping deletes the file later if nothing points at it.
+  if (raised(error, "bad_path")) return fail("bad_path");
   if (error) {
     console.error("saveDraft: save_checkin_draft failed", { code: error.code });
     return fail("failed");

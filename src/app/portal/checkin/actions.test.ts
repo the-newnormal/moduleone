@@ -53,7 +53,9 @@ function rlsFrom(table: string) {
 }
 
 // The service-role client: rpc, an upsert, the check-ins lookup before a delete, and Storage.
-let checkinsUsingPath: unknown[];
+// The lookup only finds checkinsUsingPath when it filters on this member and this path.
+let checkinsUsingPath: { id: string; member_id: string; audio_path: string }[];
+let adminQueries: Query[];
 const rpc = vi.fn();
 const upsert = vi.fn();
 const createSignedUploadUrl = vi.fn();
@@ -61,11 +63,25 @@ const info = vi.fn();
 const remove = vi.fn();
 const storageFrom = vi.fn(() => ({ createSignedUploadUrl, info, remove }));
 function adminFrom(table: string) {
+  const query: Query = { table, columns: "", filters: [] };
+  adminQueries.push(query);
   const builder = {
     upsert,
-    select: () => builder,
-    eq: () => builder,
-    limit: async () => ({ data: table === "checkins" ? checkinsUsingPath : [], error: null }),
+    select(columns: string) {
+      query.columns = columns;
+      return builder;
+    },
+    eq(column: string, value: unknown) {
+      query.filters.push([column, value]);
+      return builder;
+    },
+    limit: async () => {
+      if (table !== "checkins") return { data: [], error: null };
+      const rows = checkinsUsingPath.filter((row) =>
+        query.filters.every(([column, value]) => row[column as keyof typeof row] === value),
+      );
+      return { data: rows.map(({ id }) => ({ id })), error: null };
+    },
   };
   return builder;
 }
@@ -84,6 +100,7 @@ beforeEach(() => {
     checkins: { data: null, error: null },
   };
   queries = [];
+  adminQueries = [];
   checkinsUsingPath = [];
   vi.mocked(createClient).mockResolvedValue({ auth: { getClaims }, from: rlsFrom } as never);
   vi.mocked(createAdminClient).mockReset().mockReturnValue({ rpc, from: adminFrom, storage: { from: storageFrom } } as never);
@@ -345,8 +362,22 @@ describe("saveDraft", () => {
 
   it("never deletes a submitted check-in's recording", async () => {
     rpc.mockResolvedValue(raised("already_submitted"));
-    checkinsUsingPath = [{ id: "d1000000-0000-4000-8000-000000000001" }];
+    checkinsUsingPath = [{ id: "d1000000-0000-4000-8000-000000000001", member_id: MEMBER, audio_path: PATH }];
     expect(await saveDraft({ path: PATH })).toEqual({ status: "submitted" });
+    expect(adminQueries.find((q) => q.table === "checkins")?.filters).toEqual([
+      ["member_id", MEMBER],
+      ["audio_path", PATH],
+    ]);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("refuses, and keeps the file, when the database says the take isn't this week's", async () => {
+    rpc.mockResolvedValue(raised("bad_path"));
+    expect(await saveDraft({ path: PATH })).toEqual({
+      status: "error",
+      code: "bad_path",
+      message: "That recording can't be saved. Record it again.",
+    });
     expect(remove).not.toHaveBeenCalled();
   });
 

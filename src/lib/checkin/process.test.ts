@@ -75,12 +75,15 @@ describe("processCheckin", () => {
     expect(rpc).toHaveBeenCalledExactlyOnceWith("claim_checkin_processing", { p_checkin_id: CHECKIN });
     expect(storageFrom).toHaveBeenCalledWith("checkin-audio");
     expect(download).toHaveBeenCalledExactlyOnceWith(PATH);
-    expect(transcribe).toHaveBeenCalledExactlyOnceWith({
-      data: new Uint8Array([1, 2, 3]),
-      mimeType: "audio/webm",
-      filename: "2026-10-05-take.webm",
-      durationSeconds: 95,
-    });
+    expect(transcribe).toHaveBeenCalledExactlyOnceWith(
+      {
+        data: new Uint8Array([1, 2, 3]),
+        mimeType: "audio/webm",
+        filename: "2026-10-05-take.webm",
+        durationSeconds: 95,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(gradeCheckin).toHaveBeenCalledExactlyOnceWith({ transcript: TRANSCRIPT });
     expect(updates).toEqual([
       {
@@ -135,6 +138,7 @@ describe("processCheckin", () => {
     await processCheckin(CHECKIN);
     expect(transcribe).toHaveBeenCalledWith(
       expect.objectContaining({ mimeType: "audio/mp4", filename: "2026-10-05-take.m4a", durationSeconds: undefined }),
+      expect.anything(),
     );
   });
 
@@ -145,6 +149,27 @@ describe("processCheckin", () => {
     expect(updates).toEqual([
       { table: "checkins", values: { processing_error: "download_failed: Object not found" }, filters: [["eq", "id", CHECKIN]] },
     ]);
+  });
+
+  it("gives transcription a deadline well inside the function's 300 seconds", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    await processCheckin(CHECKIN);
+    expect(timeout).toHaveBeenCalledOnce();
+    const [budget] = timeout.mock.calls[0];
+    expect(budget).toBeGreaterThanOrEqual(120_000);
+    expect(budget).toBeLessThanOrEqual(240_000);
+    expect(vi.mocked(transcribe).mock.calls[0][1]?.signal).toBe(timeout.mock.results[0].value);
+  });
+
+  it("records a transcription that ran out of time, so it is retried", async () => {
+    vi.mocked(transcribe).mockRejectedValue(
+      new TranscriptionError("Transcription was cancelled.", { provider: "openai", model: "gpt-transcribe", retryable: false }),
+    );
+    expect(await processCheckin(CHECKIN)).toBe("failed");
+    expect(gradeCheckin).not.toHaveBeenCalled();
+    expect(updates.at(-1)?.values).toEqual({
+      processing_error: "transcription_failed: TranscriptionError: Transcription was cancelled.",
+    });
   });
 
   it("records a failed transcription and doesn't grade", async () => {

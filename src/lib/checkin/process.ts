@@ -16,6 +16,13 @@ type Claim = {
 
 const BUCKET = "checkin-audio";
 
+// How long one attempt may spend transcribing, fallback included. The function running it (the
+// check-in page's after(), or the cron route) is stopped at 300 seconds, and a stopped attempt
+// records nothing, so it would only be retried 10 minutes later. Stopping here leaves time to grade
+// and save, and records the failure so the usual retries apply. The transcript is saved before
+// grading, so a retry after a slow grade doesn't transcribe again.
+const TRANSCRIBE_BUDGET_MS = 200_000;
+
 // Transcribes and grades one submitted check-in, then stores the result. Safe to call more than
 // once and from several places at the same time: claim_checkin_processing (0004) hands each attempt
 // to one caller only, and a graded check-in is never processed again.
@@ -65,12 +72,15 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
 
     let result;
     try {
-      result = await transcribe({
-        data: new Uint8Array(await blob.arrayBuffer()),
-        mimeType: blob.type || mimeFromFilename(filename),
-        filename,
-        durationSeconds: claim.audio_duration_ms === null ? undefined : claim.audio_duration_ms / 1000,
-      });
+      result = await transcribe(
+        {
+          data: new Uint8Array(await blob.arrayBuffer()),
+          mimeType: blob.type || mimeFromFilename(filename),
+          filename,
+          durationSeconds: claim.audio_duration_ms === null ? undefined : claim.audio_duration_ms / 1000,
+        },
+        { signal: AbortSignal.timeout(TRANSCRIBE_BUDGET_MS) },
+      );
     } catch (error) {
       return fail(error instanceof TranscriptionError ? "transcription_failed" : "transcription_error", error);
     }
