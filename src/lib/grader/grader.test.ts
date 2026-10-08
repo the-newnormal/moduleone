@@ -11,7 +11,7 @@ import {
   RateLimitError,
 } from "@anthropic-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GRADER_MODEL, gradeCheckin, GradingError } from "./index";
+import { GRADER_MODEL, GRADER_TIMEOUT_MS, gradeCheckin, GradingError } from "./index";
 import { GRADE_JSON_SCHEMA, parseGradeOutput } from "./output";
 import { countWords, GRADER_SYSTEM_PROMPT } from "./prompt";
 
@@ -156,7 +156,17 @@ describe("gradeCheckin request", () => {
   it("builds the client lazily with the key, no other credentials and no fixed base URL", async () => {
     vi.stubEnv("ANTHROPIC_API_KEY", " sk-test \n");
     await gradeCheckin({ transcript: TRANSCRIPT });
-    expect(clientOptions).toEqual([{ apiKey: "sk-test", authToken: null, timeout: 120_000, maxRetries: 2 }]);
+    expect(clientOptions).toEqual([{ apiKey: "sk-test", authToken: null, timeout: GRADER_TIMEOUT_MS, maxRetries: 2 }]);
+  });
+
+  it("gives the whole call, the SDK's retries included, one deadline", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    await gradeCheckin({ transcript: TRANSCRIPT });
+    // Five minutes: room for a reply that thinks for most of max_tokens, and no second try of a
+    // slow reply after that.
+    expect(GRADER_TIMEOUT_MS).toBe(300_000);
+    expect(timeout).toHaveBeenCalledExactlyOnceWith(GRADER_TIMEOUT_MS);
+    expect(create.mock.calls[0][1]).toEqual({ signal: timeout.mock.results[0].value });
   });
 });
 
@@ -209,14 +219,28 @@ describe("gradeCheckin reply", () => {
     await expect(gradeCheckin({ transcript: TRANSCRIPT })).resolves.toMatchObject({ review: GOOD.review });
   });
 
+  const refusal = (recommended_model: string | null) =>
+    reply({
+      stop_reason: "refusal",
+      stop_details: { type: "refusal", category: "cyber", explanation: null, recommended_model },
+      content: [],
+    });
+
   it("reports a refusal without reading the content", async () => {
-    create.mockResolvedValue(
-      reply({ stop_reason: "refusal", stop_details: { type: "refusal", category: "cyber", explanation: null }, content: [] }),
-    );
+    // The fallback model declined too: the same transcript would most likely be declined again.
+    create.mockResolvedValue(refusal(null));
     const error = await gradingError(gradeCheckin({ transcript: TRANSCRIPT }));
     expect(error.reason).toBe("refusal");
     expect(error.retryable).toBe(false);
     expect(error.message).toContain("cyber");
+  });
+
+  it("treats a refusal as worth retrying when the fallback model couldn't run", async () => {
+    // Rate-limited or overloaded, so the API returned the first refusal and named a model to try.
+    create.mockResolvedValue(refusal("claude-opus-4-8"));
+    const error = await gradingError(gradeCheckin({ transcript: TRANSCRIPT }));
+    expect(error.reason).toBe("refusal");
+    expect(error.retryable).toBe(true);
   });
 
   it.each([["max_tokens"], ["model_context_window_exceeded"], ["pause_turn"]])(
@@ -310,6 +334,15 @@ describe("gradeCheckin API errors", () => {
     expect(error.retryable).toBe(retryable);
     expect(error.cause).toBe(thrown);
     expect(error.message).not.toContain("sk-test");
+  });
+
+  it("reports running out of time as a timeout worth retrying", async () => {
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort(new DOMException("Timed out", "TimeoutError")));
+    create.mockRejectedValue(new APIUserAbortError());
+    const error = await gradingError(gradeCheckin({ transcript: TRANSCRIPT }));
+    expect(error.reason).toBe("api");
+    expect(error.retryable).toBe(true);
+    expect(error.message).toBe("No grade from the Anthropic API within 300 s");
   });
 });
 

@@ -21,7 +21,8 @@ const BUCKET = "checkin-audio";
 // to one caller only, and a graded check-in is never processed again.
 //
 // Never throws: it runs inside after(), where an exception would only end up in the logs. Failures
-// are recorded in checkins.processing_error and retried on a later claim (up to five attempts).
+// are recorded in checkins.processing_error and retried on a later claim (up to five attempts; a
+// grader configuration failure doesn't use one up, see below).
 export async function processCheckin(checkinId: string): Promise<ProcessOutcome> {
   let admin;
   try {
@@ -41,14 +42,15 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
   const claim = (claimed as Claim[] | null)?.[0];
   if (!claim) return "skipped";
 
-  const fail = async (code: string, error: unknown) => {
+  const fail = async (code: string, error: unknown, { giveBackAttempt = false } = {}) => {
     // A short, stable reason for whoever looks at the row; no transcript text, no secrets.
     const message = `${code}: ${describe(error)}`.slice(0, 500);
     console.error("processCheckin failed", { checkinId, attempt: claim.attempts, code, error: describe(error) });
-    const { error: updateError } = await admin
-      .from("checkins")
-      .update({ processing_error: message })
-      .eq("id", checkinId);
+    // Set rather than decremented: no other caller can claim the row while this attempt runs.
+    const values = giveBackAttempt
+      ? { processing_error: message, processing_attempts: claim.attempts - 1 }
+      : { processing_error: message };
+    const { error: updateError } = await admin.from("checkins").update(values).eq("id", checkinId);
     if (updateError) console.error("processCheckin: could not record the failure", { checkinId, code: updateError.code });
     return "failed" as const;
   };
@@ -89,8 +91,12 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
   try {
     grade = await gradeCheckin({ transcript });
   } catch (error) {
-    const code = error instanceof GradingError ? `grading_${error.reason}` : "grading_error";
-    return fail(code, error);
+    if (!(error instanceof GradingError)) return fail("grading_error", error);
+    // A configuration problem (no or a wrong ANTHROPIC_API_KEY, a model or request the API won't
+    // take) fails every check-in the same way until someone fixes it, and costs nothing to try
+    // again: no reply is generated. So it doesn't use up an attempt, and the first visit after the
+    // fix grades the check-in.
+    return fail(`grading_${error.reason}`, error, { giveBackAttempt: error.reason === "api" && !error.retryable });
   }
   const { error: gradeError } = await admin
     .from("checkins")

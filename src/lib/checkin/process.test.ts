@@ -171,6 +171,58 @@ describe("processCheckin", () => {
     ]);
   });
 
+  describe("attempts", () => {
+    // claim_checkin_processing (0004) in miniature: each claim counts an attempt, five at most, and
+    // the row keeps what processCheckin writes back.
+    let row: { attempts: number; transcript: string | null };
+    const visit = async () => {
+      updates = [];
+      const outcome = await processCheckin(CHECKIN);
+      for (const { values } of updates) {
+        if (typeof values.processing_attempts === "number") row.attempts = values.processing_attempts;
+        if (typeof values.transcript === "string") row.transcript = values.transcript;
+      }
+      return outcome;
+    };
+
+    beforeEach(() => {
+      row = { attempts: 0, transcript: null };
+      rpc.mockImplementation(async () => {
+        if (row.attempts >= 5) return { data: [], error: null };
+        row.attempts += 1;
+        return claim({ attempts: row.attempts, transcript: row.transcript });
+      });
+    });
+
+    it("doesn't use them up while the grader is misconfigured, so it grades once the key is fixed", async () => {
+      vi.mocked(gradeCheckin).mockRejectedValue(
+        new GradingError("Missing ANTHROPIC_API_KEY (server-only).", { reason: "api", retryable: false }),
+      );
+      for (let i = 0; i < 8; i++) expect(await visit()).toBe("failed");
+      expect(row.attempts).toBe(0);
+      expect(transcribe).toHaveBeenCalledOnce();
+      expect(updates.at(-1)?.values).toEqual({
+        processing_error: "grading_api: GradingError: Missing ANTHROPIC_API_KEY (server-only).",
+        processing_attempts: 0,
+      });
+
+      vi.mocked(gradeCheckin).mockResolvedValue(GRADE);
+      expect(await visit()).toBe("graded");
+    });
+
+    it.each([
+      ["a rate limit", new GradingError("Rate limited.", { reason: "api", retryable: true })],
+      ["a refusal", new GradingError("Claude declined.", { reason: "refusal", retryable: false })],
+      ["invalid output", new GradingError("Bad output.", { reason: "invalid_output", retryable: true })],
+    ])("counts %s, and stops after five", async (_label, thrown) => {
+      vi.mocked(gradeCheckin).mockRejectedValue(thrown);
+      for (let i = 0; i < 5; i++) expect(await visit()).toBe("failed");
+      expect(row.attempts).toBe(5);
+      expect(await visit()).toBe("skipped");
+      expect(gradeCheckin).toHaveBeenCalledTimes(5);
+    });
+  });
+
   it("records a failure to save the transcript and doesn't grade", async () => {
     updateError = { code: "PGRST000", message: "connection lost" };
     expect(await processCheckin(CHECKIN)).toBe("failed");

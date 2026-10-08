@@ -23,7 +23,11 @@ export const MIN_TRANSCRIPT_WORDS = 5;
 // Thinking is always on for this model and counts towards max_tokens, so leave room for it as
 // well as the short JSON reply.
 const MAX_TOKENS = 16_000;
-const TIMEOUT_MS = 120_000;
+
+// One time limit for the whole grading call, the SDK's retries included, so the check-in page can
+// give after() a maxDuration that covers transcription plus grading. Five minutes leaves room for
+// long thinking (most of MAX_TOKENS); a try that runs out of time is not asked for again.
+export const GRADER_TIMEOUT_MS = 300_000;
 
 // Claude's safety classifiers can occasionally decline a benign request. With fallbacks on, the
 // API re-runs a declined request on the model Anthropic recommends instead of failing it; the
@@ -52,35 +56,42 @@ export async function gradeCheckin(input: { transcript: string }): Promise<Grade
       retryable: false,
     });
   }
-  const client = new Anthropic({ apiKey, authToken: null, timeout: TIMEOUT_MS, maxRetries: 2 });
+  const client = new Anthropic({ apiKey, authToken: null, timeout: GRADER_TIMEOUT_MS, maxRetries: 2 });
+  // The SDK's timeout is per try; this bounds all the tries together.
+  const deadline = AbortSignal.timeout(GRADER_TIMEOUT_MS);
 
   let response;
   try {
-    response = await client.beta.messages.create({
-      model: GRADER_MODEL,
-      max_tokens: MAX_TOKENS,
-      betas: [REFUSAL_FALLBACK_BETA],
-      fallbacks: "default",
-      // No `thinking` field: on this model thinking is always on and effort sets its depth
-      // (default medium; grading is a judgement call, so high).
-      output_config: {
-        effort: "high",
-        format: { type: "json_schema", schema: GRADE_JSON_SCHEMA },
+    response = await client.beta.messages.create(
+      {
+        model: GRADER_MODEL,
+        max_tokens: MAX_TOKENS,
+        betas: [REFUSAL_FALLBACK_BETA],
+        fallbacks: "default",
+        // No `thinking` field: on this model thinking is always on and effort sets its depth
+        // (default medium; grading is a judgement call, so high).
+        output_config: {
+          effort: "high",
+          format: { type: "json_schema", schema: GRADE_JSON_SCHEMA },
+        },
+        system: GRADER_SYSTEM_PROMPT,
+        messages: [{ role: "user", content: transcriptMessage(transcript) }],
       },
-      system: GRADER_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: transcriptMessage(transcript) }],
-    });
+      { signal: deadline },
+    );
   } catch (error) {
-    throw apiFailure(error);
+    throw apiFailure(error, deadline);
   }
 
   // A refusal or a cut-off reply still comes back as a 200 whose text needn't match the schema,
   // so check why the reply ended before reading it.
   if (response.stop_reason === "refusal") {
+    // With fallbacks on, a refusal means the fallback model declined too, or couldn't run
+    // (rate-limited or overloaded). Only the second sets recommended_model, and may pass later.
     const category = response.stop_details?.category;
     throw new GradingError(`Claude declined to grade this check-in${category ? ` (${category})` : ""}`, {
       reason: "refusal",
-      retryable: false,
+      retryable: Boolean(response.stop_details?.recommended_model),
     });
   }
   if (response.stop_reason !== "end_turn") {
@@ -97,10 +108,17 @@ export async function gradeCheckin(input: { transcript: string }): Promise<Grade
 }
 
 // The SDK's abort and network errors are subclasses of APIError, so they're checked first.
-function apiFailure(error: unknown): GradingError {
+function apiFailure(error: unknown, deadline: AbortSignal): GradingError {
   const wrap = (message: string, retryable: boolean) =>
     new GradingError(message, { reason: "api", retryable, cause: error });
-  if (error instanceof APIUserAbortError) return wrap("The grading request was cancelled", true);
+  if (error instanceof APIUserAbortError) {
+    return wrap(
+      deadline.aborted
+        ? `No grade from the Anthropic API within ${GRADER_TIMEOUT_MS / 1000} s`
+        : "The grading request was cancelled",
+      true,
+    );
+  }
   if (error instanceof APIConnectionTimeoutError) return wrap("Timed out waiting for the Anthropic API", true);
   if (error instanceof APIConnectionError) return wrap("Couldn't reach the Anthropic API", true);
   if (error instanceof APIError) {
