@@ -5,7 +5,7 @@
 --   team R: leader lead_r, members m1 and m2      hq      role hq, no team, no grants
 --   auditor no team, recordings grant             outsider signed in, but no members row
 begin;
-select plan(113);
+select plan(116);
 
 -- ---------- fixtures ----------
 insert into auth.users (id, email) values
@@ -72,16 +72,16 @@ select table_privs_are(
 select function_privs_are('public', f, args, r, array[]::text[], format('%s cannot call %s', r, f))
   from (values
     ('save_checkin_draft', array['uuid', 'text', 'text', 'integer', 'timestamp with time zone']),
-    ('delete_checkin_draft', array['uuid']),
-    ('submit_checkin_draft', array['uuid']),
+    ('delete_checkin_draft', array['uuid', 'text']),
+    ('submit_checkin_draft', array['uuid', 'text']),
     ('claim_checkin_processing', array['uuid'])
   ) fn (f, args)
   cross join unnest(array['anon', 'authenticated']) r;
 select function_privs_are('public', f, args, 'service_role', array['EXECUTE'], format('the server can call %s', f))
   from (values
     ('save_checkin_draft', array['uuid', 'text', 'text', 'integer', 'timestamp with time zone']),
-    ('delete_checkin_draft', array['uuid']),
-    ('submit_checkin_draft', array['uuid']),
+    ('delete_checkin_draft', array['uuid', 'text']),
+    ('submit_checkin_draft', array['uuid', 'text']),
     ('claim_checkin_processing', array['uuid'])
   ) fn (f, args);
 select function_privs_are('public', 'app_checkin_audio_is_checkin', array['text'], 'anon', array[]::text[],
@@ -91,7 +91,7 @@ select is(
   array['search_path=""'], format('%s runs with an empty search_path', f)
 ) from unnest(array[
   'public.app_checkin_audio_is_checkin(text)', 'public.save_checkin_draft(uuid,text,text,integer,timestamptz)',
-  'public.delete_checkin_draft(uuid)', 'public.submit_checkin_draft(uuid)', 'public.claim_checkin_processing(uuid)'
+  'public.delete_checkin_draft(uuid,text)', 'public.submit_checkin_draft(uuid,text)', 'public.claim_checkin_processing(uuid)'
 ]) f;
 
 -- ---------- the server saves, replaces and deletes drafts ----------
@@ -136,15 +136,19 @@ select throws_ok(
   $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-3.webm'), 'video/webm', null, now())$$,
   '23514', null, 'a draft must be audio'
 );
+select throws_ok(
+  format($$select delete_checkin_draft('c1000000-0000-4000-8000-000000000002', %L)$$, pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-1.webm')),
+  'P0001', 'draft_changed', 'deleting the take the member was shown, when another is the draft now, deletes nothing'
+);
 select is(
-  delete_checkin_draft('c1000000-0000-4000-8000-000000000002'),
+  delete_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-2.webm')),
   pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-2.webm'), 'deleting a draft returns its recording, for the server to delete'
 );
 select is(
   pg_temp.n($$select 1 from checkin_drafts where member_id = 'c1000000-0000-4000-8000-000000000002'$$),
   0, 'the draft is gone'
 );
-select is(delete_checkin_draft('c1000000-0000-4000-8000-000000000002'), null, 'deleting when there is no draft returns nothing');
+select is(delete_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-2.webm')), null, 'deleting when there is no draft returns nothing');
 
 -- A take that arrives late (its save timed out and finished anyway, or it was retried from another
 -- tab or device) never replaces one recorded after it.
@@ -181,7 +185,7 @@ select throws_ok(
   'P0001', 'unknown_order', 'a take whose recording time is unknown neither replaces nor yields to another take'
 );
 select is(
-  delete_checkin_draft('c1000000-0000-4000-8000-000000000002'),
+  delete_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-3.webm')),
   pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-3.webm'), 'deleting removes the latest take'
 );
 select is(
@@ -189,21 +193,29 @@ select is(
   null, 'with no draft, a take whose recording time is unknown becomes the draft'
 );
 select is(
-  delete_checkin_draft('c1000000-0000-4000-8000-000000000002'),
+  delete_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-4.webm')),
   pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-4.webm'), 'and can be deleted again'
 );
 
 -- ---------- submitting ----------
 select throws_ok(
-  $$select submit_checkin_draft('c1000000-0000-4000-8000-000000000002')$$,
+  format($$select submit_checkin_draft('c1000000-0000-4000-8000-000000000002', %L)$$, pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-4.webm')),
   'P0001', 'no_draft', 'nothing to submit without a draft'
 );
 select lives_ok(
   $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-4.webm'), 'audio/webm', 70000)$$,
   'm1 records again'
 );
+select throws_ok(
+  format($$select submit_checkin_draft('c1000000-0000-4000-8000-000000000002', %L)$$, pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-2.webm')),
+  'P0001', 'draft_changed', 'submitting a take the member was shown, when another is the draft now, submits nothing'
+);
+select is(
+  pg_temp.n($$select 1 from checkins where member_id = 'c1000000-0000-4000-8000-000000000002' and week_start = pg_temp.this_week()$$),
+  0, 'so nothing is submitted'
+);
 create temp table submitted as
-  select submit_checkin_draft('c1000000-0000-4000-8000-000000000002') as id;
+  select submit_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-4.webm')) as id;
 select isnt((select id from submitted), null, 'submitting returns the new check-in');
 select is(
   (select (week_start, team_id, audio_path, audio_duration_ms, submitted_at is not null, activity_score is null)::text
@@ -217,7 +229,7 @@ select is(
   0, 'submitting removes the draft'
 );
 select throws_ok(
-  $$select submit_checkin_draft('c1000000-0000-4000-8000-000000000002')$$,
+  format($$select submit_checkin_draft('c1000000-0000-4000-8000-000000000002', %L)$$, pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-4.webm')),
   'P0001', 'already_submitted', 'a week is submitted once'
 );
 select throws_ok(
@@ -330,7 +342,7 @@ select throws_ok(
   '42501', null, 'm2 cannot record a notice acknowledgement directly'
 );
 select throws_ok(
-  $$select submit_checkin_draft('c1000000-0000-4000-8000-000000000003')$$,
+  format($$select submit_checkin_draft('c1000000-0000-4000-8000-000000000003', %L)$$, pg_temp.take('c1000000-0000-4000-8000-000000000003', 'draft.webm')),
   '42501', null, 'm2 cannot call submit_checkin_draft'
 );
 select throws_ok(
@@ -388,7 +400,7 @@ reset role;
 
 -- ---------- once submitted, the recording is no longer a draft ----------
 set local role service_role;
-select lives_ok($$select submit_checkin_draft('c1000000-0000-4000-8000-000000000003')$$, 'm2 submits');
+select lives_ok(format($$select submit_checkin_draft('c1000000-0000-4000-8000-000000000003', %L)$$, pg_temp.take('c1000000-0000-4000-8000-000000000003', 'draft.webm')), 'm2 submits');
 reset role;
 set local role authenticated;
 set local request.jwt.claims to '{"sub": "a1000000-0000-4000-8000-000000000005", "role": "authenticated"}';

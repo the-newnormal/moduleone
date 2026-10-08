@@ -134,8 +134,8 @@ create policy checkin_audio_unsubmitted_speaker_only on storage.objects as restr
 -- Called by server code with the service role after it has taken the member from the session.
 -- Each works on the current Singapore week, worked out exactly as the column defaults do, so a
 -- draft and its check-in can't land in different weeks. Errors use SQLSTATE P0001 with a stable
--- message ('already_submitted', 'no_draft', 'bad_path', 'newer_draft', 'unknown_order') for the app
--- to act on.
+-- message ('already_submitted', 'no_draft', 'bad_path', 'newer_draft', 'unknown_order',
+-- 'draft_changed') for the app to act on.
 
 -- Saves the member's take for this week, replacing any earlier one. Returns the replaced take's
 -- audio_path (or null) so the caller can delete that file. A take recorded before the current
@@ -189,23 +189,34 @@ begin
   return case when v_old is distinct from p_audio_path then v_old end;
 end $$;
 
--- Deletes the member's take for this week. Returns its audio_path (or null if there was none).
-create function delete_checkin_draft(p_member_id uuid) returns text
+-- Deletes the member's take for this week: the one at p_audio_path, the take the member was shown.
+-- Returns its audio_path, or null if there was no draft. If the draft is another take now (saved
+-- from another tab or device since), raises 'draft_changed' and deletes nothing.
+create function delete_checkin_draft(p_member_id uuid, p_audio_path text) returns text
   language plpgsql set search_path = '' as $$
 declare
   v_week date := (date_trunc('week', now() at time zone 'Asia/Singapore'))::date;
   v_path text;
 begin
   perform pg_advisory_xact_lock(hashtextextended(p_member_id::text || v_week::text, 0));
-  delete from public.checkin_drafts d
-    where d.member_id = p_member_id and d.week_start = v_week
-    returning d.audio_path into v_path;
+  select d.audio_path into v_path
+    from public.checkin_drafts d
+    where d.member_id = p_member_id and d.week_start = v_week;
+  if v_path is null then
+    return null;
+  end if;
+  if v_path is distinct from p_audio_path then
+    raise exception using errcode = 'P0001', message = 'draft_changed';
+  end if;
+  delete from public.checkin_drafts d where d.member_id = p_member_id and d.week_start = v_week;
   return v_path;
 end $$;
 
--- Turns the member's take for this week into the week's check-in. Returns the new check-in's id.
--- week_start and team_id come from the column default and 0002's trigger, as for any check-in.
-create function submit_checkin_draft(p_member_id uuid) returns uuid
+-- Turns the member's take for this week into the week's check-in: the one at p_audio_path, the take
+-- the member listened to. Returns the new check-in's id. If the draft is another take now, raises
+-- 'draft_changed' and submits nothing. week_start and team_id come from the column default and
+-- 0002's trigger, as for any check-in.
+create function submit_checkin_draft(p_member_id uuid, p_audio_path text) returns uuid
   language plpgsql set search_path = '' as $$
 declare
   v_week date := (date_trunc('week', now() at time zone 'Asia/Singapore'))::date;
@@ -226,6 +237,9 @@ begin
       raise exception using errcode = 'P0001', message = 'already_submitted';
     end if;
     raise exception using errcode = 'P0001', message = 'no_draft';
+  end if;
+  if v_draft.audio_path is distinct from p_audio_path then
+    raise exception using errcode = 'P0001', message = 'draft_changed';
   end if;
   insert into public.checkins (member_id, week_start, audio_path, audio_duration_ms, submitted_at)
     values (p_member_id, v_week, v_draft.audio_path, v_draft.duration_ms, now())
@@ -263,12 +277,12 @@ create function claim_checkin_processing(p_checkin_id uuid)
 $$;
 
 revoke execute on function
-  save_checkin_draft(uuid, text, text, int, timestamptz), delete_checkin_draft(uuid),
-  submit_checkin_draft(uuid), claim_checkin_processing(uuid)
+  save_checkin_draft(uuid, text, text, int, timestamptz), delete_checkin_draft(uuid, text),
+  submit_checkin_draft(uuid, text), claim_checkin_processing(uuid)
   from public, anon, authenticated;
 grant execute on function
-  save_checkin_draft(uuid, text, text, int, timestamptz), delete_checkin_draft(uuid),
-  submit_checkin_draft(uuid), claim_checkin_processing(uuid)
+  save_checkin_draft(uuid, text, text, int, timestamptz), delete_checkin_draft(uuid, text),
+  submit_checkin_draft(uuid, text), claim_checkin_processing(uuid)
   to service_role;
 
 -- ---------- retention: recordings are deleted after 90 days ----------

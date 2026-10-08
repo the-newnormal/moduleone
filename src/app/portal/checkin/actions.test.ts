@@ -129,8 +129,8 @@ const ACTIONS = [
   ["acceptNotice", () => acceptNotice(noticeVersion())],
   ["prepareRecording", () => prepareRecording("audio/webm")],
   ["saveDraft", () => saveDraft({ path: PATH, durationMs: 1000 })],
-  ["deleteDraft", () => deleteDraft()],
-  ["submitCheckin", () => submitCheckin()],
+  ["deleteDraft", () => deleteDraft(PATH)],
+  ["submitCheckin", () => submitCheckin(PATH)],
 ] as const;
 
 describe("every check-in action", () => {
@@ -430,27 +430,48 @@ describe("saveDraft", () => {
 describe("deleteDraft", () => {
   it("deletes this week's draft and its file", async () => {
     rpc.mockResolvedValue({ data: PATH, error: null });
-    expect(await deleteDraft()).toEqual({ status: "deleted", path: PATH });
-    expect(rpc).toHaveBeenCalledExactlyOnceWith("delete_checkin_draft", { p_member_id: MEMBER });
+    expect(await deleteDraft(PATH)).toEqual({ status: "deleted", path: PATH });
+    expect(rpc).toHaveBeenCalledExactlyOnceWith("delete_checkin_draft", { p_member_id: MEMBER, p_audio_path: PATH });
     expect(remove).toHaveBeenCalledExactlyOnceWith([PATH]);
     expect(revalidatePath).toHaveBeenCalledExactlyOnceWith(PAGE);
   });
 
   it("is fine when there was no draft", async () => {
-    expect(await deleteDraft()).toEqual({ status: "deleted", path: null });
+    expect(await deleteDraft(PATH)).toEqual({ status: "deleted", path: null });
     expect(remove).not.toHaveBeenCalled();
   });
 
   it("only ever deletes files in the member's own folder", async () => {
     rpc.mockResolvedValue({ data: `${OTHER}/${WEEK}-x.webm`, error: null });
-    await deleteDraft();
+    await deleteDraft(PATH);
     expect(remove).not.toHaveBeenCalled();
   });
 
   it("reports a database error", async () => {
     rpc.mockResolvedValue({ data: null, error: { code: "57014", message: "timeout" } });
-    expect(await deleteDraft()).toMatchObject({ status: "error", code: "failed" });
+    expect(await deleteDraft(PATH)).toMatchObject({ status: "error", code: "failed" });
     expect(remove).not.toHaveBeenCalled();
+  });
+});
+
+describe("a draft replaced from another tab or device", () => {
+  it.each([
+    ["deleteDraft", () => deleteDraft(PATH)],
+    ["submitCheckin", () => submitCheckin(PATH)],
+  ])("%s touches nothing and shows the draft saved now", async (_name, call) => {
+    rpc.mockResolvedValue(raised("draft_changed"));
+    expect(await call()).toMatchObject({ status: "error", code: "draft_changed" });
+    expect(remove).not.toHaveBeenCalled();
+    expect(revalidatePath).toHaveBeenCalledWith(PAGE);
+    expect(after).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["deleteDraft", () => deleteDraft(42 as unknown as string)],
+    ["submitCheckin", () => submitCheckin(42 as unknown as string)],
+  ])("%s refuses a path that isn't a string", async (_name, call) => {
+    expect(await call()).toMatchObject({ status: "error", code: "bad_path" });
+    expect(rpc).not.toHaveBeenCalled();
   });
 });
 
@@ -459,8 +480,8 @@ describe("submitCheckin", () => {
 
   it("submits the draft and schedules processing once, for the new check-in", async () => {
     rpc.mockResolvedValue({ data: ID, error: null });
-    expect(await submitCheckin()).toEqual({ status: "submitted" });
-    expect(rpc).toHaveBeenCalledExactlyOnceWith("submit_checkin_draft", { p_member_id: MEMBER });
+    expect(await submitCheckin(PATH)).toEqual({ status: "submitted" });
+    expect(rpc).toHaveBeenCalledExactlyOnceWith("submit_checkin_draft", { p_member_id: MEMBER, p_audio_path: PATH });
     expect(after).toHaveBeenCalledOnce();
     expect(processCheckin).not.toHaveBeenCalled(); // not before the response is sent
 
@@ -472,7 +493,7 @@ describe("submitCheckin", () => {
 
   it("asks for a recording when there's no draft", async () => {
     rpc.mockResolvedValue(raised("no_draft"));
-    expect(await submitCheckin()).toEqual({
+    expect(await submitCheckin(PATH)).toEqual({
       status: "error",
       code: "no_draft",
       message: "Record your answers before you submit.",
@@ -482,20 +503,20 @@ describe("submitCheckin", () => {
 
   it("shows the check-in when it was already submitted (another tab)", async () => {
     rpc.mockResolvedValue(raised("already_submitted"));
-    expect(await submitCheckin()).toEqual({ status: "submitted" });
+    expect(await submitCheckin(PATH)).toEqual({ status: "submitted" });
     expect(after).not.toHaveBeenCalled();
   });
 
   it("asks for the current privacy notice before sending the recording on", async () => {
     reads.recording_notices = { data: null, error: null };
-    expect(await submitCheckin()).toMatchObject({ status: "error", code: "notice_required" });
+    expect(await submitCheckin(PATH)).toMatchObject({ status: "error", code: "notice_required" });
     expect(rpc).not.toHaveBeenCalled();
     expect(revalidatePath).toHaveBeenCalledExactlyOnceWith(PAGE);
   });
 
   it("reports other errors and schedules nothing", async () => {
     rpc.mockResolvedValue({ data: null, error: { code: "40001", message: "serialization failure" } });
-    expect(await submitCheckin()).toMatchObject({ status: "error", code: "failed" });
+    expect(await submitCheckin(PATH)).toMatchObject({ status: "error", code: "failed" });
     expect(after).not.toHaveBeenCalled();
   });
 });

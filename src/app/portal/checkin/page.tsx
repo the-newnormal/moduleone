@@ -217,7 +217,7 @@ function CheckinCard({ view }: { view: View }) {
               Recorded {formatDateTime(view.recordedAt)}
               {view.durationMs !== null && ` · ${formatLength(view.durationMs)}`}
             </p>
-            <DraftControls />
+            <DraftControls path={view.path} />
             <SavedTake path={view.path} />
           </CardContent>
         </Card>

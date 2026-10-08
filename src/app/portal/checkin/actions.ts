@@ -26,6 +26,7 @@ export type CheckinErrorCode =
   | "upload_too_big"
   | "upload_not_audio"
   | "no_draft"
+  | "draft_changed"
   | "failed";
 
 export type CheckinError = { status: "error"; code: CheckinErrorCode; message: string };
@@ -58,6 +59,7 @@ const MESSAGES: Record<CheckinErrorCode, string> = {
   upload_too_big: "That recording is too long to save. Record a shorter one.",
   upload_not_audio: "That file isn't a recording. Record it again.",
   no_draft: "Record your answers before you submit.",
+  draft_changed: "Your recording was replaced from another tab or device. This is the one saved now.",
   failed: "Something went wrong. Try again.",
 };
 
@@ -270,11 +272,24 @@ export async function saveDraft(input: {
   return { status: "saved" };
 }
 
-export async function deleteDraft(): Promise<DeleteDraftResult> {
+// The draft the member was shown has been replaced since (another tab or device saved a newer
+// take): show them that one instead of deleting or submitting a take they haven't heard.
+function draftChanged(): CheckinError {
+  revalidatePath(PAGE);
+  return fail("draft_changed");
+}
+
+// Deletes this week's draft: `shown` is the take the member was looking at.
+export async function deleteDraft(shown: string): Promise<DeleteDraftResult> {
   const session = await sessionMember();
   if ("status" in session) return session;
+  if (typeof shown !== "string") return fail("bad_path");
   const admin = createAdminClient();
-  const { data: path, error } = await admin.rpc("delete_checkin_draft", { p_member_id: session.member.id });
+  const { data: path, error } = await admin.rpc("delete_checkin_draft", {
+    p_member_id: session.member.id,
+    p_audio_path: shown,
+  });
+  if (raised(error, "draft_changed")) return draftChanged();
   if (error) {
     console.error("deleteDraft: delete_checkin_draft failed", { code: error.code });
     return fail("failed");
@@ -285,17 +300,21 @@ export async function deleteDraft(): Promise<DeleteDraftResult> {
 }
 
 // Turns this week's draft into the check-in, then transcribes and grades it after the response
-// (the page's maxDuration gives that time). No retake after this.
-export async function submitCheckin(): Promise<SubmitCheckinResult> {
+// (the page's maxDuration gives that time). No retake after this. `shown` is the take the member
+// listened to.
+export async function submitCheckin(shown: string): Promise<SubmitCheckinResult> {
   const session = await sessionMember();
   if ("status" in session) return session;
+  if (typeof shown !== "string") return fail("bad_path");
   const accepted = await noticeAccepted(session);
   if (accepted !== true) return accepted === false ? noticeRequired() : accepted;
 
   const { data: id, error } = await createAdminClient().rpc("submit_checkin_draft", {
     p_member_id: session.member.id,
+    p_audio_path: shown,
   });
   if (raised(error, "already_submitted")) return submitted();
+  if (raised(error, "draft_changed")) return draftChanged();
   if (raised(error, "no_draft")) {
     revalidatePath(PAGE);
     return fail("no_draft");
