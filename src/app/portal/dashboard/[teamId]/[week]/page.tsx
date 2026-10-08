@@ -4,10 +4,12 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { loadRole, loadScoringConfig, loadTeamWeek, type TeamWeekCheckin } from "@/lib/dashboard/load";
+import { recordingPath } from "@/lib/dashboard/recordings";
 import { formatWeek, isWeekStart, parseWeekCount } from "@/lib/dashboard/weeks";
 import { formatScore, type HealthConfig, healthBand, healthScore, teamWeekHealth } from "@/lib/health/health";
 import { createClient } from "@/lib/supabase/server";
 import { BandBadge } from "../../band";
+import { RecordingPlayer } from "./recording-player";
 
 export const metadata: Metadata = { title: "Team week · Module One" };
 
@@ -49,11 +51,7 @@ function CheckinCard({ checkin, config }: { checkin: TeamWeekCheckin; config: He
           </dl>
         )}
         {checkin.rubric_review && <p className="break-words whitespace-pre-line">{checkin.rubric_review}</p>}
-        {checkin.recordingUrl && (
-          <audio controls preload="none" src={checkin.recordingUrl} className="w-full">
-            <a href={checkin.recordingUrl}>Download the recording</a>
-          </audio>
-        )}
+        {checkin.canPlay && <RecordingPlayer src={recordingPath(checkin.id)} />}
         {checkin.transcript && (
           <details className="rounded-md border px-3 py-2">
             <summary className="cursor-pointer text-muted-foreground">Transcript</summary>

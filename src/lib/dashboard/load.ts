@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { type HealthConfig, type ScoringSettingsRow, settingsToConfig } from "@/lib/health/health";
 import type { CheckinRow } from "./heatmap";
+import { playableRecordings } from "./recordings";
 import { type TeamNode, teamContext } from "./tree";
 
 // Every loader here takes the signed-in user's client (src/lib/supabase/server.ts), never the
@@ -99,12 +100,10 @@ export type TeamWeekCheckin = {
   morale_score: number | null;
   rubric_review: string | null;
   transcript: string | null;
-  // A short-lived playback link, only when the viewer may play this recording (the speaker, or
-  // the recordings grant). Storage checks that itself; a refused signature just means no player.
-  recordingUrl: string | null;
+  // The viewer may play this check-in's recording (the speaker, or the recordings grant). Storage
+  // decides; the player fetches its own link when it plays (src/lib/dashboard/recordings.ts).
+  canPlay: boolean;
 };
-
-const RECORDING_URL_SECONDS = 10 * 60;
 
 // One team's check-ins for one week, for the drill-in page. teamId null means check-ins made
 // while the member had no team.
@@ -125,16 +124,13 @@ export async function loadTeamWeek(
   const [teams, checkins] = await Promise.all([loadTeams(supabase), checkinQuery]);
   if (checkins.error) throw new Error(`Couldn't load check-ins: ${checkins.error.message}`);
 
-  // One request for every recording. Storage signs only the ones this viewer may play.
-  const paths = checkins.data.flatMap((c) => (c.audio_path ? [c.audio_path] : []));
-  const signed = new Map<string, string>();
-  if (paths.length > 0) {
-    const { data } = await supabase.storage.from("checkin-audio").createSignedUrls(paths, RECORDING_URL_SECONDS);
-    for (const s of data ?? []) if (s.path && s.signedUrl && !s.error) signed.set(s.path, s.signedUrl);
-  }
+  // One request for every recording, to show a player only where the viewer may play.
+  const playable = await playableRecordings(
+    supabase,
+    checkins.data.flatMap((c) => (c.audio_path ? [c.audio_path] : [])),
+  );
 
   const rows = checkins.data.map((c): TeamWeekCheckin => {
-    const recordingUrl = c.audio_path ? (signed.get(c.audio_path) ?? null) : null;
     // A to-one embed: PostgREST returns an object (or null if the viewer can't see the member).
     const member = c.members as unknown as { name: string } | null;
     return {
@@ -145,7 +141,7 @@ export async function loadTeamWeek(
       morale_score: c.morale_score,
       rubric_review: c.rubric_review,
       transcript: c.transcript,
-      recordingUrl,
+      canPlay: c.audio_path !== null && playable.has(c.audio_path),
     };
   });
   rows.sort((a, b) => (a.memberName ?? "").localeCompare(b.memberName ?? ""));
