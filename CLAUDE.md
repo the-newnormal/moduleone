@@ -8,6 +8,7 @@ Stack: **Next.js (App Router) + TypeScript + Tailwind + shadcn/ui + Supabase + V
 - Never commit directly to `main`. Create a feature branch.
 - Never merge your own PR. Never bypass CI.
 - Small, focused PRs.
+- `main` protection lives in `.github/rulesets/protect-main.json` (applied with `scripts/protect-main.sh`). Change it only by PR; never loosen it in the GitHub UI.
 
 ## Database
 - Never modify the production schema by hand. **All schema changes are migrations in `supabase/migrations/`.**

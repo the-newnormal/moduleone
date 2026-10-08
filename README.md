@@ -18,3 +18,15 @@ pnpm dev
 
 ## Rules
 See `CLAUDE.md` for the engineering contract. Hygiene is non-negotiable: protected `main`, migrations-in-Git, RLS on every table, CI + required Supabase migration check + human approval before merge. **No direct production changes. No blind auto-merging.**
+
+### Branch protection
+`main` is protected by the GitHub ruleset in `.github/rulesets/protect-main.json`, with no bypass (admins included):
+- changes land only through a PR with 1 approval; a new push dismisses earlier approvals, and all review threads must be resolved
+- the `ci / check` job must pass, on a branch that is up to date with `main`
+- no force-pushes, no deleting `main`
+
+To change the rules, edit the JSON in a PR. Once it merges, a repo admin re-applies it:
+```bash
+scripts/protect-main.sh           # needs `gh` logged in as a repo admin; creates or updates the ruleset
+```
+Without the CLI: Settings → Rules → Rulesets → New ruleset → Import a ruleset, then pick the JSON file.
