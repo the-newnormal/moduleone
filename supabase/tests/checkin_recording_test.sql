@@ -5,7 +5,7 @@
 --   team R: leader lead_r, members m1 and m2      hq      role hq, no team, no grants
 --   auditor no team, recordings grant             outsider signed in, but no members row
 begin;
-select plan(110);
+select plan(113);
 
 -- ---------- fixtures ----------
 insert into auth.users (id, email) values
@@ -106,7 +106,7 @@ select is(
   pg_temp.this_week(), 'a draft belongs to this Singapore week'
 );
 select is(
-  save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-2.webm'), 'audio/webm', 59000),
+  save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-2.webm'), 'audio/webm', 59000, now()),
   pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-1.webm'), 'a new take returns the replaced one, for the server to delete'
 );
 select is(
@@ -122,7 +122,7 @@ select throws_ok(
   'P0001', 'bad_path', 'a draft cannot point at another member''s folder'
 );
 select throws_ok(
-  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', '../c1000000-0000-4000-8000-000000000003/take.webm'), 'audio/webm', null)$$,
+  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', '../c1000000-0000-4000-8000-000000000003/take.webm'), 'audio/webm', null, now())$$,
   '23514', null, 'a draft path cannot climb out of the member''s folder'
 );
 select throws_ok(
@@ -133,7 +133,7 @@ select throws_ok(
   'P0001', 'bad_path', 'a take made for last week cannot become this week''s draft'
 );
 select throws_ok(
-  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-3.webm'), 'video/webm', null)$$,
+  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-3.webm'), 'video/webm', null, now())$$,
   '23514', null, 'a draft must be audio'
 );
 select is(
@@ -176,9 +176,21 @@ select is(
   (select recorded_at from checkin_drafts where member_id = 'c1000000-0000-4000-8000-000000000002'),
   now(), 'its recording time is capped at now'
 );
+select throws_ok(
+  $$select save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-4.webm'), 'audio/webm', null)$$,
+  'P0001', 'newer_draft', 'a take whose recording time is unknown never replaces another take'
+);
 select is(
   delete_checkin_draft('c1000000-0000-4000-8000-000000000002'),
   pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-3.webm'), 'deleting removes the latest take'
+);
+select is(
+  save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-4.webm'), 'audio/webm', null),
+  null, 'with no draft, a take whose recording time is unknown becomes the draft'
+);
+select is(
+  delete_checkin_draft('c1000000-0000-4000-8000-000000000002'),
+  pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-4.webm'), 'and can be deleted again'
 );
 
 -- ---------- submitting ----------

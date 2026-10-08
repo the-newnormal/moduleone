@@ -267,6 +267,7 @@ export function Recorder() {
         mimeType: baseMimeType(type),
         durationMs,
         recordedAt: Date.now(),
+        recordedAtMono: performance.now(),
         serverRecordedAt: null,
         uploadedPath: null,
       };

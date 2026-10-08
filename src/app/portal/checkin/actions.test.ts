@@ -348,6 +348,7 @@ describe("saveDraft", () => {
 
   it.each([
     ["nothing", undefined],
+    ["null (no server time)", null],
     ["not a number", "2026-10-08T03:30:00Z"],
     ["NaN", Number.NaN],
     ["over a week ago", NOW.getTime() - 8 * 24 * 60 * 60 * 1000],

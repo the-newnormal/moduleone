@@ -2,15 +2,17 @@ import type { CheckinErrorCode, PrepareRecordingResult, SaveDraftResult } from "
 import { OFFLINE_MESSAGE, updatedSinceLoad } from "./unreachable";
 
 // A finished recording, kept in memory until it is saved, so a failed upload can be retried.
-// recordedAt is when the recording stopped, by this browser's clock; serverRecordedAt the same
-// moment by the server's clock, worked out on the first save (see onServerClock) and kept for
-// retries. The server keeps the newer take when an older one arrives late, comparing takes from
-// different devices, so it needs the one clock.
+// recordedAt and recordedAtMono are when the recording stopped, by this browser's clock
+// (Date.now()) and by its steady clock (performance.now()); serverRecordedAt is the same moment by
+// the server's clock, worked out on the first save (see onServerClock) and kept for retries. The
+// server keeps the newer take when an older one arrives late, comparing takes from different
+// devices, so it needs the one clock.
 export type Take = {
   blob: Blob;
   mimeType: string;
   durationMs: number;
   recordedAt: number;
+  recordedAtMono: number;
   serverRecordedAt: number | null;
   uploadedPath: string | null;
 };
@@ -29,7 +31,7 @@ export type SaveSteps = {
   prepare: (mimeType: string) => Promise<PrepareRecordingResult>;
   // Uploads to the signed upload URL prepare made; resolves with Storage's error, if any.
   upload: (ready: ReadyToUpload, body: Blob) => Promise<{ error: unknown }>;
-  saveDraft: (input: { path: string; durationMs: number; recordedAt: number }) => Promise<SaveDraftResult>;
+  saveDraft: (input: { path: string; durationMs: number; recordedAt: number | null }) => Promise<SaveDraftResult>;
   // The server's clock now, in ms (a plain request, never queued behind a server action).
   serverNow: () => Promise<number>;
   timeouts?: Timeouts;
@@ -67,18 +69,26 @@ export function takeToRetry(code: CheckinErrorCode, take: Take): Take {
   return code === "failed" ? take : { ...take, uploadedPath: null };
 }
 
-// The take with its recording time on the server's clock: this browser's clock plus how far it is
-// off, measured with one quick request (half its round trip either way). Measured when the take is
-// first saved and kept, so a retry, or a save that waits behind another request, doesn't move it.
-// If the server can't be reached the take is left as it is, and saving fails anyway.
+// The take with its recording time on the server's clock: the server's time, read with one quick
+// request (taken as halfway through it), less how long ago the recording stopped. Measured when the
+// take is first saved and kept, so a retry, or a save that waits behind another request, doesn't
+// move it. How long ago is the longer of the two clocks' answers: the browser's clock may have been
+// turned back meanwhile, and the steady clock stops while the device sleeps; either alone could
+// make an older take look newer than it is. If the server can't be reached the take keeps no
+// server time, and the server won't let it replace another take.
 async function onServerClock(take: Take, steps: SaveSteps, timeouts: Timeouts): Promise<Take> {
   if (take.serverRecordedAt !== null) return take;
   try {
-    const sent = Date.now();
+    const sent = { wall: Date.now(), mono: performance.now() };
     const server = await within(timeouts.clockMs, steps.serverNow());
-    const back = Date.now();
+    const back = { wall: Date.now(), mono: performance.now() };
     if (!Number.isFinite(server)) return take;
-    return { ...take, serverRecordedAt: Math.round(take.recordedAt + server - (sent + back) / 2) };
+    const ago = Math.max(
+      (sent.wall + back.wall) / 2 - take.recordedAt,
+      (sent.mono + back.mono) / 2 - take.recordedAtMono,
+      0,
+    );
+    return { ...take, serverRecordedAt: Math.round(server - ago) };
   } catch {
     return take;
   }
@@ -106,7 +116,7 @@ export async function saveTake(take: Take, steps: SaveSteps): Promise<SaveOutcom
     }
     const saved = await within(
       timeouts.saveMs,
-      saveDraft({ path, durationMs: current.durationMs, recordedAt: current.serverRecordedAt ?? current.recordedAt }),
+      saveDraft({ path, durationMs: current.durationMs, recordedAt: current.serverRecordedAt }),
     );
     // An upload kept from an earlier try that is now too old to save: the take itself is fine, so
     // upload it again rather than ask the member to record it again.

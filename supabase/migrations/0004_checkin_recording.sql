@@ -128,7 +128,9 @@ create policy checkin_audio_unsubmitted_speaker_only on storage.objects as restr
 -- Saves the member's take for this week, replacing any earlier one. Returns the replaced take's
 -- audio_path (or null) so the caller can delete that file. A take recorded before the current
 -- draft raises 'newer_draft' instead: it arrived late (a save that timed out and finished anyway,
--- or one retried from another tab or device), and must not replace the newer take.
+-- or one retried from another tab or device), and must not replace the newer take. So does a take
+-- whose recording time is unknown (p_recorded_at null): it can become the draft when there is none
+-- (recorded_at then now), but never replaces another take.
 create function save_checkin_draft(
   p_member_id uuid, p_audio_path text, p_mime_type text, p_duration_ms int, p_recorded_at timestamptz default null
 )
@@ -156,7 +158,7 @@ begin
   select d.audio_path, d.recorded_at into v_old, v_old_recorded
     from public.checkin_drafts d
     where d.member_id = p_member_id and d.week_start = v_week;
-  if v_old is distinct from p_audio_path and v_old_recorded > v_recorded then
+  if v_old <> p_audio_path and (p_recorded_at is null or v_old_recorded > v_recorded) then
     raise exception using errcode = 'P0001', message = 'newer_draft';
   end if;
   insert into public.checkin_drafts (member_id, week_start, audio_path, mime_type, duration_ms, recorded_at)

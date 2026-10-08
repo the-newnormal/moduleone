@@ -20,6 +20,7 @@ const take: Take = {
   mimeType: "audio/webm",
   durationMs: 95_000,
   recordedAt: Date.parse("2026-10-08T03:30:00Z"),
+  recordedAtMono: -5 * 60 * 1000, // the steady clock starts at 0 when the tests fake it, 5 minutes later
   serverRecordedAt: null,
   uploadedPath: `${MEMBER}/2026-10-05-take.webm`,
 };
@@ -29,9 +30,10 @@ const HOUR = 60 * 60 * 1000;
 function stamp(t: Take): Take {
   return { ...t, serverRecordedAt: t.recordedAt + HOUR };
 }
-// Five minutes after the take was recorded. Only Date is faked; the timeout tests need real timers.
+// Five minutes after the take was recorded. Only the clocks are faked (setSystemTime moves Date, not
+// the steady clock); the timeout tests need real timers.
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-08T03:35:00Z") });
+  vi.useFakeTimers({ toFake: ["Date", "performance"], now: new Date("2026-10-08T03:35:00Z") });
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -169,18 +171,36 @@ describe("saveTake", () => {
     expect(steps.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ recordedAt: fresh.recordedAt + HOUR }));
   });
 
-  it("falls back to this browser's clock when the server's can't be read", async () => {
+  it("doesn't make a take look newer when this browser's clock is turned back during the request", async () => {
+    const steps = fakes();
+    steps.serverNow.mockImplementationOnce(async () => {
+      const server = Date.now() + HOUR;
+      vi.setSystemTime(Date.now() - HOUR);
+      return server;
+    });
+    await saveTake(fresh, steps);
+    expect(steps.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ recordedAt: fresh.recordedAt + HOUR }));
+  });
+
+  it("counts a sleep before the first save, which the steady clock misses", async () => {
+    const steps = fakes();
+    vi.setSystemTime(Date.now() + 2 * HOUR);
+    await saveTake(fresh, steps);
+    expect(steps.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ recordedAt: fresh.recordedAt + HOUR }));
+  });
+
+  it("sends no recording time when the server's clock can't be read", async () => {
     const steps = fakes();
     steps.serverNow.mockRejectedValueOnce(new TypeError("Failed to fetch"));
     expect(await saveTake(fresh, steps)).toEqual({ step: "saved" });
-    expect(steps.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ recordedAt: fresh.recordedAt }));
+    expect(steps.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ recordedAt: null }));
   });
 
   it("doesn't wait long for the server's clock", async () => {
     const steps = { ...fakes(), timeouts: QUICK };
     steps.serverNow.mockReturnValueOnce(hang());
     expect(await saveTake(fresh, steps)).toEqual({ step: "saved" });
-    expect(steps.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ recordedAt: fresh.recordedAt }));
+    expect(steps.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ recordedAt: null }));
   });
 
   it("is done when a take recorded later is already the draft", async () => {

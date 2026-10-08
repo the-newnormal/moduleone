@@ -197,12 +197,12 @@ export async function prepareRecording(mimeType: string): Promise<PrepareRecordi
 // Saves an uploaded take as this week's draft, replacing (and deleting) any earlier take. A take
 // recorded before the current draft is dropped instead: it arrived late (a save that timed out,
 // or one retried from another tab or device), and must not replace the newer one. `recordedAt` is
-// when the take was recorded, by this server's clock (the recorder measures how far its own clock
-// is off; see take.ts).
+// when the take was recorded, by this server's clock (see take.ts); without a plausible one, the
+// take replaces no other take.
 export async function saveDraft(input: {
   path: string;
   durationMs?: number;
-  recordedAt?: number;
+  recordedAt?: number | null;
 }): Promise<SaveDraftResult> {
   const session = await sessionMember();
   if ("status" in session) return session;
@@ -305,8 +305,8 @@ export async function submitCheckin(): Promise<SubmitCheckinResult> {
   return submitted();
 }
 
-// When the take was recorded. Anything that isn't a time within the last week becomes null (the
-// database then uses now); the database also caps it at now.
+// When the take was recorded. Anything that isn't a time within the last week becomes null:
+// unknown, so the database won't let the take replace another one. It also caps the time at now.
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 function recordedAt(value: unknown): string | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
