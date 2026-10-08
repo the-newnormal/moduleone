@@ -10,7 +10,7 @@ const NOTICE_REVISION = "2026-10-09";
 /** Which transcription provider the server is configured to use (STT_PROVIDER), as the notice names it. */
 export function configuredSttProvider(): SttProvider {
   const value = (process.env.STT_PROVIDER ?? "openai").trim().toLowerCase();
-  return value === "assemblyai" || value === "local" ? value : "openai";
+  return value === "local" ? value : "openai";
 }
 
 export function noticeVersion(provider: SttProvider = configuredSttProvider()): string {
@@ -19,7 +19,6 @@ export function noticeVersion(provider: SttProvider = configuredSttProvider()): 
 
 const TRANSCRIBER: Record<SttProvider, string> = {
   openai: "OpenAI, in the United States",
-  assemblyai: "AssemblyAI, in the European Union",
   local: "a speech-to-text server that Normal runs itself",
 };
 

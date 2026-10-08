@@ -31,7 +31,9 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
     console.error("processCheckin: claim failed", { checkinId, code: claimError.code });
     return "failed";
   }
-  const claim = (claimed as { member_id: string; audio_path: string; attempts: number }[] | null)?.[0];
+  const claim = (
+    claimed as { member_id: string; audio_path: string; audio_duration_ms: number | null; attempts: number }[] | null
+  )?.[0];
   if (!claim) return "skipped";
 
   const fail = async (code: string, error: unknown) => {
@@ -58,6 +60,7 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
       data: new Uint8Array(await blob.arrayBuffer()),
       mimeType: blob.type || mimeFromFilename(filename),
       filename,
+      durationSeconds: claim.audio_duration_ms === null ? undefined : claim.audio_duration_ms / 1000,
     });
   } catch (error) {
     return fail(error instanceof TranscriptionError ? "transcription_failed" : "transcription_error", error);

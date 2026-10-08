@@ -18,8 +18,12 @@
 alter table checkins
   -- When the member pressed Submit. Null for check-ins made before this migration.
   add column submitted_at timestamptz,
+  -- The recording's length as the recorder reported it (from the draft). Only a hint: it lets the
+  -- server flag a transcript with far too few words for the recording's length.
+  add column audio_duration_ms int check (audio_duration_ms is null or audio_duration_ms between 0 and 3600000),
   add column transcript_model text,
-  -- Stable codes from transcribe(), e.g. 'low_words_per_minute' or 'used_fallback:openai:whisper-1'.
+  -- Stable codes from transcribe() (src/lib/stt/warnings.ts), e.g. 'low_words_per_minute' or
+  -- 'used_fallback:openai:whisper-1': reasons to read the grade with care.
   add column transcript_warnings text[] not null default '{}',
   -- The model that actually produced the grade (after any refusal fallback).
   add column grader_model text,
@@ -174,8 +178,8 @@ begin
     end if;
     raise exception using errcode = 'P0001', message = 'no_draft';
   end if;
-  insert into public.checkins (member_id, week_start, audio_path, submitted_at)
-    values (p_member_id, v_week, v_draft.audio_path, now())
+  insert into public.checkins (member_id, week_start, audio_path, audio_duration_ms, submitted_at)
+    values (p_member_id, v_week, v_draft.audio_path, v_draft.duration_ms, now())
     on conflict (member_id, week_start) do nothing
     returning id into v_id;
   if v_id is null then
@@ -186,11 +190,11 @@ begin
 end $$;
 
 -- Claims a submitted, ungraded check-in for one processing attempt. Returns one row (who, which
--- recording, which attempt this is) if the caller should process it now, or no rows if it is already
+-- recording and how long it is, which attempt this is) if the caller should process it now, or no rows if it is already
 -- graded, another attempt started less than 10 minutes ago, or it has used up its five attempts.
 -- A failed attempt (processing_error set) can be retried straight away.
 create function claim_checkin_processing(p_checkin_id uuid)
-  returns table (member_id uuid, audio_path text, attempts int)
+  returns table (member_id uuid, audio_path text, audio_duration_ms int, attempts int)
   language sql set search_path = '' as $$
     update public.checkins c
       set processing_started_at = now(),
@@ -206,7 +210,7 @@ create function claim_checkin_processing(p_checkin_id uuid)
           or c.processing_error is not null
           or c.processing_started_at < now() - interval '10 minutes'
         )
-      returning c.member_id, c.audio_path, c.processing_attempts;
+      returning c.member_id, c.audio_path, c.audio_duration_ms, c.processing_attempts;
 $$;
 
 revoke execute on function

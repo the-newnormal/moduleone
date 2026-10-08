@@ -5,7 +5,7 @@
 --   team R: leader lead_r, members m1 and m2      hq      role hq, no team, no grants
 --   auditor no team, recordings grant             outsider signed in, but no members row
 begin;
-select plan(88);
+select plan(89);
 
 -- ---------- fixtures ----------
 insert into auth.users (id, email) values
@@ -53,7 +53,7 @@ select columns_are('public', 'checkin_drafts',
   array['member_id', 'week_start', 'audio_path', 'mime_type', 'duration_ms', 'created_at'],
   'checkin_drafts has exactly the expected columns');
 select has_column('public', 'checkins', c, format('checkins has %s', c))
-  from unnest(array['submitted_at', 'transcript_model', 'transcript_warnings', 'grader_model', 'graded_at',
+  from unnest(array['submitted_at', 'audio_duration_ms', 'transcript_model', 'transcript_warnings', 'grader_model', 'graded_at',
                     'processing_started_at', 'processing_attempts', 'processing_error']) c;
 select table_privs_are('public', t, 'anon', array[]::text[], format('anon has no privileges on %s', t))
   from unnest(array['checkin_drafts', 'recording_notices']) t;
@@ -146,11 +146,11 @@ create temp table submitted as
   select submit_checkin_draft('c1000000-0000-4000-8000-000000000002') as id;
 select isnt((select id from submitted), null, 'submitting returns the new check-in');
 select is(
-  (select (week_start, team_id, audio_path, submitted_at is not null, activity_score is null)::text
+  (select (week_start, team_id, audio_path, audio_duration_ms, submitted_at is not null, activity_score is null)::text
      from checkins where id = (select id from submitted)),
   (pg_temp.this_week(), 'b1000000-0000-4000-8000-000000000001'::uuid,
-   'c1000000-0000-4000-8000-000000000002/take-4.webm', true, true)::text,
-  'the check-in takes this week, the member''s team, the recording and the submit time, ungraded'
+   'c1000000-0000-4000-8000-000000000002/take-4.webm', 70000, true, true)::text,
+  'the check-in takes this week, the member''s team, the recording, its length and the submit time, ungraded'
 );
 select is(
   pg_temp.n($$select 1 from checkin_drafts where member_id = 'c1000000-0000-4000-8000-000000000002'$$),

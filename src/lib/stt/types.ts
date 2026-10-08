@@ -1,24 +1,24 @@
-// The transcribe() contract. Every provider (OpenAI, AssemblyAI, a local Parakeet/OruKey server)
-// sits behind it, so the check-in pipeline never knows which one ran.
+// The transcribe() contract. OpenAI does the transcribing today; a local Parakeet/OruKey server
+// (OpenAI-compatible) can take over behind the same interface, so the check-in pipeline never
+// knows which one ran.
 
-export type SttProvider = "openai" | "assemblyai" | "local";
+export type SttProvider = "openai" | "local";
+
+export type SttTarget = { provider: SttProvider; model: string };
 
 export type AudioInput = {
-  /** The recording's bytes. */
   data: Uint8Array;
-  /** As stored, e.g. 'audio/webm' or 'audio/mp4'. */
+  // As stored, e.g. "audio/webm" or "audio/mp4".
   mimeType: string;
-  /** A file name with the right extension (providers sniff it), e.g. '2026-10-05-<uuid>.webm'. */
+  // With the right extension: the service works out the format from it.
   filename: string;
-  /** From the recorder, if known. Only used for the words-per-minute warning. */
+  // From the recorder, if known. Only used for the words-per-minute check.
   durationSeconds?: number;
 };
 
 export type TranscribeOptions = {
-  /** BCP-47 language hints. Default ['en'] (Singapore English). */
+  // ISO 639-1 language hints. Default ["en"] (Singapore English).
   languages?: string[];
-  /** Names and terms the speaker is likely to use (team names, products). */
-  keyterms?: string[];
   signal?: AbortSignal;
 };
 
@@ -26,14 +26,17 @@ export type TranscriptResult = {
   text: string;
   provider: SttProvider;
   model: string;
-  /** Stable codes, e.g. 'empty_transcript', 'low_words_per_minute', 'used_fallback:openai:whisper-1'. */
+  // Stable codes stored with the transcript (see warnings.ts), plus
+  // "used_fallback:<provider>:<model>" when the fallback model did the work.
   warnings: string[];
 };
 
 export class TranscriptionError extends Error {
   readonly provider: SttProvider;
   readonly model: string;
-  /** True when trying again later (or on the fallback) might work. */
+  // True when the same recording might go through later or on the fallback model (outage,
+  // timeout, rate limit, no access to the model). False when it never will (bad or oversized
+  // audio, a wrong key, nothing configured).
   readonly retryable: boolean;
 
   constructor(
