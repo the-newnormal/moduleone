@@ -5,16 +5,23 @@ import { transcribe, TranscriptionError } from "@/lib/stt";
 
 export type ProcessOutcome = "graded" | "skipped" | "failed";
 
+type Claim = {
+  member_id: string;
+  audio_path: string;
+  audio_duration_ms: number | null;
+  // Saved by an earlier attempt whose grading failed.
+  transcript: string | null;
+  attempts: number;
+};
+
 const BUCKET = "checkin-audio";
 
-/**
- * Transcribes and grades one submitted check-in, then stores the result. Safe to call more than
- * once and from several places at the same time: claim_checkin_processing (0004) hands each
- * attempt to one caller only, and a graded check-in is never processed again.
- *
- * Never throws: it runs inside after(), where an exception would only end up in the logs. Failures
- * are recorded in checkins.processing_error and retried on a later claim (up to five attempts).
- */
+// Transcribes and grades one submitted check-in, then stores the result. Safe to call more than
+// once and from several places at the same time: claim_checkin_processing (0004) hands each attempt
+// to one caller only, and a graded check-in is never processed again.
+//
+// Never throws: it runs inside after(), where an exception would only end up in the logs. Failures
+// are recorded in checkins.processing_error and retried on a later claim (up to five attempts).
 export async function processCheckin(checkinId: string): Promise<ProcessOutcome> {
   let admin;
   try {
@@ -31,9 +38,7 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
     console.error("processCheckin: claim failed", { checkinId, code: claimError.code });
     return "failed";
   }
-  const claim = (
-    claimed as { member_id: string; audio_path: string; audio_duration_ms: number | null; attempts: number }[] | null
-  )?.[0];
+  const claim = (claimed as Claim[] | null)?.[0];
   if (!claim) return "skipped";
 
   const fail = async (code: string, error: unknown) => {
@@ -48,37 +53,41 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
     return "failed" as const;
   };
 
-  // 1. The recording.
-  const { data: blob, error: downloadError } = await admin.storage.from(BUCKET).download(claim.audio_path);
-  if (downloadError || !blob) return fail("download_failed", downloadError);
-  const filename = claim.audio_path.slice(claim.audio_path.lastIndexOf("/") + 1);
+  // 1. The transcript: the one an earlier attempt saved, or a new one, saved straight away so a
+  // grading failure doesn't cost a second transcription.
+  let transcript = claim.transcript;
+  if (transcript === null) {
+    const { data: blob, error: downloadError } = await admin.storage.from(BUCKET).download(claim.audio_path);
+    if (downloadError || !blob) return fail("download_failed", downloadError);
+    const filename = claim.audio_path.slice(claim.audio_path.lastIndexOf("/") + 1);
 
-  // 2. Transcript. Saved straight away, so a grading failure doesn't cost a second transcription.
-  let transcript;
-  try {
-    transcript = await transcribe({
-      data: new Uint8Array(await blob.arrayBuffer()),
-      mimeType: blob.type || mimeFromFilename(filename),
-      filename,
-      durationSeconds: claim.audio_duration_ms === null ? undefined : claim.audio_duration_ms / 1000,
-    });
-  } catch (error) {
-    return fail(error instanceof TranscriptionError ? "transcription_failed" : "transcription_error", error);
+    let result;
+    try {
+      result = await transcribe({
+        data: new Uint8Array(await blob.arrayBuffer()),
+        mimeType: blob.type || mimeFromFilename(filename),
+        filename,
+        durationSeconds: claim.audio_duration_ms === null ? undefined : claim.audio_duration_ms / 1000,
+      });
+    } catch (error) {
+      return fail(error instanceof TranscriptionError ? "transcription_failed" : "transcription_error", error);
+    }
+    const { error: transcriptError } = await admin
+      .from("checkins")
+      .update({
+        transcript: result.text,
+        transcript_model: `${result.provider}:${result.model}`,
+        transcript_warnings: result.warnings,
+      })
+      .eq("id", checkinId);
+    if (transcriptError) return fail("save_transcript_failed", transcriptError);
+    transcript = result.text;
   }
-  const { error: transcriptError } = await admin
-    .from("checkins")
-    .update({
-      transcript: transcript.text,
-      transcript_model: `${transcript.provider}:${transcript.model}`,
-      transcript_warnings: transcript.warnings,
-    })
-    .eq("id", checkinId);
-  if (transcriptError) return fail("save_transcript_failed", transcriptError);
 
-  // 3. Grade.
+  // 2. The grade.
   let grade;
   try {
-    grade = await gradeCheckin({ transcript: transcript.text });
+    grade = await gradeCheckin({ transcript });
   } catch (error) {
     const code = error instanceof GradingError ? `grading_${error.reason}` : "grading_error";
     return fail(code, error);

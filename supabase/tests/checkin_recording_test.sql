@@ -5,7 +5,7 @@
 --   team R: leader lead_r, members m1 and m2      hq      role hq, no team, no grants
 --   auditor no team, recordings grant             outsider signed in, but no members row
 begin;
-select plan(89);
+select plan(91);
 
 -- ---------- fixtures ----------
 insert into auth.users (id, email) values
@@ -167,8 +167,10 @@ select throws_ok(
 
 -- ---------- processing claims ----------
 select is(
-  (select attempts from claim_checkin_processing((select id from submitted))),
-  1, 'the first claim gets attempt 1'
+  (select (attempts, audio_path, audio_duration_ms, transcript)::text
+     from claim_checkin_processing((select id from submitted))),
+  (1, 'c1000000-0000-4000-8000-000000000002/take-4.webm', 70000, null::text)::text,
+  'the first claim gets attempt 1, with the recording and its length'
 );
 select is(
   pg_temp.n(format('select 1 from claim_checkin_processing(%L)', (select id from submitted))),
@@ -179,6 +181,14 @@ select is(
   (select attempts from claim_checkin_processing((select id from submitted))),
   2, 'a failed attempt can be retried straight away'
 );
+update checkins set transcript = 'Saved by attempt 2.', processing_error = 'grading_api: test'
+  where id = (select id from submitted);
+create temp table reclaimed as select * from claim_checkin_processing((select id from submitted));
+select is((select attempts from reclaimed), 3, 'grading can be retried after a failure');
+select is(
+  (select transcript from reclaimed), 'Saved by attempt 2.',
+  'a retry gets the saved transcript, so the recording isn''t transcribed twice'
+);
 select is(
   (select processing_error from checkins where id = (select id from submitted)),
   null, 'a new claim clears the last error'
@@ -186,7 +196,7 @@ select is(
 update checkins set processing_started_at = now() - interval '11 minutes' where id = (select id from submitted);
 select is(
   (select attempts from claim_checkin_processing((select id from submitted))),
-  3, 'an attempt that stalled for 10 minutes can be claimed again'
+  4, 'an attempt that stalled for 10 minutes can be claimed again'
 );
 update checkins set processing_attempts = 5, processing_error = 'grading_api: test' where id = (select id from submitted);
 select is(

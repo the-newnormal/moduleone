@@ -190,11 +190,11 @@ begin
 end $$;
 
 -- Claims a submitted, ungraded check-in for one processing attempt. Returns one row (who, which
--- recording and how long it is, which attempt this is) if the caller should process it now, or no rows if it is already
+-- recording and how long it is, any transcript an earlier attempt saved, which attempt this is) if the caller should process it now, or no rows if it is already
 -- graded, another attempt started less than 10 minutes ago, or it has used up its five attempts.
 -- A failed attempt (processing_error set) can be retried straight away.
 create function claim_checkin_processing(p_checkin_id uuid)
-  returns table (member_id uuid, audio_path text, audio_duration_ms int, attempts int)
+  returns table (member_id uuid, audio_path text, audio_duration_ms int, transcript text, attempts int)
   language sql set search_path = '' as $$
     update public.checkins c
       set processing_started_at = now(),
@@ -210,7 +210,7 @@ create function claim_checkin_processing(p_checkin_id uuid)
           or c.processing_error is not null
           or c.processing_started_at < now() - interval '10 minutes'
         )
-      returning c.member_id, c.audio_path, c.audio_duration_ms, c.processing_attempts;
+      returning c.member_id, c.audio_path, c.audio_duration_ms, c.transcript, c.processing_attempts;
 $$;
 
 revoke execute on function
