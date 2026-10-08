@@ -91,6 +91,27 @@ describe("trackSave", () => {
   });
 });
 
+describe("a superseded save", () => {
+  it("is kept for a recorder to tell the member, without asking before the tab closes", async () => {
+    const { trackSave, currentSave } = await load();
+    const save = Promise.resolve<SaveOutcome>({ step: "superseded" });
+    await trackSave(save);
+    await Promise.resolve();
+    expect(currentSave()).toBe(save);
+    expect(asksBeforeLeaving()).toBe(false);
+  });
+
+  it("is dropped once the week's check-in is in", async () => {
+    const { trackSave, currentSave, forgetSavedTake } = await load();
+    const save = Promise.resolve<SaveOutcome>({ step: "superseded" });
+    await trackSave(save);
+    forgetSavedTake(null);
+    await save;
+    await Promise.resolve();
+    expect(currentSave()).toBeNull();
+  });
+});
+
 describe("pendingSave", () => {
   it("is null when nothing is saving", async () => {
     const { pendingSave } = await load();

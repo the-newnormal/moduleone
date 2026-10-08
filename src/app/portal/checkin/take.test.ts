@@ -224,10 +224,10 @@ describe("saveTake", () => {
     expect(steps.saveDraft).not.toHaveBeenCalled();
   });
 
-  it("is done when a take recorded later is already the draft", async () => {
+  it("says so when a take recorded later is already the draft", async () => {
     const steps = fakes();
     steps.saveDraft.mockResolvedValueOnce({ status: "superseded" });
-    expect(await saveTake(take, steps)).toEqual({ step: "saved" });
+    expect(await saveTake(take, steps)).toEqual({ step: "superseded" });
     expect(steps.saveDraft).toHaveBeenCalledOnce();
   });
 

@@ -5,7 +5,7 @@
 --   team R: leader lead_r, members m1 and m2      hq      role hq, no team, no grants
 --   auditor no team, recordings grant             outsider signed in, but no members row
 begin;
-select plan(116);
+select plan(117);
 
 -- ---------- fixtures ----------
 insert into auth.users (id, email) values
@@ -193,8 +193,12 @@ select is(
   null, 'with no draft, a take whose recording time is unknown becomes the draft'
 );
 select is(
-  delete_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-4.webm')),
-  pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-4.webm'), 'and can be deleted again'
+  save_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-5.webm'), 'audio/webm', null, now() - interval '1 day'),
+  pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-4.webm'), 'and any take with a time, however old, replaces it'
+);
+select is(
+  delete_checkin_draft('c1000000-0000-4000-8000-000000000002', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-5.webm')),
+  pg_temp.take('c1000000-0000-4000-8000-000000000002', 'late-5.webm'), 'and can be deleted again'
 );
 
 -- ---------- submitting ----------

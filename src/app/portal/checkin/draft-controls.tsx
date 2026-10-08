@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { deleteDraft, submitCheckin, type DeleteDraftResult, type SubmitCheckinResult } from "./actions";
-import { forgetDeletedTake } from "./pending-save";
+import { forgetDeletedTake, pendingSave } from "./pending-save";
 import { settled } from "./unreachable";
 
 async function deleteTake(path: string) {
@@ -13,6 +13,19 @@ async function deleteTake(path: string) {
   if (result.status === "deleted" && result.path) forgetDeletedTake(result.path);
   return result;
 }
+
+// Submits the take on screen, but not past a newer take this tab is still saving (wait for it: if it
+// saves, it is the draft now, and the database refuses this stale submit) or holds unsaved (it is
+// shown under the draft; the member saves or discards it first).
+async function submitShown(path: string): Promise<SubmitCheckinResult> {
+  const held = await pendingSave();
+  if (held?.step === "failed" && !held.updated && held.take.uploadedPath !== path) {
+    return { status: "error", code: "failed", message: HELD_TAKE };
+  }
+  return submitCheckin(path);
+}
+
+const HELD_TAKE = "A newer recording on this device hasn't been saved yet. Try again or discard it below first.";
 
 // Delete the take and record again, or submit it, with a confirm step because a submitted check-in
 // can't be changed. On success each action re-renders the page, which replaces these controls.
@@ -24,7 +37,7 @@ export function DraftControls({ path }: { path: string }) {
     null,
   );
   const [sent, submitAction, submitting] = useActionState<SubmitCheckinResult | null>(
-    settled(() => submitCheckin(path)),
+    settled(() => submitShown(path)),
     null,
   );
   const [confirming, setConfirming] = useState(false);

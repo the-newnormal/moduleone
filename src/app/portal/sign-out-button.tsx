@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useTransition, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { currentSave, pendingSave, releaseSave } from "./checkin/pending-save";
 import { signOut } from "./actions";
@@ -14,19 +14,31 @@ const UNSAVED = "Your latest check-in recording hasn't been saved, and signing o
 
 export function SignOutButton() {
   const router = useRouter();
-  const [waiting, startWaiting] = useTransition();
+  const [waiting, setWaiting] = useState(false);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     if (!currentSave()) return; // nothing saving: the form signs out as usual
     event.preventDefault();
-    startWaiting(async () => {
-      const outcome = await pendingSave();
+    const form = event.currentTarget;
+    // Waited for outside a transition: an async transition open this long would hold up every
+    // navigation meanwhile (React entangles later transitions with it).
+    setWaiting(true);
+    void pendingSave().then((outcome) => {
+      if (!mounted.current) return; // the member went elsewhere meanwhile
+      setWaiting(false);
       if (outcome?.step === "failed" && !outcome.updated && !window.confirm(UNSAVED)) {
         router.push("/portal/checkin");
         return;
       }
       releaseSave();
-      await signOut();
+      form.requestSubmit(); // nothing held now, so the form signs out as usual
     });
   }
 

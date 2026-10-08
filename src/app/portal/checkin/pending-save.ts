@@ -4,7 +4,8 @@ import type { SaveOutcome } from "./take";
 // effect). This module outlives the recorder across in-app navigation, so coming back finds the
 // save here and waits for it, instead of offering a new recording that the older save could then
 // replace; and Sign out waits for it too. A save that failed stays here, take and all, until a
-// recorder shows it (with Try again) or it's discarded.
+// recorder shows it (with Try again) or it's discarded; so does one that was superseded (a newer
+// take was already the draft), until a recorder has told the member.
 let inFlight: Promise<SaveOutcome | null> | null = null;
 
 // While this tab holds a take that can still be saved (saving, or failed and kept), closing or
@@ -20,8 +21,14 @@ function warn(event: BeforeUnloadEvent) {
   if (unsaved) event.preventDefault();
 }
 
-function kept(outcome: SaveOutcome | null): boolean {
+// A take this tab could still save, and would lose if it closed.
+function atRisk(outcome: SaveOutcome | null): boolean {
   return outcome?.step === "failed" && !outcome.updated && !wasDeleted(outcome);
+}
+
+// What stays here for a recorder to show: a take at risk, or the news that it wasn't kept.
+function kept(outcome: SaveOutcome | null): boolean {
+  return atRisk(outcome) || outcome?.step === "superseded";
 }
 
 function clear() {
@@ -35,7 +42,9 @@ export function trackSave<T extends SaveOutcome | null>(save: Promise<T>): Promi
   window.addEventListener("beforeunload", warn); // the same function, so adding it again does nothing
   save.then(
     (outcome) => {
-      if (inFlight === save && !kept(outcome)) clear();
+      if (inFlight !== save) return;
+      if (!kept(outcome)) clear();
+      else unsaved = atRisk(outcome);
     },
     () => {
       if (inFlight === save) clear();

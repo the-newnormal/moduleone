@@ -18,9 +18,12 @@ export type Take = {
 };
 
 // Where saving a take ends. On "saved" the page re-renders with the draft (or the submitted
-// check-in) in the recorder's place; on "failed" the take is kept for "Try again".
+// check-in) in the recorder's place; on "failed" the take is kept for "Try again"; on "superseded"
+// a take recorded later (another tab or device) is already the draft, so this one wasn't kept,
+// and the member is told so.
 export type SaveOutcome =
   | { step: "saved" }
+  | { step: "superseded" }
   // updated: the app was redeployed since the page loaded, so no retry from this page can work.
   | { step: "failed"; take: Take; message: string; updated: boolean };
 
@@ -130,7 +133,7 @@ export async function saveTake(take: Take, steps: SaveSteps): Promise<SaveOutcom
       return saveTake({ ...current, uploadedPath: null }, steps);
     }
     if (saved.status === "error") return failed(takeToRetry(saved.code, current), saved.message);
-    // "superseded": a take recorded later is already the draft, and the page now shows it.
+    if (saved.status === "superseded") return { step: "superseded" };
     return { step: "saved" };
   } catch (error) {
     // An upload that ran out of time may or may not have landed, so the take still has no uploaded

@@ -38,7 +38,8 @@ export type PrepareRecordingResult =
   | { status: "ready"; path: string; token: string; contentType: string }
   | Submitted
   | CheckinError;
-// superseded: a take recorded later is already this week's draft, so this one was dropped.
+// superseded: a take recorded later is already this week's draft, so this one was dropped (and its
+// upload deleted). The page isn't re-rendered, so the recorder can tell the member first.
 export type SaveDraftResult = { status: "saved" } | { status: "superseded" } | Submitted | CheckinError;
 // path: the deleted take's recording, so the recorder can drop a failed save of that same take.
 export type DeleteDraftResult = { status: "deleted"; path: string | null } | CheckinError;
@@ -249,7 +250,6 @@ export async function saveDraft(input: {
   });
   if (raised(error, "newer_draft")) {
     await removeFile(admin, memberId, path);
-    revalidatePath(PAGE);
     return { status: "superseded" };
   }
   // No plausible recording time, and another take is the draft: which is newer can't be told, so
@@ -327,13 +327,12 @@ export async function submitCheckin(shown: string): Promise<SubmitCheckinResult>
   return submitted();
 }
 
-// When the take was recorded. Anything that isn't a time within the last week becomes null:
-// unknown, so the database won't compare it with another take. It also caps the time at now.
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+// When the take was recorded. However old, a real time is kept, so an old take still loses to a
+// newer one; a time that isn't a number, or is in the future, becomes null: unknown, so the
+// database won't let the take replace another one. The database also caps the time at now.
 function recordedAt(value: unknown): string | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  if (value < Date.now() - WEEK_MS || value > Date.now() + 60_000) return null;
-  return new Date(value).toISOString();
+  if (typeof value !== "number" || !Number.isFinite(value) || value > Date.now() + 60_000) return null;
+  return new Date(Math.max(0, value)).toISOString();
 }
 
 // The recorder's own measure of the take's length: only a hint, so anything odd becomes null.

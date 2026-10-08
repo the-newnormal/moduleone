@@ -142,8 +142,8 @@ create policy checkin_audio_unsubmitted_speaker_only on storage.objects as restr
 -- draft raises 'newer_draft' instead: it arrived late (a save that timed out and finished anyway,
 -- or one retried from another tab or device), and must not replace the newer take. A take whose
 -- recording time is unknown (p_recorded_at null) can become the draft when there is none
--- (recorded_at then now); with another take as the draft, which is newer can't be told, so it
--- raises 'unknown_order' and changes nothing.
+-- (recorded_at then -infinity, so any later take replaces it); with another take as the draft,
+-- which is newer can't be told, so it raises 'unknown_order' and changes nothing.
 create function save_checkin_draft(
   p_member_id uuid, p_audio_path text, p_mime_type text, p_duration_ms int, p_recorded_at timestamptz default null
 )
@@ -151,7 +151,8 @@ create function save_checkin_draft(
   language plpgsql set search_path = '' as $$
 declare
   v_week date := (date_trunc('week', now() at time zone 'Asia/Singapore'))::date;
-  v_recorded timestamptz := least(coalesce(p_recorded_at, now()), now());
+  -- Unknown counts as earliest, so any take with a time replaces it.
+  v_recorded timestamptz := least(coalesce(p_recorded_at, '-infinity'), now());
   v_old text;
   v_old_recorded timestamptz;
 begin

@@ -351,19 +351,27 @@ describe("saveDraft", () => {
     ["null (no server time)", null],
     ["not a number", "2026-10-08T03:30:00Z"],
     ["NaN", Number.NaN],
-    ["over a week ago", NOW.getTime() - 8 * 24 * 60 * 60 * 1000],
     ["in the future", NOW.getTime() + 5 * 60 * 1000],
   ])("leaves the recording time to the database when the browser sends %s", async (_label, recordedAt) => {
     await saveDraft({ path: PATH, recordedAt: recordedAt as number });
     expect(rpc).toHaveBeenCalledWith("save_checkin_draft", expect.objectContaining({ p_recorded_at: null }));
   });
 
-  it("drops a take recorded before the current draft, deleting its upload, and shows the draft", async () => {
+  it("keeps a real recording time however old, so an old take still loses to a newer one", async () => {
+    const tenDaysAgo = NOW.getTime() - 10 * 24 * 60 * 60 * 1000;
+    await saveDraft({ path: PATH, recordedAt: tenDaysAgo });
+    expect(rpc).toHaveBeenCalledWith(
+      "save_checkin_draft",
+      expect.objectContaining({ p_recorded_at: new Date(tenDaysAgo).toISOString() }),
+    );
+  });
+
+  it("drops a take recorded before the current draft, deleting its upload, and lets the recorder say so", async () => {
     rpc.mockResolvedValue(raised("newer_draft"));
     const anHourAgo = NOW.getTime() - 60 * 60 * 1000;
     expect(await saveDraft({ path: PATH, recordedAt: anHourAgo })).toEqual({ status: "superseded" });
     expect(remove).toHaveBeenCalledExactlyOnceWith([PATH]);
-    expect(revalidatePath).toHaveBeenCalledExactlyOnceWith(PAGE);
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 
   it("keeps the take, and saves nothing, when which take is newer can't be told", async () => {

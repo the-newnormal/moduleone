@@ -218,7 +218,7 @@ function CheckinCard({ view }: { view: View }) {
               {view.durationMs !== null && ` · ${formatLength(view.durationMs)}`}
             </p>
             <DraftControls path={view.path} />
-            <SavedTake path={view.path} />
+            <SavedTake key={view.path} path={view.path} />
           </CardContent>
         </Card>
       );

@@ -21,6 +21,8 @@ const WARN_MS = 9 * 60 * 1000;
 const BUCKET = "checkin-audio";
 
 const UNSUPPORTED = "This browser can't record audio here. Use an up-to-date Chrome, Edge, Firefox or Safari.";
+const SUPERSEDED =
+  "You'd already saved a newer recording, on another device or tab, so this one wasn't kept. Your draft is the newer one.";
 const AWAY = "Your phone may have paused the recording while you were away. Listen back before you submit.";
 
 type State =
@@ -82,7 +84,9 @@ function release(media: RefObject<Media | null>) {
   live.stream.getTracks().forEach((track) => track.stop());
 }
 
-export function Recorder() {
+// heldOnly: shown under a draft (see saved-take.tsx) only for a take this tab still holds, saving or
+// failed, or the news that it wasn't kept; it can't start a recording, and shows nothing otherwise.
+export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
   // The save this recorder came back to, if any (see pending-save.ts). Read once, so the first
   // render and the effect that waits for it agree even if the save settles in between.
   const [returnedTo] = useState(currentSave);
@@ -135,7 +139,9 @@ export function Recorder() {
     void pending.then((outcome) => {
       if (!mounted) return;
       // This recorder holds the outcome now (a failed take included), so it's no longer pending.
-      releaseSave(pending);
+      // Except under a draft: there the save stays held, so Submit waits until it is saved or
+      // discarded (see draft-controls.tsx).
+      if (!heldOnly) releaseSave(pending);
       // A failed save of the draft the member has since deleted: nothing to offer again.
       setState(outcome && !wasDeleted(outcome) ? outcome : { step: "idle", problem: null });
       // The save re-rendered the page while the member was elsewhere; this page hasn't seen it.
@@ -144,7 +150,7 @@ export function Recorder() {
     return () => {
       mounted = false;
     };
-  }, [returnedTo, router]);
+  }, [returnedTo, router, heldOnly]);
 
   // Still here once that refresh has landed: the draft has gone since (deleted, or the week
   // turned), so offer a new recording rather than stay on "Saved.".
@@ -303,6 +309,13 @@ export function Recorder() {
     setState({ step: "idle", problem: null });
   }
 
+  // After "superseded": show the newer draft (the page hasn't been re-rendered for it yet).
+  function showDraft() {
+    releaseSave();
+    setState({ step: "idle", problem: null });
+    startRefresh(() => router.refresh());
+  }
+
   const announcement =
     state.step === "starting"
       ? "Waiting for your microphone…"
@@ -315,6 +328,7 @@ export function Recorder() {
           : state.step === "saved"
             ? "Saved."
             : "";
+  if (heldOnly && state.step !== "saving" && state.step !== "failed" && state.step !== "superseded") return null;
   // Kept on screen until the take is saved (or can't be). In the live region it is a node of its
   // own, so it is announced when it appears and not again with every later step.
   const awayNote = away && unsaved;
@@ -345,7 +359,7 @@ export function Recorder() {
               {state.problem}
             </p>
           )}
-          <Button ref={primary} type="button" onClick={start} className="justify-self-start">
+          <Button ref={primary} type="button" onClick={start} disabled={refreshing} className="justify-self-start">
             <Mic aria-hidden="true" />
             Start recording
           </Button>
@@ -410,6 +424,17 @@ export function Recorder() {
               Discard
             </Button>
           </div>
+        </>
+      )}
+
+      {state.step === "superseded" && (
+        <>
+          <p role="status" className="text-sm">
+            {SUPERSEDED}
+          </p>
+          <Button ref={primary} type="button" className="justify-self-start" onClick={showDraft}>
+            {heldOnly ? "OK" : "Show my draft"}
+          </Button>
         </>
       )}
 
