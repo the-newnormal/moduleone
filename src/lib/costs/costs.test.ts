@@ -40,6 +40,13 @@ describe("rowCostUsd", () => {
     expect(rowCostUsd(grading({ model: "claude-unknown" }))).toBeNull();
   });
 
+  it("prices cache reads at 0.05× input on Sonnet 5.5 and Opus 5.5", () => {
+    const reads = (model: string) => rowCostUsd(grading({ model, input_tokens: 0, output_tokens: 0, cache_read_tokens: 1_000_000 }));
+    expect(reads("claude-sonnet-5-5")).toBeCloseTo(0.1);
+    expect(reads("claude-opus-5-5")).toBeCloseTo(0.2);
+    expect(reads("claude-haiku-5-5")).toBeCloseTo(0.01);
+  });
+
   it("prices grading tokens, with cache reads at the cache rate", () => {
     // 1,000 × $0.10 + 2,000 × $0.50 + 1,000,000 × $0.01, per million.
     expect(rowCostUsd(grading())).toBeCloseTo(0.0001 + 0.001 + 0.01);

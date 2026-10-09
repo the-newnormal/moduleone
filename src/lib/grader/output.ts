@@ -44,7 +44,7 @@ const GradeOutput = z.strictObject({
 
 // Parses Claude's reply into a grade, or throws GradingError('invalid_output'). The message names
 // the fields that failed, never their values: the review can quote the transcript.
-export function parseGradeOutput(text: string): Omit<Grade, "model" | "usage"> {
+export function parseGradeOutput(text: string): Omit<Grade, "model" | "attempts"> {
   let json: unknown;
   try {
     json = JSON.parse(text);

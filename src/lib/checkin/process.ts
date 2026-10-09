@@ -110,7 +110,7 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
         .update({ transcript: result.text, transcript_model: transcriptModel, transcript_warnings: result.warnings })
         .eq("id", checkinId)
         .abortSignal(AbortSignal.timeout(SAVE_MS)),
-      recordCost(admin, checkinId, { step: "transcription", model: transcriptModel, audio_ms: claim.audio_duration_ms }),
+      recordCost(admin, checkinId, [{ step: "transcription", model: transcriptModel, audio_ms: claim.audio_duration_ms }]),
     ]);
     if (transcriptError) return fail("save_transcript_failed", transcriptError);
     transcript = result.text;
@@ -150,7 +150,11 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
       .eq("id", checkinId)
       .is("graded_at", null)
       .abortSignal(AbortSignal.timeout(SAVE_MS)),
-    recordCost(admin, checkinId, { step: "grading", model: grade.model, ...usageColumns(grade.usage) }),
+    recordCost(
+      admin,
+      checkinId,
+      grade.attempts.map((attempt) => ({ step: "grading" as const, model: attempt.model, ...usageColumns(attempt.usage) })),
+    ),
   ]);
   if (gradeError) return fail("save_grade_failed", gradeError);
   return "graded";
@@ -179,15 +183,16 @@ function usageColumns(usage: GradeUsage) {
 // Logs a paid call in processing_costs (0007) for the admin Costs page. Runs alongside the save
 // that follows the call, inside the same SAVE_MS, and never fails the check-in: a missing row
 // only makes the month's total a little low.
-async function recordCost(admin: ReturnType<typeof createServiceRoleClient>, checkinId: string, row: CostRow): Promise<void> {
+async function recordCost(admin: ReturnType<typeof createServiceRoleClient>, checkinId: string, rows: CostRow[]): Promise<void> {
+  const step = rows[0]?.step;
   try {
     const { error } = await admin
       .from("processing_costs")
-      .insert({ checkin_id: checkinId, ...row })
+      .insert(rows.map((row) => ({ checkin_id: checkinId, ...row })))
       .abortSignal(AbortSignal.timeout(SAVE_MS));
-    if (error) console.error("processCheckin: could not record the cost", { checkinId, step: row.step, code: error.code });
+    if (error) console.error("processCheckin: could not record the cost", { checkinId, step, code: error.code });
   } catch (error) {
-    console.error("processCheckin: could not record the cost", { checkinId, step: row.step, error: describe(error) });
+    console.error("processCheckin: could not record the cost", { checkinId, step, error: describe(error) });
   }
 }
 

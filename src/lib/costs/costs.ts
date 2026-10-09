@@ -14,11 +14,12 @@ export const TRANSCRIPTION_USD_PER_MINUTE: Record<string, number> = {
 
 type TokenPrice = { input: number; output: number; cacheRead: number; cacheWrite: number };
 
-// US$ per million tokens. Cache writes are the 5-minute kind (1.25× input). Claude Haiku 5.5's
-// price is for prompts up to 100K tokens; a check-in transcript is a few thousand.
+// US$ per million tokens (platform.claude.com/docs/en/about-claude/pricing). Cache writes are the
+// 5-minute kind (1.25× input); cache reads are 0.1× input, but 0.05× on Opus 5.5 and Sonnet 5.5.
+// Claude Haiku 5.5's price is for prompts up to 100K tokens; a check-in transcript is a few thousand.
 export const GRADING_USD_PER_MTOK: Record<string, TokenPrice> = {
   "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
-  "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+  "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
   "claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
   // Refusal fallbacks can answer with an older model.
   "claude-opus-4-8": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },

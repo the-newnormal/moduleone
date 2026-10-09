@@ -15,9 +15,12 @@ export type Grade = {
   review: string;
   // The model that actually produced the grade (after any refusal fallback).
   model: string;
-  // What the call used, for the cost log. Output includes thinking.
-  usage: GradeUsage;
+  // Every billed model attempt in the call, for the cost log: one, or more when a refusal fallback
+  // took over (the declined attempt is billed too). Output includes thinking.
+  attempts: GradeAttempt[];
 };
+
+export type GradeAttempt = { model: string; usage: GradeUsage };
 
 export type GradeUsage = {
   inputTokens: number;

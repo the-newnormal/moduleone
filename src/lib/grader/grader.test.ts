@@ -226,9 +226,18 @@ describe("gradeCheckin with an untrusted transcript", () => {
 });
 
 describe("gradeCheckin reply", () => {
-  it("returns the grade, the model that actually answered and the tokens used", async () => {
+  it("returns the grade, the model that answered and the tokens it used", async () => {
+    await expect(gradeCheckin({ transcript: TRANSCRIPT })).resolves.toEqual({
+      ...GOOD,
+      model: "claude-haiku-5-5",
+      attempts: [{ model: "claude-haiku-5-5", usage: USAGE }],
+    });
+  });
+
+  it("after a refusal fallback, returns the model that took over and every billed attempt", async () => {
     vi.stubEnv("ANTHROPIC_MODEL", "claude-sonnet-5-5");
-    // After a refusal fallback the reply names the model that took over, after a marker block.
+    // The reply names the model that took over, after a marker block. Top-level usage covers only
+    // the answering attempt; iterations list the declined one too.
     create.mockResolvedValue(
       reply({
         model: "claude-opus-4-8",
@@ -236,12 +245,25 @@ describe("gradeCheckin reply", () => {
           { type: "fallback", from: { model: "claude-sonnet-5-5" }, to: { model: "claude-opus-4-8" } },
           { type: "text", text: JSON.stringify(GOOD) },
         ],
+        usage: {
+          input_tokens: 50,
+          output_tokens: 400,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 1500,
+          iterations: [
+            { type: "message", model: "claude-sonnet-5-5", input_tokens: 40, output_tokens: 120, cache_read_input_tokens: 1500, cache_creation_input_tokens: 0 },
+            { type: "fallback_message", model: "claude-opus-4-8", input_tokens: 50, output_tokens: 400, cache_read_input_tokens: 0, cache_creation_input_tokens: 1500 },
+          ],
+        },
       }),
     );
     await expect(gradeCheckin({ transcript: TRANSCRIPT })).resolves.toEqual({
       ...GOOD,
       model: "claude-opus-4-8",
-      usage: USAGE,
+      attempts: [
+        { model: "claude-sonnet-5-5", usage: { inputTokens: 40, outputTokens: 120, cacheReadTokens: 1500, cacheWriteTokens: 0 } },
+        { model: "claude-opus-4-8", usage: { inputTokens: 50, outputTokens: 400, cacheReadTokens: 0, cacheWriteTokens: 1500 } },
+      ],
     });
   });
 
@@ -250,7 +272,7 @@ describe("gradeCheckin reply", () => {
       reply({ usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: null, cache_creation_input_tokens: null } }),
     );
     await expect(gradeCheckin({ transcript: TRANSCRIPT })).resolves.toMatchObject({
-      usage: { inputTokens: 10, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      attempts: [{ model: "claude-haiku-5-5", usage: { inputTokens: 10, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 } }],
     });
   });
 

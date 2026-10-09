@@ -29,28 +29,44 @@ const models = (process.env.GRADER_COMPARE_MODELS ?? "claude-opus-5-5,claude-hai
   .map((m) => m.trim())
   .filter(Boolean);
 
+// Every billed attempt priced at its own model's rates; null if any can't be priced.
 function costOf(grade: Grade): number | null {
-  if (!GRADING_USD_PER_MTOK[grade.model]) return null;
-  return rowCostUsd({
-    checkin_id: "comparison",
-    step: "grading",
-    model: grade.model,
-    audio_ms: null,
-    input_tokens: grade.usage.inputTokens,
-    output_tokens: grade.usage.outputTokens,
-    cache_read_tokens: grade.usage.cacheReadTokens,
-    cache_write_tokens: grade.usage.cacheWriteTokens,
-    created_at: new Date().toISOString(),
-  });
+  let total = 0;
+  for (const { model, usage } of grade.attempts) {
+    const usd = GRADING_USD_PER_MTOK[model]
+      ? rowCostUsd({
+          checkin_id: "comparison",
+          step: "grading",
+          model,
+          audio_ms: null,
+          input_tokens: usage.inputTokens,
+          output_tokens: usage.outputTokens,
+          cache_read_tokens: usage.cacheReadTokens,
+          cache_write_tokens: usage.cacheWriteTokens,
+          created_at: new Date().toISOString(),
+        })
+      : null;
+    if (usd === null) return null;
+    total += usd;
+  }
+  return total;
 }
+
+const sum = (grade: Grade, key: keyof Grade["attempts"][number]["usage"]) =>
+  grade.attempts.reduce((n, attempt) => n + attempt.usage[key], 0);
 
 function markdown(inputs: Input[], results: Map<string, Outcome[]>): string {
   const lines = [`# Grader comparison: ${models.join(" vs ")}`, "", `${inputs.length} transcripts, ${new Date().toISOString()}.`, ""];
+  // A total (and a monthly estimate) only when every transcript was graded and priced: a failed or
+  // unpriced call counted as free would make a model look cheaper than it is.
   const totals = models.map((model, i) => {
-    const usd = inputs.reduce((sum, input) => {
-      const outcome = results.get(input.id)?.[i];
-      return sum + (outcome && "grade" in outcome ? (outcome.usd ?? 0) : 0);
-    }, 0);
+    const outcomes = inputs.map((input) => results.get(input.id)?.[i]);
+    const failed = outcomes.filter((o) => !o || "error" in o).length;
+    const unpriced = outcomes.filter((o) => o && "grade" in o && o.usd === null).length;
+    if (failed || unpriced) {
+      return `- **${model}**: incomplete (${failed} failed, ${unpriced} not priced), so no total or estimate`;
+    }
+    const usd = outcomes.reduce((n, o) => n + (o && "grade" in o ? (o.usd ?? 0) : 0), 0);
     return `- **${model}**: US$${usd.toFixed(4)} for these ${inputs.length} (about US$${((usd / inputs.length) * 433).toFixed(2)} a month at 433 check-ins)`;
   });
   lines.push("## Cost", "", ...totals, "");
@@ -69,8 +85,9 @@ function markdown(inputs: Input[], results: Map<string, Outcome[]>): string {
         "",
         grade.review,
         "",
-        `_${grade.usage.inputTokens + grade.usage.cacheReadTokens + grade.usage.cacheWriteTokens} tokens in ` +
-          `(${grade.usage.cacheReadTokens} from cache), ${grade.usage.outputTokens} out` +
+        `_${sum(grade, "inputTokens") + sum(grade, "cacheReadTokens") + sum(grade, "cacheWriteTokens")} tokens in ` +
+          `(${sum(grade, "cacheReadTokens")} from cache), ${sum(grade, "outputTokens")} out` +
+          (grade.attempts.length > 1 ? ` over ${grade.attempts.length} attempts` : "") +
           (outcome.usd === null ? "_" : `, US$${outcome.usd.toFixed(5)}_`),
         "",
       );

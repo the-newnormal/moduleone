@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { gradeCheckin, GradingError } from "@/lib/grader";
+import { gradeCheckin, GradingError, type Grade } from "@/lib/grader";
 import { transcribe, TranscriptionError } from "@/lib/stt";
 import { createServiceRoleClient } from "@/lib/supabase/admin";
 import { processCheckin } from "./process";
@@ -13,18 +13,18 @@ const CHECKIN = "d1000000-0000-4000-8000-000000000001";
 const MEMBER = "c1000000-0000-4000-8000-000000000002";
 const PATH = `${MEMBER}/2026-10-05-take.webm`;
 const TRANSCRIPT = "I shipped the login page and helped Priya with the tests. The team feels good.";
-const GRADE = {
+const GRADE: Grade = {
   activity: 4,
   excellence: 3,
   morale: 4,
   category: "delivery",
   review: "Shipped the login page.",
   model: "claude-haiku-5-5",
-  usage: { inputTokens: 40, outputTokens: 300, cacheReadTokens: 1500, cacheWriteTokens: 0 },
-} as const;
+  attempts: [{ model: "claude-haiku-5-5", usage: { inputTokens: 40, outputTokens: 300, cacheReadTokens: 1500, cacheWriteTokens: 0 } }],
+};
 
 type Update = { table: string; values: Record<string, unknown>; filters: [string, string, unknown][] };
-type Insert = { table: string; values: Record<string, unknown> };
+type Insert = { table: string; values: Record<string, unknown>[] };
 let updates: Update[];
 let inserts: Insert[];
 let updateError: { code: string; message: string } | null;
@@ -37,7 +37,7 @@ const storageFrom = vi.fn(() => ({ download }));
 // number of filters.
 function from(table: string) {
   return {
-    insert(values: Record<string, unknown>) {
+    insert(values: Record<string, unknown>[]) {
       inserts.push({ table, values });
       const builder = {
         abortSignal: () => builder,
@@ -126,11 +126,12 @@ describe("processCheckin", () => {
     expect(inserts).toEqual([
       {
         table: "processing_costs",
-        values: { checkin_id: CHECKIN, step: "transcription", model: "openai:gpt-transcribe", audio_ms: 95000 },
+        values: [{ checkin_id: CHECKIN, step: "transcription", model: "openai:gpt-transcribe", audio_ms: 95000 }],
       },
       {
         table: "processing_costs",
-        values: {
+        values: [
+          {
           checkin_id: CHECKIN,
           step: "grading",
           model: "claude-haiku-5-5",
@@ -138,8 +139,27 @@ describe("processCheckin", () => {
           output_tokens: 300,
           cache_read_tokens: 1500,
           cache_write_tokens: 0,
-        },
+          },
+        ],
       },
+    ]);
+  });
+
+  it("logs one grading row per billed attempt when a fallback model answered", async () => {
+    const usage = (n: number) => ({ inputTokens: n, outputTokens: n, cacheReadTokens: 0, cacheWriteTokens: 0 });
+    vi.mocked(gradeCheckin).mockResolvedValue({
+      ...GRADE,
+      model: "claude-opus-4-8",
+      attempts: [
+        { model: "claude-sonnet-5-5", usage: usage(10) },
+        { model: "claude-opus-4-8", usage: usage(20) },
+      ],
+    });
+    await processCheckin(CHECKIN);
+    const grading = inserts.filter((i) => i.table === "processing_costs").flatMap((i) => i.values);
+    expect(grading.filter((r) => r.step === "grading").map((r) => [r.model, r.input_tokens])).toEqual([
+      ["claude-sonnet-5-5", 10],
+      ["claude-opus-4-8", 20],
     ]);
   });
 
@@ -173,7 +193,7 @@ describe("processCheckin", () => {
   it("logs only the grading cost when it reuses a saved transcript", async () => {
     rpc.mockResolvedValue(claim({ transcript: TRANSCRIPT, attempts: 2 }));
     await processCheckin(CHECKIN);
-    expect(inserts.map((i) => i.values.step)).toEqual(["grading"]);
+    expect(inserts.flatMap((i) => i.values.map((v) => v.step))).toEqual(["grading"]);
   });
 
   it("does nothing when there is nothing to claim", async () => {

@@ -11,7 +11,7 @@ import Anthropic, {
 } from "@anthropic-ai/sdk";
 import { GRADE_JSON_SCHEMA, parseGradeOutput } from "./output";
 import { countWords, GRADER_SYSTEM_PROMPT, transcriptMessage } from "./prompt";
-import { GradingError, type Grade } from "./types";
+import { GradingError, type Grade, type GradeAttempt } from "./types";
 
 export * from "./types";
 
@@ -93,8 +93,8 @@ export async function gradeCheckin(input: { transcript: string; model?: string; 
           format: { type: "json_schema", schema: GRADE_JSON_SCHEMA },
         },
         // The rubric is the same on every call and long enough to cache (over the 512-token
-        // minimum), so check-ins graded within a few minutes of each other read it at a tenth of
-        // the price. Nothing that varies goes in the system prompt.
+        // minimum), so check-ins graded within a few minutes of each other read it at a fraction
+        // of the price. Nothing that varies goes in the system prompt.
         system: [{ type: "text", text: GRADER_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
         messages: [{ role: "user", content: transcriptMessage(transcript) }],
       },
@@ -125,17 +125,46 @@ export async function gradeCheckin(input: { transcript: string; model?: string; 
   // Read by block type: thinking blocks (and a fallback marker, if another model took over) come
   // before the text.
   const text = response.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
-  const usage = response.usage;
-  return {
-    ...parseGradeOutput(text),
-    model: response.model,
-    usage: {
-      inputTokens: usage.input_tokens,
-      outputTokens: usage.output_tokens,
-      cacheReadTokens: usage.cache_read_input_tokens ?? 0,
-      cacheWriteTokens: usage.cache_creation_input_tokens ?? 0,
-    },
-  };
+  return { ...parseGradeOutput(text), model: response.model, attempts: billedAttempts(response.usage, response.model) };
+}
+
+type Usage = {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number | null;
+  cache_creation_input_tokens: number | null;
+};
+
+const toUsage = (usage: Usage) => ({
+  inputTokens: usage.input_tokens,
+  outputTokens: usage.output_tokens,
+  cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+  cacheWriteTokens: usage.cache_creation_input_tokens ?? 0,
+});
+
+// The top-level usage covers only the attempt that answered. When a refusal fallback ran,
+// usage.iterations lists each model attempt (the declined one and the fallback) with its own
+// model and tokens, so each is priced at its own model's rates.
+function billedAttempts(
+  usage: Usage & { iterations?: ({ type: string; model?: string | null } & Partial<Usage>)[] | null },
+  answeredBy: string,
+): GradeAttempt[] {
+  const attempts = (usage.iterations ?? []).flatMap((it) =>
+    (it.type === "message" || it.type === "fallback_message") && it.input_tokens !== undefined && it.output_tokens !== undefined
+      ? [
+          {
+            model: it.model ?? answeredBy,
+            usage: toUsage({
+              input_tokens: it.input_tokens,
+              output_tokens: it.output_tokens,
+              cache_read_input_tokens: it.cache_read_input_tokens ?? null,
+              cache_creation_input_tokens: it.cache_creation_input_tokens ?? null,
+            }),
+          },
+        ]
+      : [],
+  );
+  return attempts.length ? attempts : [{ model: answeredBy, usage: toUsage(usage) }];
 }
 
 // The SDK's abort and network errors are subclasses of APIError, so they're checked first.
