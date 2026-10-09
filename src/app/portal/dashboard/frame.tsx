@@ -44,9 +44,6 @@ export function DashboardFrame({
     <main className="mx-auto grid w-full max-w-6xl grid-cols-[minmax(0,1fr)] gap-6 px-4 py-10">
       <header className="flex flex-wrap items-start justify-between gap-x-8 gap-y-4">
         <div className="grid min-w-0 flex-1 basis-80 gap-2">
-          <Link href="/portal" className="w-fit text-sm text-muted-foreground hover:text-foreground">
-            ← Portal
-          </Link>
           <h1 className="text-4xl">Team health</h1>
           {role && role !== "member" && <p className="text-muted-foreground">{BLURB[view][role]}</p>}
         </div>

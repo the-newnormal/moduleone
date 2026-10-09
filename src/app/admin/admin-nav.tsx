@@ -8,7 +8,8 @@ const LINKS = [
   { href: "/admin/scoring", label: "Scoring", matches: ["/admin/scoring"] },
 ] as const;
 
-// The admin header's links. A team's page counts as part of Structure (it's reached from there).
+// The admin header's links (the app bar above leads back to the portal). A team's page counts as
+// part of Structure (it's reached from there).
 export function AdminNav() {
   const pathname = usePathname();
   const isCurrent = (prefixes: readonly string[]) =>
@@ -33,9 +34,6 @@ export function AdminNav() {
           </Link>
         );
       })}
-      <Link href="/portal" className="text-muted-foreground hover:text-foreground sm:ml-auto">
-        Back to portal
-      </Link>
     </nav>
   );
 }

@@ -13,8 +13,11 @@ vi.mock("next/navigation", () => ({
     throw new Error("NEXT_HTTP_ERROR_FALLBACK;404");
   }),
   usePathname: () => "/admin/structure",
+  // The app bar's Sign out holds a router; rendering it needs only the hook.
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
 }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
+vi.mock("@/app/portal/actions", () => ({ signOut: vi.fn() }));
 
 const rpc = vi.fn();
 const getClaims = vi.fn();
@@ -29,12 +32,22 @@ const layout = () =>
   AdminLayout({ children: <p>the page</p>, params: Promise.resolve({}) } as unknown as LayoutProps<"/admin">);
 
 describe("AdminLayout", () => {
-  it("shows the admin nav around the page for an admin", async () => {
+  it("shows the app bar, with Admin current, and the admin nav around the page for an admin", async () => {
     rpc.mockImplementation(async (fn: string) =>
-      fn === "app_has_grant" ? { data: true, error: null } : { data: "a0000000-0000-4000-8000-000000000001", error: null },
+      fn === "app_has_grant"
+        ? { data: true, error: null }
+        : fn === "app_current_role"
+          ? { data: "hq", error: null }
+          : { data: "a0000000-0000-4000-8000-000000000001", error: null },
     );
     const html = renderToStaticMarkup(await layout());
+    expect(html).toMatch(/<header class="sticky top-0[^"]*">/);
+    expect(html).toContain('<nav aria-label="Portal"');
+    expect(html).toMatch(/<a aria-current="page"[^>]*href="\/admin"[^>]*>Admin<\/a>/);
+    expect(html).toContain('href="/portal/dashboard"'); // hq: Team health too
+    expect(html.split(">Sign out<")).toHaveLength(2);
     expect(html).toContain('<nav aria-label="Admin"');
+    expect(html).not.toContain("Back to portal"); // the app bar leads there
     expect(html).toContain("<main");
     expect(html).toContain("the page");
   });
@@ -43,6 +56,9 @@ describe("AdminLayout", () => {
     rpc.mockResolvedValue({ data: null, error: { code: "PGRST000", message: "down" } });
     const html = renderToStaticMarkup(await layout());
     expect(html).not.toContain('aria-label="Admin"');
+    // The app bar still leads back to the portal; its nav offers only what didn't need the checks.
+    expect(html).toContain('<nav aria-label="Portal"');
+    expect(html).not.toContain('href="/admin"');
     expect(html).toContain("the page");
   });
 

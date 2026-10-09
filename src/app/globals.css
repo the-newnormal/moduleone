@@ -97,6 +97,11 @@
   :focus-visible {
     @apply outline-2 outline-offset-2 outline-ring;
   }
+  /* The app bar sticks to the top (two rows below md): scroll a focused element or an anchor
+     clear of it, not under it. */
+  html {
+    @apply scroll-pt-30 md:scroll-pt-20;
+  }
   body {
     @apply bg-background text-foreground font-sans;
   }

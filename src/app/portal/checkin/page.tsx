@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -53,9 +52,6 @@ export default async function CheckinPage() {
   return (
     <main className="mx-auto grid w-full max-w-2xl gap-8 px-4 py-12">
       <header className="grid gap-2">
-        <Link href="/portal" className="text-sm text-muted-foreground underline-offset-4 hover:underline">
-          ← Portal
-        </Link>
         <h1 className="text-4xl">Weekly check-in</h1>
         <p className="text-sm text-muted-foreground">
           Week of {formatWeekStart(weekStart)}. Submit by {formatWeekEnd(weekStart)}, 11:59 pm Singapore
