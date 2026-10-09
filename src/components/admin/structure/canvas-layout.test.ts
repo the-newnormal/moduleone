@@ -25,6 +25,7 @@ function node(id: string, kind: TeamRow["kind"], parent_id: string | null, sort_
     code: null,
     sort_order,
     note: null,
+    leader_title: null,
     archived_at: null,
     members: 0,
     leads: 0,

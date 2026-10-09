@@ -25,12 +25,13 @@ export type TeamRow = {
   code: string | null;
   sort_order: number;
   note: string | null;
+  leader_title: string | null; // what the leaders who sit here are called, like President (0006)
   archived_at: string | null;
 };
 
 // For supabase.from("teams").select(TEAM_COLUMNS).
 export const TEAM_COLUMNS =
-  "id, name, parent_id, kind, domain_type, division_type, code, sort_order, note, archived_at";
+  "id, name, parent_id, kind, domain_type, division_type, code, sort_order, note, leader_title, archived_at";
 
 // ---------- labels ----------
 

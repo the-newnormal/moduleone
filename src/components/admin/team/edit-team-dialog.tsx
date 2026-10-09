@@ -50,7 +50,12 @@ export function EditTeamDialog({ team, updateNode }: Props) {
 
 // The node's current values as the form shows them, its domain's or division's type included.
 export const savedForm = (team: TeamSummary) =>
-  nodeToForm({ ...team, domain_type: team.domainType, division_type: team.divisionType });
+  nodeToForm({
+    ...team,
+    domain_type: team.domainType,
+    division_type: team.divisionType,
+    leader_title: team.leaderTitle,
+  });
 
 // The dialog's content (exported for tests). Its state resets each time the dialog opens.
 export function EditTeamForm({
