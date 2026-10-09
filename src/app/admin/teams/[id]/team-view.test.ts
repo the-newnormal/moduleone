@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { TeamRow } from "@/lib/admin/tree";
 import {
   buildNoTeamPeople,
@@ -6,10 +6,17 @@ import {
   coverage,
   demoteDescription,
   emailChangedText,
+  INVITE_LINK_MS,
+  type LoginRow,
+  type LoginStates,
+  type LoginStatus,
+  type LoginStatusText,
   loginGivenText,
+  loginStatusText,
   type MemberRow,
   matchesSearch,
   nameList,
+  type Person,
   promoteDescription,
   removeDescription,
   removePersonDescription,
@@ -80,8 +87,8 @@ const LEADS = [
   { team_id: "team-ip1", member_id: "m-ana" },
 ];
 
-const view = (teamId: string, members = MEMBERS, leads = LEADS, grants: { member_id: string }[] = []) =>
-  buildTeamView({ teamId, adminMemberId: ADMIN, teams: TEAMS, members, leads, grants });
+const view = (teamId: string, members = MEMBERS, leads = LEADS, grants: { member_id: string }[] = [], logins?: LoginStates) =>
+  buildTeamView({ teamId, adminMemberId: ADMIN, teams: TEAMS, members, leads, grants, logins });
 
 // The same tree under the organisation node (0006).
 const ORG_TEAMS: TeamRow[] = [
@@ -92,6 +99,30 @@ const ORG_TEAMS: TeamRow[] = [
 // Removed from Module One (0009). The database also clears the row's login, team and role; rows
 // that keep one here check that the page doesn't rely on it.
 const REMOVED = { removed_at: "2026-10-09T03:00:00Z" };
+
+// What admin_login_states (0010) returns for one linked login.
+const loginRow = (member_id: string, state: LoginRow["state"], extra: Partial<LoginRow> = {}): LoginRow => ({
+  member_id,
+  state,
+  invited_at: null,
+  last_sign_in_at: null,
+  ...extra,
+});
+
+// An invite sent at 16:30 UTC on 8 Oct, which is 12:30 am on 9 Oct in Singapore.
+const SENT = "2026-10-08T16:30:00Z";
+const later = (iso: string, ms: number) => new Date(Date.parse(iso) + ms).toISOString();
+const MINUTE = 60 * 1000;
+
+// Login states as the server read them, half an hour after SENT unless said otherwise.
+const states = (rows: LoginRow[], readAt = later(SENT, 30 * MINUTE)): LoginStates => ({ rows, readAt });
+
+// ICU may put a narrow no-break space before "am"/"pm"; compare with plain spaces.
+const plain = (s: string | null) => s?.replace(/\s/g, " ") ?? null;
+const plainLogin = (login: LoginStatus): LoginStatus =>
+  login.state === "invited" ? { ...login, sentAt: plain(login.sentAt) } : login;
+
+const loginOf = (people: readonly Person[], id: string) => plainLogin(people.find((p) => p.id === id)!.login);
 
 describe("buildTeamView", () => {
   it("gives the node's title for its leaders to the leaders and hq sitting there, not to members", () => {
@@ -565,11 +596,214 @@ describe("buildTeamView", () => {
     const v = view("team-ip1", members, [...LEADS, { team_id: "team-ip1", member_id: "m-sam" }])!;
     expect(v.leads.map((l) => l.id)).not.toContain("m-sam");
   });
+
+  it("says an invite read half an hour after it went out isn't used yet, and when it went out in Singapore time", () => {
+    const people = view("team-ip1", MEMBERS, LEADS, [], states([loginRow("m-mei", "invited", { invited_at: SENT })]))!.people;
+    expect(loginOf(people, "m-mei")).toEqual({ state: "invited", sentAt: "9 Oct 2026, 12:30 am", expired: false });
+    const text = loginStatusText(people.find((p) => p.id === "m-mei")!.login);
+    expect({ ...text, detail: plain(text.detail) }).toEqual({
+      label: "Invite not used",
+      tone: "warning",
+      detail: "Invite sent 9 Oct 2026, 12:30 am",
+    });
+  });
+
+  it("says an invite expired once its link has been out an hour, and not a moment before", () => {
+    expect(INVITE_LINK_MS).toBe(60 * MINUTE);
+    const at = (readAt: string) =>
+      loginOf(
+        view("team-ip1", MEMBERS, LEADS, [], states([loginRow("m-mei", "invited", { invited_at: SENT })], readAt))!.people,
+        "m-mei",
+      );
+    expect(at(later(SENT, INVITE_LINK_MS - 1))).toEqual({ state: "invited", sentAt: "9 Oct 2026, 12:30 am", expired: false });
+    expect(at(later(SENT, INVITE_LINK_MS))).toEqual({ state: "invited", sentAt: "9 Oct 2026, 12:30 am", expired: true });
+    expect(at(later(SENT, 120 * MINUTE))).toEqual({ state: "invited", sentAt: "9 Oct 2026, 12:30 am", expired: true });
+    expect(loginStatusText(at(later(SENT, 120 * MINUTE))).label).toBe("Invite expired");
+  });
+
+  it("works out an invite's age from when the login states were read, not from the clock rendering the page", () => {
+    const rows = [loginRow("m-mei", "invited", { invited_at: SENT })];
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
+      expect(loginOf(view("team-ip1", MEMBERS, LEADS, [], states(rows))!.people, "m-mei")).toMatchObject({ expired: false });
+      vi.setSystemTime(new Date(SENT));
+      const readLater = states(rows, later(SENT, 120 * MINUTE));
+      expect(loginOf(view("team-ip1", MEMBERS, LEADS, [], readLater)!.people, "m-mei")).toMatchObject({ expired: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("doesn't say when an invite went out when that isn't known, and then never calls it expired", () => {
+    const monthLater = later(SENT, 30 * 24 * 60 * MINUTE);
+    const people = view("team-ip1", MEMBERS, LEADS, [], states([loginRow("m-mei", "invited")], monthLater))!.people;
+    expect(loginOf(people, "m-mei")).toEqual({ state: "invited", sentAt: null, expired: false });
+    expect(loginStatusText(people.find((p) => p.id === "m-mei")!.login)).toEqual({
+      label: "Invite not used",
+      tone: "warning",
+      detail: null,
+    });
+  });
+
+  it("never calls an invite expired when the time it went out, or the time the states were read, is unreadable", () => {
+    const at = (invited_at: string, readAt: string) =>
+      loginOf(view("team-ip1", MEMBERS, LEADS, [], states([loginRow("m-mei", "invited", { invited_at })], readAt))!.people, "m-mei");
+    expect(at(SENT, "not a date")).toEqual({ state: "invited", sentAt: "9 Oct 2026, 12:30 am", expired: false });
+    expect(at("not a date", later(SENT, 120 * MINUTE))).toEqual({ state: "invited", sentAt: null, expired: false });
+  });
+
+  it("says a login nobody has signed in with is ready, and an active one the day it was last used, in Singapore", () => {
+    const rows = [
+      loginRow("m-leo", "ready"),
+      loginRow("m-mei", "active", { last_sign_in_at: "2026-10-07T16:30:00Z" }), // 12:30 am on 8 Oct in Singapore
+    ];
+    const people = view("team-ip1", MEMBERS, LEADS, [], states(rows))!.people;
+    expect(loginOf(people, "m-leo")).toEqual({ state: "ready" });
+    expect(loginOf(people, "m-mei")).toEqual({ state: "active", lastSignedInOn: "8 Oct 2026" });
+    expect(loginStatusText(loginOf(people, "m-mei")).detail).toBe("Last signed in 8 Oct 2026");
+    // Without a readable date, it's still active, and says no more.
+    for (const last_sign_in_at of [null, "not a date"]) {
+      const undated = view("team-ip1", MEMBERS, LEADS, [], states([loginRow("m-mei", "active", { last_sign_in_at })]))!.people;
+      expect(loginOf(undated, "m-mei")).toEqual({ state: "active", lastSignedInOn: null });
+    }
+  });
+
+  it("says someone has a login, and no more, when there's no row for it (linked or deleted since)", () => {
+    const people = view("team-ip1", MEMBERS, LEADS, [], states([loginRow("m-mei", "ready")]))!.people;
+    expect(Object.fromEntries(people.map((p) => [p.name, p.login.state]))).toEqual({
+      "Hana Lim": "unknown",
+      "Leo Tan": "unknown",
+      "Mei Wong": "ready",
+      "Zed Ong": "none",
+    });
+    expect(loginStatusText(people.find((p) => p.id === "m-leo")!.login)).toEqual({
+      label: "Has a login",
+      tone: "neutral",
+      detail: null,
+    });
+  });
+
+  it("says everyone with a login has one, and no more, when the states couldn't be read, and nobody else has", () => {
+    const expected = { "Hana Lim": "unknown", "Leo Tan": "unknown", "Mei Wong": "unknown", "Zed Ong": "none" };
+    const omitted = buildTeamView({ teamId: "team-ip1", adminMemberId: ADMIN, teams: TEAMS, members: MEMBERS, leads: LEADS })!;
+    for (const v of [view("team-ip1", MEMBERS, LEADS, [], null)!, omitted, view("team-ip1", MEMBERS, LEADS, [], states([]))!]) {
+      expect(Object.fromEntries(v.people.map((p) => [p.name, p.login.state]))).toEqual(expected);
+      for (const p of v.people) expect(p.login.state === "none", p.name).toBe(!p.hasLogin);
+    }
+  });
+
+  it("ignores a login row for someone with no login linked", () => {
+    const people = view("team-ip1", MEMBERS, LEADS, [], states([loginRow("m-zed", "active", { last_sign_in_at: SENT })]))!.people;
+    expect(people.find((p) => p.id === "m-zed")).toMatchObject({
+      hasLogin: false,
+      login: { state: "none" },
+      canGiveLogin: true,
+      canResendInvite: false,
+    });
+  });
+
+  it("offers Resend invite while a login given here is unused, even expired, or unread, and not once it's been used", () => {
+    const given = (id: string, name: string) =>
+      member(id, name, "member", "team-ip1", { auth_user_id: `u-${id.slice(2)}`, login_given_by: ADMIN, login_given_at: SENT });
+    const members = [
+      ...MEMBERS.filter((m) => m.id === ADMIN),
+      given("m-fay", "Fay Fresh"),
+      given("m-exa", "Exa Expired"),
+      given("m-una", "Una Unread"),
+      given("m-rei", "Rei Ready"),
+      given("m-act", "Act Active"),
+    ];
+    // Read three hours after SENT: Fay's invite went out half an hour before, Exa's at SENT.
+    const logins = states(
+      [
+        loginRow("m-fay", "invited", { invited_at: later(SENT, 150 * MINUTE) }),
+        loginRow("m-exa", "invited", { invited_at: SENT }),
+        loginRow("m-rei", "ready"),
+        loginRow("m-act", "active", { last_sign_in_at: later(SENT, 60 * MINUTE) }),
+      ],
+      later(SENT, 180 * MINUTE),
+    );
+    const people = view("team-ip1", members, LEADS, [], logins)!.people;
+    const flags = Object.fromEntries(
+      people.map((p) => [p.name, [loginStatusText(p.login).label, p.canResendInvite, p.canChangeEmail]]),
+    );
+    expect(flags).toEqual({
+      "Act Active": ["Active", false, true],
+      "Exa Expired": ["Invite expired", true, true],
+      "Fay Fresh": ["Invite not used", true, true],
+      "Hana Lim": ["Has a login", false, false], // a Master Admin, and the admin
+      "Rei Ready": ["Never signed in", false, true],
+      "Una Unread": ["Has a login", true, true],
+    });
+    // Unread, every login given here is offered: the server checks again.
+    const unread = view("team-ip1", members, LEADS, [], null)!.people;
+    expect(unread.filter((p) => p.canResendInvite).map((p) => p.name)).toEqual([
+      "Act Active",
+      "Exa Expired",
+      "Fay Fresh",
+      "Rei Ready",
+      "Una Unread",
+    ]);
+  });
+
+  it("never offers Resend invite on a Master Admin's row or the admin's own, whatever state their login is in", () => {
+    // Leo is the signed-in admin; Hana and Chief are Master Admins; each had a login given here.
+    const given = { login_given_by: "m-mei", login_given_at: SENT };
+    const members = [
+      member(ADMIN, "Hana Lim", "hq", "team-ip1", { auth_user_id: "u-hana", ...given }),
+      member("m-chief", "Chief Ong", "hq", "team-ip1", { auth_user_id: "u-chief", ...given }),
+      member("m-leo", "Leo Tan", "leader", "team-ip1", { auth_user_id: "u-leo", ...given }),
+    ];
+    const unused = members.map((m) => loginRow(m.id, "invited", { invited_at: SENT }));
+    const at = (logins: LoginStates) =>
+      buildTeamView({ teamId: "team-ip1", adminMemberId: "m-leo", teams: TEAMS, members, leads: [], logins })!.people;
+    for (const logins of [states(unused), states(unused, later(SENT, 120 * MINUTE)), states([]), null]) {
+      expect(at(logins).map((p) => [p.name, p.canResendInvite])).toEqual([
+        ["Chief Ong", false],
+        ["Hana Lim", false],
+        ["Leo Tan", false],
+      ]);
+    }
+    // Their rows still say how their login stands.
+    expect(at(states(unused)).map((p) => loginStatusText(p.login).label)).toEqual([
+      "Invite not used",
+      "Invite not used",
+      "Invite not used",
+    ]);
+  });
+
+  it("never carries an email address or auth user id, even with the login states", () => {
+    const rows = [
+      // Even if the function ever returned more than it should.
+      { ...loginRow("m-mei", "invited", { invited_at: SENT }), email: "mei@example.com", user_id: "u-mei" } as LoginRow,
+      loginRow("m-leo", "active", { last_sign_in_at: SENT }),
+      loginRow(ADMIN, "ready"),
+    ];
+    const v = view("team-ip1", MEMBERS, LEADS, [], states(rows))!;
+    expect(v.people.map((p) => p.login.state)).toEqual(["ready", "active", "invited", "none"]);
+    expect(JSON.stringify(v)).not.toMatch(/u-(hana|leo|mei)|@|example/);
+  });
+
+  it("doesn't bring back someone removed from Module One through a login row", () => {
+    const removed = [
+      member("m-sam", "Sam Lau", "leader", "team-ip1", { ...REMOVED, auth_user_id: "u-sam" }), // a stale link
+      member("m-rae", "Rae Koh", "member", null, REMOVED),
+    ];
+    const logins = states([
+      loginRow("m-mei", "active", { last_sign_in_at: SENT }),
+      loginRow("m-sam", "active", { last_sign_in_at: SENT }),
+      loginRow("m-rae", "invited", { invited_at: SENT }),
+    ]);
+    for (const teamId of ["team-ip1", "team-ip2", "dom-ip", "div-gather", "dom-legacy"]) {
+      expect(view(teamId, [...MEMBERS, ...removed], LEADS, [], logins), teamId).toEqual(view(teamId, MEMBERS, LEADS, [], logins));
+    }
+  });
 });
 
 describe("buildNoTeamPeople", () => {
-  const noTeam = (members = MEMBERS, leads = LEADS, grants: { member_id: string }[] = [], teams = TEAMS) =>
-    buildNoTeamPeople({ adminMemberId: ADMIN, teams, members, leads, grants });
+  const noTeam = (members = MEMBERS, leads = LEADS, grants: { member_id: string }[] = [], teams = TEAMS, logins?: LoginStates) =>
+    buildNoTeamPeople({ adminMemberId: ADMIN, teams, members, leads, grants, logins });
 
   it("lists everyone in no team who wasn't removed from Module One, by name", () => {
     const members = [...MEMBERS, member("m-rae", "Rae Koh", "member", null, REMOVED), member("m-abe", "Abe Chu", "member", null)];
@@ -635,6 +869,40 @@ describe("buildNoTeamPeople", () => {
     const people = noTeam(members);
     expect(people.every((p) => p.hasLogin)).toBe(true);
     expect(JSON.stringify(people)).not.toMatch(/u-(boss|ben|cat)/);
+  });
+
+  it("says each person's login status as a team page does", () => {
+    const given = { login_given_by: ADMIN, login_given_at: SENT };
+    const members = MEMBERS.map((m) =>
+      m.id === "m-cat" ? { ...m, auth_user_id: "u-cat", ...given } : m.id === "m-ben" ? { ...m, auth_user_id: "u-ben", ...given } : m,
+    );
+    const rows = [
+      { ...loginRow("m-cat", "invited", { invited_at: SENT }), email: "cat@example.com" } as LoginRow,
+      loginRow("m-ben", "active", { last_sign_in_at: SENT }),
+    ];
+    const people = noTeam(members, LEADS, [], TEAMS, states(rows, later(SENT, 120 * MINUTE)));
+    expect(loginOf(people, "m-cat")).toEqual({ state: "invited", sentAt: "9 Oct 2026, 12:30 am", expired: true });
+    expect(loginOf(people, "m-ben")).toEqual({ state: "active", lastSignedInOn: "9 Oct 2026" });
+    expect(loginOf(people, "m-boss")).toEqual({ state: "none" });
+    expect(Object.fromEntries(people.map((p) => [p.name, p.canResendInvite]))).toEqual({
+      "Ada Boss": false,
+      "Ben Kho": false, // signed in already
+      "Cat Ng": true,
+    });
+    expect(JSON.stringify(people)).not.toMatch(/u-(boss|ben|cat)|@|example/);
+    // Unread, both just have a login, and either invite can be re-sent.
+    const unread = noTeam(members);
+    expect(Object.fromEntries(unread.map((p) => [p.name, [p.login.state, p.canResendInvite]]))).toEqual({
+      "Ada Boss": ["none", false],
+      "Ben Kho": ["unknown", true],
+      "Cat Ng": ["unknown", true],
+    });
+  });
+
+  it("doesn't bring back someone removed from Module One through a login row", () => {
+    const removed = member("m-rae", "Rae Koh", "member", null, { ...REMOVED, auth_user_id: "u-rae" });
+    const logins = states([loginRow("m-rae", "invited", { invited_at: SENT })]);
+    expect(noTeam([...MEMBERS, removed], LEADS, [], TEAMS, logins)).toEqual(noTeam(MEMBERS, LEADS, [], TEAMS, logins));
   });
 });
 
@@ -744,6 +1012,22 @@ describe("emailChangedText", () => {
     [null, null, null],
   ])("%s, %s → %s", (changer, at, expected) => {
     expect(emailChangedText(changer, at)).toBe(expected);
+  });
+});
+
+describe("loginStatusText", () => {
+  it.each<[LoginStatus, string, LoginStatusText["tone"], string | null]>([
+    [{ state: "none" }, "No login yet", "outline", null],
+    [{ state: "invited", sentAt: "9 Oct 2026, 12:30 am", expired: false }, "Invite not used", "warning", "Invite sent 9 Oct 2026, 12:30 am"],
+    [{ state: "invited", sentAt: "9 Oct 2026, 12:30 am", expired: true }, "Invite expired", "warning", "Invite sent 9 Oct 2026, 12:30 am"],
+    [{ state: "invited", sentAt: null, expired: false }, "Invite not used", "warning", null],
+    [{ state: "invited", sentAt: null, expired: true }, "Invite expired", "warning", null],
+    [{ state: "ready" }, "Never signed in", "neutral", "Their login is ready: they sign in at the login page"],
+    [{ state: "active", lastSignedInOn: "8 Oct 2026" }, "Active", "success", "Last signed in 8 Oct 2026"],
+    [{ state: "active", lastSignedInOn: null }, "Active", "success", null],
+    [{ state: "unknown" }, "Has a login", "neutral", null],
+  ])("%j → %s (%s), %j", (status, label, tone, detail) => {
+    expect(loginStatusText(status)).toEqual({ label, tone, detail });
   });
 });
 
