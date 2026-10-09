@@ -315,7 +315,7 @@ export function buildTeamView({
   };
   const leadPeople: LeadPerson[] = [...leadIds]
     .map((id) => memberById.get(id))
-    .filter((m): m is MemberRow => m !== undefined)
+    .filter((m): m is MemberRow => m !== undefined && m.removed_at === null)
     .map(asLead)
     .sort(byName);
 
@@ -434,7 +434,10 @@ function personOf(
     canGiveLogin: loginsHere && !hasLogin && !holdsGrants.has(m.id),
     ownerGivesLogin: loginsHere && !hasLogin && holdsGrants.has(m.id),
     canResendInvite: loginsHere && hasLogin && m.login_given_at !== null,
-    emailChanged: hasLogin ? emailChangedText(nameOf(m.login_email_changed_by), m.login_email_changed_at) : null,
+    emailChanged:
+      hasLogin && changedSinceGiven(m)
+        ? emailChangedText(nameOf(m.login_email_changed_by), m.login_email_changed_at)
+        : null,
     canChangeEmail: canRemove && hasLogin,
     canRemove,
     ownerKeeps,
@@ -442,6 +445,16 @@ function personOf(
     leadsHere: here.leadsHere,
     leadsDomain: here.leadsDomain,
   };
+}
+
+// Whether the recorded email change is about the login they have now: a login given after it (once
+// the earlier one was deleted in the dashboard) has had no change yet. The record stays either way.
+function changedSinceGiven(m: Pick<MemberRow, "login_given_at" | "login_email_changed_at">): boolean {
+  if (m.login_email_changed_at === null) return false;
+  if (m.login_given_at === null) return true;
+  const changed = Date.parse(m.login_email_changed_at);
+  const given = Date.parse(m.login_given_at);
+  return !Number.isFinite(changed) || !Number.isFinite(given) || changed >= given;
 }
 
 // Everyone who sits in no node (and wasn't removed), for the Structure page's No team panel: their

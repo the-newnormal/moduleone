@@ -7,7 +7,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { MemberRow } from "@/app/admin/teams/[id]/team-view";
 import type { ActionResult } from "@/lib/admin/errors";
 import type { TeamRow } from "@/lib/admin/tree";
-import { button, choose, click, deferred, dialog, labelled, press, render, settle, text, type } from "@/test/dom";
+import { button, choose, click, deferred, dialog, labelled, press, queryButton, render, settle, text, type } from "@/test/dom";
 import type { StructureRow } from "./counts";
 import type { StructureActions } from "./editor-context";
 import { StructureCanvas } from "./structure-canvas";
@@ -55,6 +55,20 @@ const ROWS: StructureRow[] = [
 const MEMBERS: MemberRow[] = [
   { id: "m-ana", name: "Ana Lee", role: "member", team_id: "ip1", auth_user_id: null, login_given_by: null, login_given_at: null, login_email_changed_by: null, login_email_changed_at: null, removed_at: null },
 ];
+const member = (id: string, name: string, team_id: string | null, extra: Partial<MemberRow> = {}): MemberRow => ({
+  ...MEMBERS[0],
+  id,
+  name,
+  team_id,
+  ...extra,
+});
+// Ana sits in IP Lab 1; Ben and Hana (a Master Admin) sit nowhere; Olga was removed from Module One.
+const WITH_NO_TEAM: MemberRow[] = [
+  ...MEMBERS,
+  member("m-ben", "Ben Kho", null, { auth_user_id: "u-ben" }),
+  member("m-hana", "Hana Lim", null, { role: "hq", auth_user_id: "u-hana" }),
+  member("m-olga", "Olga Day", null, { removed_at: "2026-10-08T02:00:00Z" }),
+];
 
 const ok = async (): Promise<ActionResult> => ({ ok: true, value: null });
 function actions(changes: Partial<StructureActions> = {}): StructureActions {
@@ -80,18 +94,19 @@ const TEAM_ACTIONS = {
   removePerson: vi.fn(async () => ({ ok: true as const, value: { outcome: "removed" as const, loginKept: false } })),
 };
 
-const canvas = (structure: StructureActions = actions()) =>
-  render(
-    <StructureCanvas
-      rows={ROWS}
-      members={MEMBERS}
-      leads={[]}
-      grants={[]}
-      adminMemberId="m-admin"
-      actions={structure}
-      teamActions={TEAM_ACTIONS}
-    />,
-  );
+const page = (structure: StructureActions = actions(), members = MEMBERS, teamActions = TEAM_ACTIONS) => (
+  <StructureCanvas
+    rows={ROWS}
+    members={members}
+    leads={[]}
+    grants={[]}
+    adminMemberId="m-admin"
+    actions={structure}
+    teamActions={teamActions}
+  />
+);
+const canvas = (structure: StructureActions = actions(), members = MEMBERS, teamActions = TEAM_ACTIONS) =>
+  render(page(structure, members, teamActions));
 
 // A box's ⋯ menu, then one of its items. (Radix opens the menu on pointer down; right after another
 // menu closed, it can take a moment, so try for a little while.)
@@ -247,5 +262,69 @@ describe("StructureCanvas", () => {
       "Press Enter or Space for its people and leads. Its menu edits, adds under or moves it.",
     );
     expect(text(document.getElementById("canvas-person-hint")!)).toContain("Drag them onto a box to move them there.");
+  });
+
+  const panelHeading = () => document.querySelector<HTMLElement>("aside [data-panel-heading]");
+
+  it("counts everyone with no team on No team, and opens them in the side panel with focus on its heading", async () => {
+    await canvas(actions(), WITH_NO_TEAM);
+    await click(button("No team (2)"));
+    const panel = document.querySelector("aside")!;
+    expect(text(panelHeading()!)).toBe("No team (2)");
+    expect(await focused()).toBe(panelHeading());
+    expect(text(panel)).toContain("Ben Kho");
+    expect(text(panel)).toContain("Hana Lim");
+    expect(text(panel)).not.toContain("Olga Day");
+    expect(text(panel)).not.toContain("Ana Lee");
+    expect(button("Change email (Ben Kho)", panel)).toBeDefined();
+    expect(button("Remove from Module One (Ben Kho)", panel)).toBeDefined();
+    expect(queryButton(/\(Hana Lim\)$/, panel)).toBeNull();
+    expect(queryButton(/^(Make leader|Make member|Remove from team)/, panel)).toBeNull();
+  });
+
+  it("closes the No team panel on Escape and on ×, handing focus back to No team", async () => {
+    await canvas(actions(), WITH_NO_TEAM);
+    await click(button("No team (2)"));
+    await press(document.body, "Escape");
+    expect(document.querySelector("aside")).toBeNull();
+    expect((await focused())?.hasAttribute("data-no-team-button")).toBe(true);
+
+    await click(button("No team (2)"));
+    expect(await focused()).toBe(panelHeading());
+    await click(button("Close"));
+    expect(document.querySelector("aside")).toBeNull();
+    expect((await focused())?.hasAttribute("data-no-team-button")).toBe(true);
+  });
+
+  it("removes someone from Module One from the No team panel, says so there, and drops them once the page comes back", async () => {
+    const removePerson = vi.fn(async () => ({ ok: true as const, value: { outcome: "removed" as const, loginKept: false } }));
+    const teamActions = { ...TEAM_ACTIONS, removePerson };
+    const structure = actions();
+    const shown = await canvas(structure, WITH_NO_TEAM, teamActions);
+    await click(button("No team (2)"));
+    await click(button("Remove from Module One (Ben Kho)"));
+    await click(button("Remove from Module One"));
+    expect(removePerson).toHaveBeenCalledExactlyOnceWith("m-ben");
+    const done = "Removed Ben Kho from Module One. Anything they recorded stays.";
+    expect(text(document.querySelector('aside [role="status"]')!)).toBe(done);
+
+    // The server action re-renders the page with Ben removed.
+    const removed = WITH_NO_TEAM.map((m) => (m.id === "m-ben" ? { ...m, auth_user_id: null, removed_at: "2026-10-09T02:00:00Z" } : m));
+    await shown.rerender(page(structure, removed, teamActions));
+    expect(text(panelHeading()!)).toBe("No team (1)");
+    expect(button("No team (1)")).toBeDefined();
+    expect(text(document.querySelector("aside ul")!)).not.toContain("Ben Kho");
+    expect(await focused()).toBe(panelHeading());
+    expect(text(document.querySelector('aside [role="status"]')!)).toBe(done);
+  });
+
+  it("opens the No team panel for someone with no team picked on the chart, and the team's panel for someone in one", async () => {
+    await canvas(actions(), WITH_NO_TEAM);
+    await click(button("Show people"));
+    expect(document.querySelector('.react-flow__node[data-id="person:m-olga"]')).toBeNull();
+    await press(box("person:m-ben"), "Enter");
+    expect(text(panelHeading()!)).toBe("No team (2)");
+    await press(box("person:m-ana"), "Enter");
+    expect(text(panelHeading()!)).toBe("IP Lab 1");
   });
 });

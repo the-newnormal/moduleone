@@ -82,6 +82,7 @@ declare
   m_team      uuid;
   m_login     uuid;
   m_given_at  timestamptz;
+  m_changed_at timestamptz;
   m_removed   timestamptz;
   m_pending   uuid;
   org         uuid;
@@ -100,8 +101,9 @@ begin
   -- inserted, so once it's locked nothing new can refer to it until this commits: what's checked
   -- below is what's there.
   perform pg_advisory_xact_lock(hashtextextended('moduleone:team_tree', 0));
-  select m.id, m.role, m.team_id, m.auth_user_id, m.login_given_at, m.removed_at, m.removed_login_id
-    into m_id, m_role, m_team, m_login, m_given_at, m_removed, m_pending
+  select m.id, m.role, m.team_id, m.auth_user_id, m.login_given_at, m.login_email_changed_at, m.removed_at,
+         m.removed_login_id
+    into m_id, m_role, m_team, m_login, m_given_at, m_changed_at, m_removed, m_pending
   from public.members m where m.id = p_member_id
   for update;
   if not found then
@@ -130,10 +132,12 @@ begin
       message = 'This person sits in or leads the organisation, so only the project owner can remove them.';
   end if;
 
-  -- Anything that would go, or be rewritten, with the row. A login (now or given earlier) counts
-  -- too: it may have read check-ins, and login_given_by says who gave it.
+  -- Anything that would go, or be rewritten, with the row. A login (now, or given or changed
+  -- earlier) counts too: it may have read check-ins, and login_given_by / login_email_changed_by
+  -- say who gave or changed it.
   kept := m_login is not null
     or m_given_at is not null
+    or m_changed_at is not null
     or exists (select 1 from public.checkins c where c.member_id = m_id)
     or exists (select 1 from public.checkin_drafts d where d.member_id = m_id)
     or exists (select 1 from public.checkin_mentions x where x.about_member_id = m_id)

@@ -62,11 +62,11 @@ const member = (id: string, name: string, role: string, team_id: string | null):
   removed_at: null,
 });
 
-const render = (rows = ROWS) =>
+const render = (rows = ROWS, members = [member("m-ana", "Ana Lee", "leader", "ip-1"), member("m-hana", "Hana Lim", "hq", null)]) =>
   renderToStaticMarkup(
     <StructureCanvas
       rows={rows}
-      members={[member("m-ana", "Ana Lee", "leader", "ip-1"), member("m-hana", "Hana Lim", "hq", null)]}
+      members={members}
       leads={[]}
       grants={[]}
       adminMemberId="m-hana"
@@ -185,6 +185,17 @@ describe("StructureCanvas", () => {
     expect(archived).toContain("Old Org Organisation Was in the top level.");
     expect(archived).toContain("Old Division Division Was in the top level.");
     expect(archived).toContain("Old Domain Domain Was in Unplaced.");
+  });
+
+  it("counts on its No team button everyone with no team, but nobody removed from Module One", () => {
+    expect(text(html)).toContain("No team (1)");
+    const out = render(ROWS, [
+      member("m-ana", "Ana Lee", "leader", "ip-1"),
+      member("m-hana", "Hana Lim", "hq", null),
+      member("m-ben", "Ben Kho", "member", null),
+      { ...member("m-olga", "Olga Day", "member", null), removed_at: "2026-10-08T02:00:00Z" },
+    ]);
+    expect(out).toMatch(/<button[^>]*data-no-team-button[^>]*>No team \(2\)<\/button>/);
   });
 
   it("lists nodes the chart can't place, with Move to… and their people and leads", () => {

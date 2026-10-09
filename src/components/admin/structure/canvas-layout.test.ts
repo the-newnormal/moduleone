@@ -244,4 +244,33 @@ describe("canvasPeopleOf", () => {
   it("leaves out people in an archived node, who have nowhere to show", () => {
     expect(canvasPeopleOf([member("gone", "member", "old"), member("amy", "member", "ip1")], rows, "x").map((p) => p.id)).toEqual(["amy"]);
   });
+
+  // Removed from Module One (0007). The database also takes their team; one who keeps it here
+  // checks that the chart doesn't rely on that.
+  const removed = (m: MemberRow): MemberRow => ({ ...m, removed_at: "2026-10-09T03:00:00Z" });
+
+  it("leaves out people removed from Module One, with a team or without", () => {
+    const members = [
+      removed(member("rae", "member", null)),
+      removed(member("sam", "leader", "ip1")),
+      member("amy", "member", "ip1"),
+      member("ola", "member", null),
+    ];
+    expect(canvasPeopleOf(members, rows, "x").map((p) => p.id)).toEqual(["amy", "ola"]);
+  });
+
+  it("keeps removed people out of the No team pool, which is sized for those left", () => {
+    const left = [member("ola", "member", null)];
+    const people = canvasPeopleOf([...left, removed(member("rae", "member", null)), removed(member("sam", "leader", "ip1"))], ROWS, "x");
+    const { items } = layoutStructure(buildTree(ROWS), people);
+    expect(at(items, NO_TEAM_ID)).toMatchObject({ type: "stack", teamId: null, count: 1 });
+    expect(items.filter((i) => i.type === "person").map((i) => i.id)).toEqual([personNodeId("ola")]);
+    expect(items.some((i) => i.id === stackId("ip1"))).toBe(false);
+    // Laid out exactly as if they'd never been there.
+    expect(items).toEqual(layoutStructure(buildTree(ROWS), canvasPeopleOf(left, ROWS, "x")).items);
+    // With only removed people in no team, the pool is still there, empty, to drop people on.
+    const { items: none } = layoutStructure(buildTree(ROWS), canvasPeopleOf([removed(member("rae", "member", null))], ROWS, "x"));
+    expect(at(none, NO_TEAM_ID)).toMatchObject({ count: 0 });
+    expect(none.some((i) => i.type === "person")).toBe(false);
+  });
 });

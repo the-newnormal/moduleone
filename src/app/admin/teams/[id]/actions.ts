@@ -781,8 +781,8 @@ export async function changeEmail(memberId: string, email: string): Promise<Acti
   }
   if (inUse.data !== false) return fail(EMAIL_IN_USE);
 
-  // 5.–6.
-  const result = user.email_confirmed_at
+  // 5.–6. Used: they've confirmed the address or signed in (as resendInvite decides).
+  const result = user.email_confirmed_at || user.last_sign_in_at
     ? await moveUsedLogin(service, row, loginId, user.email ?? null, address.value, adminMemberId)
     : await replaceUnusedLogin(service, row, loginId, address.value, adminMemberId);
   if (!result.ok) return result;
@@ -908,16 +908,25 @@ async function replaceUnusedLogin(
       }
     }
     await discardLogin(service, newLogin, createdHere, "changeEmail");
+    // "gone": the old login was unlinked above and nothing took it back, so it goes too.
+    if (still === "gone") await deleteUnusedLogin(service, loginId);
     return fail(STILL_REFUSAL[still]);
   }
 
-  // The old login: unused and linked to nobody now, so nothing is lost with it. If deleting it
-  // fails, it opens nothing (no member row), but its address stays taken.
-  const oldLinked = await service.from("members").select("id").eq("auth_user_id", loginId).limit(1);
-  if (oldLinked.error) logError("changeEmail old login check", oldLinked.error);
-  else if ((oldLinked.data ?? []).length === 0) {
-    const { error } = await service.auth.admin.deleteUser(loginId);
-    if (error && error.status !== 404) logError("changeEmail old login", error);
-  }
+  await deleteUnusedLogin(service, loginId);
   return { ok: true, value: { invited: true } };
+}
+
+// A login replaced before it was ever used: linked to nobody now (checked), so nothing is lost with
+// it, and its invite link stops working. If deleting it fails, it opens nothing (no member row),
+// but its address stays taken.
+async function deleteUnusedLogin(service: ServiceClient, loginId: string) {
+  const linked = await service.from("members").select("id").eq("auth_user_id", loginId).limit(1);
+  if (linked.error) {
+    logError("changeEmail old login check", linked.error);
+    return;
+  }
+  if ((linked.data ?? []).length > 0) return;
+  const { error } = await service.auth.admin.deleteUser(loginId);
+  if (error && error.status !== 404) logError("changeEmail old login", error);
 }

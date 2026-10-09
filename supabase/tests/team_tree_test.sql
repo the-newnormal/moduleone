@@ -23,7 +23,7 @@
 -- team. The admin sections add more nodes by name (admins can't choose ids) and look them up with
 -- pg_temp.team().
 begin;
-select plan(310);
+select plan(312);
 
 -- ---------- tree lock ----------
 -- Whether running sql takes the tree lock. It runs in a subtransaction that is rolled back, which
@@ -131,7 +131,7 @@ select ok(
   select f, regexp_replace((select prosrc from pg_proc where oid = f::regprocedure), '--[^' || chr(10) || ']*', '', 'g') as src
   from unnest(array[
     'public.admin_move_team(uuid, uuid, integer)', 'public.teams_check_tree()', 'public.members_check_team()',
-    'public.team_leads_check()', 'public.members_drop_team_leads()']) f
+    'public.team_leads_check()', 'public.members_drop_team_leads()', 'public.admin_remove_member(uuid)']) f
 ) x;
 delete from members where id in ('e1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000002');
 delete from teams where id in ('e1000000-0000-4000-8000-000000000011', 'e1000000-0000-4000-8000-000000000012');
@@ -403,7 +403,7 @@ select is(
   (select bool_or(has_function_privilege('public', f, 'execute')) from unnest(array[
     'public.app_led_team_ids()', 'public.app_visible_team_ids()', 'public.admin_move_team(uuid, uuid, integer)',
     'public.teams_check_tree()', 'public.members_check_team()', 'public.team_leads_check()',
-    'public.members_drop_team_leads()']) f),
+    'public.members_drop_team_leads()', 'public.admin_remove_member(uuid)']) f),
   false, 'PUBLIC cannot call any of the new functions'
 );
 select is(
@@ -419,15 +419,15 @@ select is(
 ) from unnest(array[
   'public.app_led_team_ids()', 'public.app_visible_team_ids()', 'public.admin_move_team(uuid, uuid, integer)',
   'public.teams_check_tree()', 'public.members_check_team()', 'public.team_leads_check()',
-  'public.members_drop_team_leads()']) f;
+  'public.members_drop_team_leads()', 'public.admin_remove_member(uuid)']) f;
 select is(
   (select array_agg(proname::text || '=' || prosecdef order by proname) from pg_proc
    where pronamespace = 'public'::regnamespace and proname in (
-     'app_led_team_ids', 'app_visible_team_ids', 'admin_move_team', 'teams_check_tree',
+     'app_led_team_ids', 'app_visible_team_ids', 'admin_move_team', 'admin_remove_member', 'teams_check_tree',
      'members_check_team', 'team_leads_check', 'members_drop_team_leads')),
-  array['admin_move_team=false', 'app_led_team_ids=true', 'app_visible_team_ids=true', 'members_check_team=true',
-        'members_drop_team_leads=true', 'team_leads_check=true', 'teams_check_tree=true'],
-  'admin_move_team runs as the caller; the helpers and trigger functions as the owner'
+  array['admin_move_team=false', 'admin_remove_member=true', 'app_led_team_ids=true', 'app_visible_team_ids=true',
+        'members_check_team=true', 'members_drop_team_leads=true', 'team_leads_check=true', 'teams_check_tree=true'],
+  'admin_move_team runs as the caller; admin_remove_member (on purpose: admins can''t delete members, so it checks everything itself), the helpers and trigger functions as the owner'
 );
 select is(
   (select array_agg(tgname::text || ':' || (tgtype & 1 = 1)::text order by tgname) from pg_trigger

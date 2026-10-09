@@ -72,6 +72,7 @@ export function ChangeEmailForm({
     const address = parseEmail(email);
     if (!address.ok) {
       setFieldError(address.error);
+      setError(null);
       return;
     }
     setFieldError(null);

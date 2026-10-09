@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { TeamRow } from "@/lib/admin/tree";
 import {
+  buildNoTeamPeople,
   buildTeamView,
   coverage,
   demoteDescription,
+  emailChangedText,
   loginGivenText,
   type MemberRow,
   matchesSearch,
   nameList,
   promoteDescription,
   removeDescription,
+  removePersonDescription,
 } from "./team-view";
 
 const node = (id: string, name: string, kind: TeamRow["kind"], parent_id: string | null, extra: Partial<TeamRow> = {}): TeamRow => ({
@@ -79,6 +82,16 @@ const LEADS = [
 
 const view = (teamId: string, members = MEMBERS, leads = LEADS, grants: { member_id: string }[] = []) =>
   buildTeamView({ teamId, adminMemberId: ADMIN, teams: TEAMS, members, leads, grants });
+
+// The same tree under the organisation node (0006).
+const ORG_TEAMS: TeamRow[] = [
+  node("org", "The New Normal", "organisation", null),
+  ...TEAMS.map((t) => (t.id === "div-gather" ? { ...t, parent_id: "org" } : t)),
+];
+
+// Removed from Module One (0007). The database also clears the row's login, team and role; rows
+// that keep one here check that the page doesn't rely on it.
+const REMOVED = { removed_at: "2026-10-09T03:00:00Z" };
 
 describe("buildTeamView", () => {
   it("gives the node's title for its leaders to the leaders and hq sitting there, not to members", () => {
@@ -381,6 +394,248 @@ describe("buildTeamView", () => {
     const members = [member(ADMIN, "Hana Lim", "leader", "team-ip2"), member("m-cat", "Cat Ng", "leader", null)];
     expect(view("team-ip1", members, [])!.leadOptions.map((o) => o.id)).toEqual(["m-cat"]);
   });
+
+  it("leaves people removed from Module One out of every list", () => {
+    const removed = [
+      member("m-rae", "Rae Koh", "member", null, REMOVED), // as the database leaves them
+      member("m-sam", "Sam Lau", "leader", "team-ip1", REMOVED),
+      member("m-tia", "Tia Ho", "leader", "div-gather", REMOVED),
+      member("m-uma", "Uma Sen", "leader", null, REMOVED),
+    ];
+    // No page changes: not its people, candidates, leaders, who leads it from above, or lead options.
+    for (const teamId of ["team-ip1", "team-ip2", "dom-ip", "div-gather", "dom-legacy", "team-legacy"]) {
+      expect(view(teamId, [...MEMBERS, ...removed]), teamId).toEqual(view(teamId));
+    }
+    // Before they were removed, each was listed somewhere.
+    const before = view("team-ip1", [...MEMBERS, ...removed.map((m) => ({ ...m, removed_at: null }))])!;
+    expect(before.people.map((p) => p.id)).toContain("m-sam");
+    expect(before.ownLeaders.map((l) => l.id)).toContain("m-sam");
+    expect(before.candidates.map((c) => c.id)).toEqual(expect.arrayContaining(["m-rae", "m-tia", "m-uma"]));
+    expect(before.inheritedLeads.map((l) => l.id)).toContain("m-tia");
+    expect(before.leadOptions.map((l) => l.id)).toContain("m-uma");
+  });
+
+  it("still names who gave a login or changed a sign-in email once they're removed from Module One", () => {
+    const members = [
+      ...MEMBERS.map((m) =>
+        m.id === "m-mei"
+          ? { ...m, login_given_by: "m-olu", login_email_changed_by: "m-olu", login_email_changed_at: "2026-10-09T02:00:00Z" }
+          : m,
+      ),
+      member("m-olu", "Olu Ade", "member", null, REMOVED),
+    ];
+    const v = view("team-ip1", members)!;
+    expect(v.people.find((p) => p.id === "m-mei")).toMatchObject({
+      loginGiven: "Login given by Olu Ade on 9 Oct 2026",
+      emailChanged: "Sign-in email changed by Olu Ade on 9 Oct 2026",
+    });
+    expect(v.candidates.map((c) => c.id)).not.toContain("m-olu");
+  });
+
+  it("offers Remove from Module One on ordinary rows, and Change email only to people with a login", () => {
+    const flags = Object.fromEntries(
+      view("team-ip1")!.people.map((p) => [p.name, [p.canChangeEmail, p.canRemove, p.ownerKeeps]]),
+    );
+    expect(flags).toEqual({
+      "Hana Lim": [false, false, null], // a Master Admin, and the admin
+      "Leo Tan": [true, true, null],
+      "Mei Wong": [true, true, null],
+      "Zed Ong": [false, true, null], // no login, so no sign-in email to change
+    });
+  });
+
+  it("offers neither on a Master Admin's row or the admin's own row, and doesn't say the owner keeps them", () => {
+    // Leo is the signed-in admin, holding the admin grant as every admin does; Hana holds grants too.
+    const v = buildTeamView({
+      teamId: "team-ip1",
+      adminMemberId: "m-leo",
+      teams: TEAMS,
+      members: MEMBERS,
+      leads: LEADS,
+      grants: [{ member_id: "m-leo" }, { member_id: ADMIN }],
+    })!;
+    const flags = Object.fromEntries(v.people.map((p) => [p.name, [p.canChangeEmail, p.canRemove, p.ownerKeeps]]));
+    expect(flags).toEqual({
+      "Hana Lim": [false, false, null],
+      "Leo Tan": [false, false, null],
+      "Mei Wong": [true, true, null],
+      "Zed Ong": [false, true, null],
+    });
+  });
+
+  it("leaves changing a grant holder's email or removing them to the project owner, with a login or without", () => {
+    const people = view("team-ip1", MEMBERS, LEADS, [{ member_id: "m-mei" }, { member_id: "m-zed" }])!.people;
+    const flags = Object.fromEntries(people.map((p) => [p.name, [p.canChangeEmail, p.canRemove, p.ownerKeeps]]));
+    expect(flags).toEqual({
+      "Hana Lim": [false, false, null],
+      "Leo Tan": [true, true, null],
+      "Mei Wong": [false, false, "grants"],
+      "Zed Ong": [false, false, "grants"],
+    });
+    // Their role and team are still the admin's to change.
+    expect(people.filter((p) => p.ownerKeeps === "grants").every((p) => p.editable)).toBe(true);
+  });
+
+  it("leaves whoever sits in the organisation to the project owner, offering nothing on its page", () => {
+    const members = [
+      ...MEMBERS,
+      member("m-eli", "Eli Chao", "leader", "org"),
+      member("m-vp", "Vee Pang", "leader", "org", { auth_user_id: "u-vp", login_given_by: ADMIN, login_given_at: "2026-10-09T04:00:00Z" }),
+      member("m-gina", "Gina Grant", "leader", "org", { auth_user_id: "u-gina" }),
+      member("m-chief", "Chief Ong", "hq", "org", { auth_user_id: "u-chief" }),
+      member("m-bo", "Bo Teo", "leader", "div-gather", { auth_user_id: "u-bo" }),
+    ];
+    const at = (teamId: string) =>
+      buildTeamView({ teamId, adminMemberId: ADMIN, teams: ORG_TEAMS, members, leads: LEADS, grants: [{ member_id: "m-gina" }] })!;
+    const flags = Object.fromEntries(at("org").people.map((p) => [p.name, [p.canChangeEmail, p.canRemove, p.ownerKeeps]]));
+    expect(flags).toEqual({
+      "Chief Ong": [false, false, null], // a Master Admin
+      "Eli Chao": [false, false, "organisation"],
+      "Gina Grant": [false, false, "grants"], // holds grants too, which the note names first
+      "Vee Pang": [false, false, "organisation"],
+    });
+    // Sitting in a division under it is an ordinary row.
+    expect(at("div-gather").people.find((p) => p.id === "m-bo")).toMatchObject({
+      canChangeEmail: true,
+      canRemove: true,
+      ownerKeeps: null,
+    });
+  });
+
+  it("leaves someone who leads the organisation through a lead row to the project owner, wherever they sit", () => {
+    const at = (leads: { team_id: string; member_id: string }[]) =>
+      buildTeamView({ teamId: "team-ip1", adminMemberId: ADMIN, teams: ORG_TEAMS, members: MEMBERS, leads, grants: [] })!.people;
+    const people = at([...LEADS, { team_id: "org", member_id: "m-leo" }]);
+    expect(people.find((p) => p.id === "m-leo")).toMatchObject({ canChangeEmail: false, canRemove: false, ownerKeeps: "organisation" });
+    expect(people.find((p) => p.id === "m-mei")).toMatchObject({ canChangeEmail: true, canRemove: true, ownerKeeps: null });
+    // A lead row on a node under it is nothing special.
+    expect(at([...LEADS, { team_id: "div-gather", member_id: "m-leo" }]).find((p) => p.id === "m-leo")).toMatchObject({
+      canChangeEmail: true,
+      canRemove: true,
+      ownerKeeps: null,
+    });
+  });
+
+  it("says who changed a sign-in email and when, only while they have a login", () => {
+    const changed = { login_email_changed_by: ADMIN, login_email_changed_at: "2026-10-08T16:30:00Z" };
+    const members = [
+      ...MEMBERS.filter((m) => m.id === ADMIN || m.id === "m-leo"),
+      member("m-mei", "Mei Wong", "member", "team-ip1", { auth_user_id: "u-mei", ...changed }),
+      // Whoever changed it was deleted in the Supabase dashboard.
+      member("m-pri", "Priya Nair", "member", "team-ip1", { auth_user_id: "u-pri", login_email_changed_at: "2026-10-08T16:30:00Z" }),
+      // The login since deleted in the Supabase dashboard.
+      member("m-zed", "Zed Ong", "member", "team-ip1", changed),
+    ];
+    const changes = Object.fromEntries(view("team-ip1", members)!.people.map((p) => [p.name, p.emailChanged]));
+    expect(changes).toEqual({
+      "Hana Lim": null,
+      "Leo Tan": null, // never changed
+      "Mei Wong": "Sign-in email changed by Hana Lim on 9 Oct 2026",
+      "Priya Nair": "Sign-in email changed on 9 Oct 2026",
+      "Zed Ong": null,
+    });
+  });
+
+  it("doesn't say a sign-in email was changed when that was an earlier login's", () => {
+    const at = (changed: string, given: string | null) => ({
+      auth_user_id: "u-x",
+      login_given_by: ADMIN,
+      login_given_at: given,
+      login_email_changed_by: ADMIN,
+      login_email_changed_at: changed,
+    });
+    const members = [
+      ...MEMBERS.filter((m) => m.id === ADMIN),
+      // Given a new login after the change (the old one was deleted in the dashboard).
+      member("m-old", "Old Change", "member", "team-ip1", at("2026-10-01T02:00:00Z", "2026-10-05T02:00:00Z")),
+      // Changed after the login was given, and at the very moment Change email gave it (a swap).
+      member("m-new", "New Change", "member", "team-ip1", at("2026-10-05T02:00:00Z", "2026-10-01T02:00:00Z")),
+      member("m-same", "Same Moment", "member", "team-ip1", at("2026-10-05T02:00:00Z", "2026-10-05T02:00:00Z")),
+    ];
+    const changes = Object.fromEntries(view("team-ip1", members)!.people.map((p) => [p.name, p.emailChanged]));
+    expect(changes).toMatchObject({
+      "Old Change": null,
+      "New Change": "Sign-in email changed by Hana Lim on 5 Oct 2026",
+      "Same Moment": "Sign-in email changed by Hana Lim on 5 Oct 2026",
+    });
+  });
+
+  it("doesn't list someone removed as a lead, even from a lead row read before the removal", () => {
+    const members = [...MEMBERS, member("m-sam", "Sam Lau", "member", null, REMOVED)];
+    const v = view("team-ip1", members, [...LEADS, { team_id: "team-ip1", member_id: "m-sam" }])!;
+    expect(v.leads.map((l) => l.id)).not.toContain("m-sam");
+  });
+});
+
+describe("buildNoTeamPeople", () => {
+  const noTeam = (members = MEMBERS, leads = LEADS, grants: { member_id: string }[] = [], teams = TEAMS) =>
+    buildNoTeamPeople({ adminMemberId: ADMIN, teams, members, leads, grants });
+
+  it("lists everyone in no team who wasn't removed from Module One, by name", () => {
+    const members = [...MEMBERS, member("m-rae", "Rae Koh", "member", null, REMOVED), member("m-abe", "Abe Chu", "member", null)];
+    expect(noTeam(members).map((p) => p.name)).toEqual(["Abe Chu", "Ada Boss", "Ben Kho", "Cat Ng"]);
+  });
+
+  it("offers no role or team controls: people are placed by dragging them on the chart", () => {
+    const people = noTeam();
+    expect(people.length).toBeGreaterThan(0);
+    for (const p of people) expect(p).toMatchObject({ editable: false, title: null, leadsHere: false, leadsDomain: null });
+  });
+
+  it("offers logins, Change email and Remove from Module One as a team page does", () => {
+    const members = MEMBERS.map((m) =>
+      m.id === "m-cat" ? { ...m, auth_user_id: "u-cat", login_given_by: ADMIN, login_given_at: "2026-10-08T16:30:00Z" } : m,
+    );
+    const people = noTeam(members);
+    const flags = Object.fromEntries(
+      people.map((p) => [p.name, [p.canGiveLogin, p.canResendInvite, p.canChangeEmail, p.canRemove, p.ownerKeeps]]),
+    );
+    expect(flags).toEqual({
+      "Ada Boss": [false, false, false, false, null], // a Master Admin
+      "Ben Kho": [true, false, false, true, null],
+      "Cat Ng": [false, true, true, true, null],
+    });
+    expect(people.find((p) => p.id === "m-cat")!.loginGiven).toBe("Login given by Hana Lim on 9 Oct 2026");
+  });
+
+  it("names the nodes a leader with no team leads, for the removal warning", () => {
+    const leads = [...LEADS, { team_id: "team-ip2", member_id: "m-cat" }, { team_id: "dom-ip", member_id: "m-cat" }];
+    expect(noTeam(MEMBERS, leads).find((p) => p.id === "m-cat")!.otherLeads).toEqual(["IP Lab", "IP Lab 2"]);
+  });
+
+  it("leaves grant holders and the organisation's leads to the project owner", () => {
+    const leads = [...LEADS, { team_id: "org", member_id: "m-cat" }];
+    const people = noTeam(MEMBERS, leads, [{ member_id: "m-ben" }], ORG_TEAMS);
+    const flags = Object.fromEntries(people.map((p) => [p.name, [p.canChangeEmail, p.canRemove, p.ownerKeeps]]));
+    expect(flags).toEqual({
+      "Ada Boss": [false, false, null],
+      "Ben Kho": [false, false, "grants"],
+      "Cat Ng": [false, false, "organisation"],
+    });
+    expect(people.find((p) => p.id === "m-ben")).toMatchObject({ canGiveLogin: false, ownerGivesLogin: true });
+  });
+
+  it("offers nothing on the admin's own row", () => {
+    const members = MEMBERS.map((m) => (m.id === "m-ben" ? { ...m, auth_user_id: "u-ben" } : m));
+    const [ben] = buildNoTeamPeople({ adminMemberId: "m-ben", teams: TEAMS, members, leads: LEADS, grants: [{ member_id: "m-ben" }] }).filter(
+      (p) => p.id === "m-ben",
+    );
+    expect(ben).toMatchObject({
+      isSelf: true,
+      canGiveLogin: false,
+      canResendInvite: false,
+      canChangeEmail: false,
+      canRemove: false,
+      ownerKeeps: null,
+    });
+  });
+
+  it("never sends a member's auth user id, only whether they have a login", () => {
+    const members = MEMBERS.map((m) => (m.team_id === null ? { ...m, auth_user_id: `u-${m.id.slice(2)}` } : m));
+    const people = noTeam(members);
+    expect(people.every((p) => p.hasLogin)).toBe(true);
+    expect(JSON.stringify(people)).not.toMatch(/u-(boss|ben|cat)/);
+  });
 });
 
 describe("confirm dialog copy", () => {
@@ -420,6 +675,49 @@ describe("confirm dialog copy", () => {
     expect(description).toBe(`Leo Tan ${stays} They still lead IP Lab, which holds this team.`);
     expect(description).not.toContain("stop seeing");
   });
+
+  it("says what removing someone from Module One does, with a login and without", () => {
+    const mei = { name: "Mei Wong", hasLogin: true, otherLeads: [] };
+    expect(removePersonDescription(mei, team)).toBe(
+      "Mei Wong won't be able to sign in any more. They leave IP Lab 1. Anything they recorded stays, so past " +
+        "weeks on the heat-map don't change. This can't be undone here.",
+    );
+    expect(removePersonDescription({ ...mei, hasLogin: false }, team)).toBe(
+      "They leave IP Lab 1. Anything they recorded stays, so past weeks on the heat-map don't change. If " +
+        "they've never had a login and left nothing behind, they're deleted completely. This can't be undone here.",
+    );
+  });
+
+  it("names the nodes a leader stops leading, whether or not they sit in one", () => {
+    const leader = { ...leo, hasLogin: true, otherLeads: ["IP Lab 2", "Legacy"] };
+    expect(removePersonDescription(leader, team)).toBe(
+      "Leo Tan won't be able to sign in any more. They leave IP Lab 1 and stop leading IP Lab 2 and Legacy. " +
+        "Anything they recorded stays, so past weeks on the heat-map don't change. This can't be undone here.",
+    );
+    expect(removePersonDescription({ ...leader, otherLeads: ["Atlas", "IP Lab 2", "Legacy"] }, null)).toBe(
+      "Leo Tan won't be able to sign in any more. They stop leading Atlas, IP Lab 2 and Legacy. Anything they " +
+        "recorded stays, so past weeks on the heat-map don't change. This can't be undone here.",
+    );
+  });
+
+  it("says nothing about leaving for someone with no team who leads nothing", () => {
+    expect(removePersonDescription({ name: "Ben Kho", hasLogin: false, otherLeads: [] }, null)).toBe(
+      "Anything they recorded stays, so past weeks on the heat-map don't change. If they've never had a login " +
+        "and left nothing behind, they're deleted completely. This can't be undone here.",
+    );
+  });
+
+  it("always ends by saying removal can't be undone here", () => {
+    for (const hasLogin of [true, false]) {
+      for (const otherLeads of [[], ["IP Lab 2"]]) {
+        for (const where of [team, null]) {
+          const description = removePersonDescription({ name: "Leo Tan", hasLogin, otherLeads }, where);
+          expect(description.endsWith(" This can't be undone here.")).toBe(true);
+          expect(description).not.toMatch(/^\s|\s{2}|\s$/);
+        }
+      }
+    }
+  });
 });
 
 describe("loginGivenText", () => {
@@ -428,9 +726,24 @@ describe("loginGivenText", () => {
     [null, "2026-10-08T16:30:00Z", "Login given on 9 Oct 2026"],
     ["Hana Lim", null, "Login given by Hana Lim"],
     ["Hana Lim", "not a date", "Login given by Hana Lim"],
+    [null, "not a date", null],
     [null, null, null],
   ])("%s, %s → %s", (giver, at, expected) => {
     expect(loginGivenText(giver, at)).toBe(expected);
+  });
+});
+
+describe("emailChangedText", () => {
+  it.each([
+    ["Hana Lim", "2026-10-08T16:30:00Z", "Sign-in email changed by Hana Lim on 9 Oct 2026"],
+    [null, "2026-10-08T16:30:00Z", "Sign-in email changed on 9 Oct 2026"],
+    [null, "2026-10-09T16:00:00Z", "Sign-in email changed on 10 Oct 2026"], // midnight in Singapore
+    ["Hana Lim", null, "Sign-in email changed by Hana Lim"],
+    ["Hana Lim", "not a date", "Sign-in email changed by Hana Lim"],
+    [null, "not a date", null],
+    [null, null, null],
+  ])("%s, %s → %s", (changer, at, expected) => {
+    expect(emailChangedText(changer, at)).toBe(expected);
   });
 });
 
