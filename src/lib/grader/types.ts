@@ -15,6 +15,15 @@ export type Grade = {
   review: string;
   // The model that actually produced the grade (after any refusal fallback).
   model: string;
+  // What the call used, for the cost log. Output includes thinking.
+  usage: GradeUsage;
+};
+
+export type GradeUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
 };
 
 export type GradingFailure = "empty_transcript" | "refusal" | "invalid_output" | "api";

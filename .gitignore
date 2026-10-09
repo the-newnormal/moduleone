@@ -29,3 +29,7 @@ coverage/
 *.pem
 npm-debug.log*
 .pnpm-debug.log*
+
+# grader comparisons hold members' transcripts and reviews (src/lib/grader/compare.live.test.ts)
+/grader-compare/
+/transcripts*.json

@@ -19,12 +19,16 @@ const GRADE = {
   morale: 4,
   category: "delivery",
   review: "Shipped the login page.",
-  model: "claude-opus-5-5",
+  model: "claude-haiku-5-5",
+  usage: { inputTokens: 40, outputTokens: 300, cacheReadTokens: 1500, cacheWriteTokens: 0 },
 } as const;
 
 type Update = { table: string; values: Record<string, unknown>; filters: [string, string, unknown][] };
+type Insert = { table: string; values: Record<string, unknown> };
 let updates: Update[];
+let inserts: Insert[];
 let updateError: { code: string; message: string } | null;
+let insertError: { code: string; message: string } | null;
 const rpc = vi.fn();
 const download = vi.fn();
 const storageFrom = vi.fn(() => ({ download }));
@@ -33,6 +37,14 @@ const storageFrom = vi.fn(() => ({ download }));
 // number of filters.
 function from(table: string) {
   return {
+    insert(values: Record<string, unknown>) {
+      inserts.push({ table, values });
+      const builder = {
+        abortSignal: () => builder,
+        then: (resolve: (r: { error: typeof insertError }) => void) => resolve({ error: insertError }),
+      };
+      return builder;
+    },
     update(values: Record<string, unknown>) {
       const entry: Update = { table, values, filters: [] };
       updates.push(entry);
@@ -54,7 +66,9 @@ const claim = (overrides: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   updates = [];
+  inserts = [];
   updateError = null;
+  insertError = null;
   vi.mocked(createServiceRoleClient).mockReturnValue({ rpc, from, storage: { from: storageFrom } } as never);
   rpc.mockReset().mockResolvedValue(claim());
   download.mockReset().mockResolvedValue({ data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }), error: null });
@@ -100,7 +114,7 @@ describe("processCheckin", () => {
           morale_score: 4,
           category: "delivery",
           rubric_review: "Shipped the login page.",
-          grader_model: "claude-opus-5-5",
+          grader_model: "claude-haiku-5-5",
           graded_at: expect.any(String),
           processing_error: null,
         },
@@ -108,6 +122,42 @@ describe("processCheckin", () => {
         filters: [["eq", "id", CHECKIN], ["is", "graded_at", null]],
       },
     ]);
+    // Each paid call is logged for the Costs page: numbers and model names only.
+    expect(inserts).toEqual([
+      {
+        table: "processing_costs",
+        values: { checkin_id: CHECKIN, step: "transcription", model: "openai:gpt-transcribe", audio_ms: 95000 },
+      },
+      {
+        table: "processing_costs",
+        values: {
+          checkin_id: CHECKIN,
+          step: "grading",
+          model: "claude-haiku-5-5",
+          input_tokens: 40,
+          output_tokens: 300,
+          cache_read_tokens: 1500,
+          cache_write_tokens: 0,
+        },
+      },
+    ]);
+  });
+
+  it("still grades when the cost log can't be written", async () => {
+    insertError = { code: "42501", message: "denied" };
+    expect(await processCheckin(CHECKIN)).toBe("graded");
+    expect(inserts).toHaveLength(2);
+    expect(console.error).toHaveBeenCalledWith("processCheckin: could not record the cost", {
+      checkinId: CHECKIN,
+      step: "grading",
+      code: "42501",
+    });
+  });
+
+  it("logs only the grading cost when it reuses a saved transcript", async () => {
+    rpc.mockResolvedValue(claim({ transcript: TRANSCRIPT, attempts: 2 }));
+    await processCheckin(CHECKIN);
+    expect(inserts.map((i) => i.values.step)).toEqual(["grading"]);
   });
 
   it("does nothing when there is nothing to claim", async () => {
@@ -160,9 +210,10 @@ describe("processCheckin", () => {
       return controller.signal;
     });
     await processCheckin(CHECKIN);
-    // In order: the attempt, the download, transcription, then one limit per database write.
+    // In order: the attempt, the download, transcription, then one limit per database write (two
+    // saves, each with its cost-log insert running alongside).
     const [attempt, downloadLimit, transcribeLimit, ...saves] = made;
-    expect(saves).toHaveLength(2);
+    expect(saves).toHaveLength(4);
     // Even a write that starts as the attempt runs out finishes inside 300 seconds.
     expect(attempt.ms + Math.max(...saves.map((save) => save.ms))).toBeLessThanOrEqual(290_000);
     expect(downloadLimit.ms).toBeLessThanOrEqual(60_000);

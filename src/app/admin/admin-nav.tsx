@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const LINKS = [
   { href: "/admin/structure", label: "Structure", matches: ["/admin/structure", "/admin/teams"] },
   { href: "/admin/scoring", label: "Scoring", matches: ["/admin/scoring"] },
+  { href: "/admin/costs", label: "Costs", matches: ["/admin/costs"] },
 ] as const;
 
 // The admin header's links. A team's page counts as part of Structure (it's reached from there).

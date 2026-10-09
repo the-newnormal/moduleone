@@ -1,6 +1,6 @@
 import "server-only";
 import { createServiceRoleClient } from "@/lib/supabase/admin";
-import { gradeCheckin, GradingError } from "@/lib/grader";
+import { gradeCheckin, GradingError, type GradeUsage } from "@/lib/grader";
 import { transcribe, TranscriptionError } from "@/lib/stt";
 
 export type ProcessOutcome = "graded" | "skipped" | "failed";
@@ -103,15 +103,15 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
       // configured) fails every check-in until it's fixed, so it doesn't use up an attempt.
       return fail("transcription_failed", error, { giveBackAttempt: error.config });
     }
-    const { error: transcriptError } = await admin
-      .from("checkins")
-      .update({
-        transcript: result.text,
-        transcript_model: `${result.provider}:${result.model}`,
-        transcript_warnings: result.warnings,
-      })
-      .eq("id", checkinId)
-      .abortSignal(AbortSignal.timeout(SAVE_MS));
+    const transcriptModel = `${result.provider}:${result.model}`;
+    const [{ error: transcriptError }] = await Promise.all([
+      admin
+        .from("checkins")
+        .update({ transcript: result.text, transcript_model: transcriptModel, transcript_warnings: result.warnings })
+        .eq("id", checkinId)
+        .abortSignal(AbortSignal.timeout(SAVE_MS)),
+      recordCost(admin, checkinId, { step: "transcription", model: transcriptModel, audio_ms: claim.audio_duration_ms }),
+    ]);
     if (transcriptError) return fail("save_transcript_failed", transcriptError);
     transcript = result.text;
     // Not a failure of the check-in, so it doesn't use up an attempt.
@@ -134,23 +134,57 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
     // fix grades the check-in.
     return fail(`grading_${error.reason}`, error, { giveBackAttempt: error.reason === "api" && !error.retryable });
   }
-  const { error: gradeError } = await admin
-    .from("checkins")
-    .update({
-      activity_score: grade.activity,
-      excellence_score: grade.excellence,
-      morale_score: grade.morale,
-      category: grade.category,
-      rubric_review: grade.review,
-      grader_model: grade.model,
-      graded_at: new Date().toISOString(),
-      processing_error: null,
-    })
-    .eq("id", checkinId)
-    .is("graded_at", null)
-    .abortSignal(AbortSignal.timeout(SAVE_MS));
+  const [{ error: gradeError }] = await Promise.all([
+    admin
+      .from("checkins")
+      .update({
+        activity_score: grade.activity,
+        excellence_score: grade.excellence,
+        morale_score: grade.morale,
+        category: grade.category,
+        rubric_review: grade.review,
+        grader_model: grade.model,
+        graded_at: new Date().toISOString(),
+        processing_error: null,
+      })
+      .eq("id", checkinId)
+      .is("graded_at", null)
+      .abortSignal(AbortSignal.timeout(SAVE_MS)),
+    recordCost(admin, checkinId, { step: "grading", model: grade.model, ...usageColumns(grade.usage) }),
+  ]);
   if (gradeError) return fail("save_grade_failed", gradeError);
   return "graded";
+}
+
+type CostRow =
+  | { step: "transcription"; model: string; audio_ms: number | null }
+  | {
+      step: "grading";
+      model: string;
+      input_tokens: number;
+      output_tokens: number;
+      cache_read_tokens: number;
+      cache_write_tokens: number;
+    };
+
+function usageColumns(usage: GradeUsage) {
+  return {
+    input_tokens: usage.inputTokens,
+    output_tokens: usage.outputTokens,
+    cache_read_tokens: usage.cacheReadTokens,
+    cache_write_tokens: usage.cacheWriteTokens,
+  };
+}
+
+// Logs a paid call in processing_costs (0007) for the admin Costs page. Runs alongside the save
+// that follows the call, inside the same SAVE_MS, and never fails the check-in: a missing row
+// only makes the month's total a little low.
+async function recordCost(admin: ReturnType<typeof createServiceRoleClient>, checkinId: string, row: CostRow): Promise<void> {
+  const { error } = await admin
+    .from("processing_costs")
+    .insert({ checkin_id: checkinId, ...row })
+    .abortSignal(AbortSignal.timeout(SAVE_MS));
+  if (error) console.error("processCheckin: could not record the cost", { checkinId, step: row.step, code: error.code });
 }
 
 function mimeFromFilename(filename: string): string {
