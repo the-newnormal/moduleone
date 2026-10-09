@@ -1,10 +1,10 @@
-import { Clock, OctagonAlert } from "lucide-react";
+import { Clock } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import type { Role } from "@/lib/dashboard/load";
 import { ORG_WEEKS } from "@/lib/dashboard/weeks";
 import type { HealthConfig } from "@/lib/health/health";
-import { BANDS, barClass } from "./band";
+import { BANDS, barClass, RedCount } from "./band";
 
 // What the two views of the heat-map share: the header, the switch between them and the legend.
 // Members are sent to their check-in before any of it renders (see ./page.tsx).
@@ -96,8 +96,8 @@ export function Legend({ config, view, role }: { config: HealthConfig; view: Vie
           <span className="text-muted-foreground">waiting for the grader</span>
         </li>
         <li className="flex items-center gap-1.5">
-          <OctagonAlert aria-hidden className="size-3 text-status-critical" strokeWidth={2.5} />
-          <span className="text-muted-foreground">someone was red</span>
+          <RedCount count={2} />
+          <span className="text-muted-foreground">how many of its check-ins were red, whatever its colour</span>
         </li>
         {view === "org" && (
           <li className="flex items-center gap-1.5">

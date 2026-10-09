@@ -40,6 +40,16 @@ export function BandBadge({ band, score }: { band: Band; score?: string }) {
   );
 }
 
+// "3 red": how many of a box's check-ins were red, printed on the box. Ink rather than red text,
+// which falls under 4.5:1 on the green and yellow tints; the red ring says which colour it counts.
+export function RedCount({ count }: { count: number }) {
+  return (
+    <span className="shrink-0 rounded-full bg-card px-1.5 text-xs leading-4 font-semibold whitespace-nowrap tabular-nums ring-1 ring-status-critical ring-inset">
+      {`${count} red`}
+    </span>
+  );
+}
+
 // A week's bar on the org chart. Taller is better: the bar's height repeats its colour, so the run
 // reads without colour too, and a darker edge keeps every bar at 3:1 against the row (yellow alone
 // is under 2:1 on white). Weeks with nothing graded sit off that scale: a dashed outline while

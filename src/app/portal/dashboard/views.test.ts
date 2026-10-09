@@ -158,6 +158,22 @@ describe("the org chart", () => {
     expect(await page({ weeks: "4", week: "2026-09-28" })).toMatch(/Week of 28 Sept? 2026/);
   });
 
+  it("prints how many check-ins were red on every box that holds one, whatever its colour", async () => {
+    // This week IP Lab 1 has 16 and 30 (green) and 0.6 (red): a green mean of 15.5 with one red.
+    heatmapData("hq", [], { checkins: [checkin("ip1", THIS_WEEK, [5, 5, 5]), checkin("ip1", THIS_WEEK, [1, 1, 1])] });
+    const html = await page({});
+    expect(html).toContain(`aria-label="IP Lab 1 · week of 5 Oct 2026. Green · mean score 15.5. 3 graded check-ins: 2 green, 0 yellow, 1 red.`);
+    // Once on each of Gather, IP Lab and IP Lab 1, plus the legend's sample.
+    expect(html.match(/>\d+ red</g)).toEqual([">2 red<", ">1 red<", ">1 red<", ">1 red<"]);
+    // A red box says how many too: 28 Sep's one check-in (4) was red.
+    expect((await page({ week: "2026-09-28" })).match(/>\d+ red</g)).toEqual([">2 red<", ">1 red<", ">1 red<", ">1 red<"]);
+  });
+
+  it("prints no count on a box with no red check-ins", async () => {
+    heatmapData("hq");
+    expect((await page({})).match(/>\d+ red</g)).toEqual([">2 red<"]); // the legend's sample only
+  });
+
   it("opens an earlier week from its bar, and comes back to the week being viewed", async () => {
     heatmapData("hq");
     const html = await page({});
@@ -279,6 +295,18 @@ describe("the trend grid", () => {
     expect(html).toMatch(/<th scope="rowgroup" class="sticky[^"]*">Gather<\/th>/);
     for (const id of ["ga", "ip", "ip1"]) expect(html).toContain(`href="/portal/dashboard/${id}/${THIS_WEEK}?weeks=4"`);
     expect(html).not.toMatch(/href="\/portal\/dashboard\/[^"/]+\/\d{4}-\d{2}-\d{2}"/); // none without ?weeks=
+  });
+
+  it("prints how many check-ins were red under the score, and spells it out for a single week", async () => {
+    // 28 Sep: IP Lab 1's one check-in (4) was red. This week: green, with no reds.
+    heatmapData("hq");
+    const html = await trend({ weeks: "4" });
+    // Gather, IP Lab and IP Lab 1 on 28 Sep, plus the legend's sample.
+    expect(html.match(/>\d+ red</g)).toEqual([">2 red<", ">1 red<", ">1 red<", ">1 red<"]);
+    heatmapData("hq", [], { checkins: [checkin("ip1", THIS_WEEK, [1, 1, 1])] });
+    const week = await trend({ weeks: "1" });
+    expect(week.match(/>\d+ red</g)).toEqual([">2 red<"]); // no pill: the cell's own text says it
+    expect(week).toContain("2 graded check-ins: 1 green, 0 yellow, 1 red");
   });
 
   it("colours only what a leader leads", async () => {

@@ -1,9 +1,9 @@
-import { Clock, OctagonAlert } from "lucide-react";
+import { Clock } from "lucide-react";
 import Link from "next/link";
 import { type HeatmapCell, type LooseRow, looseKey, type Org, type OrgNode } from "@/lib/dashboard/org";
 import { formatScore, type HealthConfig } from "@/lib/health/health";
-import { BANDS, barClass } from "./band";
-import { cellWord, describeCell, hidesRed } from "./describe";
+import { BANDS, barClass, RedCount } from "./band";
+import { cellWord, describeCell, redCount } from "./describe";
 import { HeatmapTooltip } from "./heatmap-tooltip";
 
 // The org chart, one card per division (under the organisation's own box, once there is one), each
@@ -79,9 +79,7 @@ function TeamRow({ row, config, heading }: { row: Row; config: HealthConfig; hea
             {row.name}
           </Name>
           {row.archived && <span className="shrink-0 text-xs text-muted-foreground">archived</span>}
-          {hidesRed(cell) && (
-            <OctagonAlert aria-hidden className="size-3 shrink-0 text-status-critical" strokeWidth={2.5} />
-          )}
+          {redCount(cell) > 0 && <RedCount count={redCount(cell)} />}
           {band && cell.pending > 0 && (
             <Clock aria-hidden className="size-3 shrink-0 text-muted-foreground" strokeWidth={2.5} />
           )}
