@@ -58,7 +58,9 @@ export function NodeFieldsForm<T>({
   const initial = useMemo(() => JSON.stringify(parseNodeFields(kind, saved)), [kind, saved]);
   const errors = check.ok ? {} : check.errors;
   const shown = (field: NodeField) => (submitted || touched[field] ? errors[field] : undefined);
-  const unchanged = editing && JSON.stringify(check) === initial;
+  // Saved values the form refuses (say a title with a tab, set in the dashboard) keep Save on, so
+  // pressing it shows why instead of leaving it off with no reason.
+  const unchanged = editing && check.ok && JSON.stringify(check) === initial;
   const types = typeOptions(kind);
 
   const edit = (field: NodeField, value: string) => {

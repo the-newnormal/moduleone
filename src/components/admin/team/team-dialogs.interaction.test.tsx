@@ -9,6 +9,7 @@ import type { ActionResult } from "@/lib/admin/errors";
 import { button, click, deferred, dialog, press, queryButton, render, settle, text } from "@/test/dom";
 import { AddPeopleDialog } from "./add-people-dialog";
 import { ConfirmButton } from "./confirm-button";
+import { EditTeamDialog } from "./edit-team-dialog";
 import { LeadsSection } from "./leads-section";
 import { PeopleSection } from "./people-section";
 
@@ -237,5 +238,24 @@ describe("LeadsSection", () => {
     expect(actions.removeLead).toHaveBeenCalledWith(TEAM.id, "m-leo");
     expect(text()).toContain(`Removed the extra lead. Leo Tan still leads ${TEAM.name}, ${reason}`);
     expect(text()).not.toContain("no longer leads");
+  });
+});
+
+describe("EditTeamDialog", () => {
+  it("keeps Save off until something changes", async () => {
+    await render(<EditTeamDialog team={TEAM} updateNode={vi.fn(ok)} />);
+    await click(button("Edit (IP Lab 1)"));
+    expect(button("Save").disabled).toBe(true);
+  });
+
+  it("turns Save on for saved values it refuses, and pressing it says which field and why", async () => {
+    // A title set outside the app (the owner, in the dashboard) that the form doesn't accept.
+    const updateNode = vi.fn(ok);
+    await render(<EditTeamDialog team={{ ...TEAM, leaderTitle: "Head\tCoach" }} updateNode={updateNode} />);
+    await click(button("Edit (IP Lab 1)"));
+    expect(button("Save").disabled).toBe(false);
+    await click(button("Save"));
+    expect(text(dialog()!)).toContain("Titles can't contain line breaks or hidden characters.");
+    expect(updateNode).not.toHaveBeenCalled();
   });
 });
