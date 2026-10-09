@@ -135,6 +135,21 @@ describe("StructureEditor", () => {
     expect(html).toMatch(/<button [^>]*data-add="unplaced"[^>]*>.*Add a domain<\/button>/);
   });
 
+  it("shows the organisation node above the divisions it holds (since 0006), without a handle or menu", () => {
+    const rows = [
+      node("org", "The New Normal", "organisation", null, 0, { members: 1 }),
+      ...ROWS.map((r) => (r.kind === "division" ? { ...r, parent_id: "org" } : r)),
+    ];
+    const out = render(rows);
+    expect(text(out)).toContain("Organisation The New Normal 1 person");
+    expect(out).toMatch(/<h2 id="organisation-org"[^>]*><a[^>]*href="\/admin\/teams\/org"/);
+    expect(out.indexOf("The New Normal")).toBeLessThan(out.indexOf(">Gather<"));
+    expect(all(out, /<h2 id="division-[^"]*"[^>]*><a[^>]*>([^<]+)</g)).toEqual(["Gather", "Culture", "HQ"]);
+    expect(out).not.toContain('aria-label="Drag organisation');
+    expect(out).not.toContain('data-node-move="org"');
+    expect(out).not.toContain("Not in the tree");
+  });
+
   it("never shows a role", () => {
     expect(text(html)).not.toMatch(/\bhq\b|Master Admin/);
   });

@@ -2,8 +2,9 @@ import { compareSiblings } from "@/lib/admin/tree";
 import type { TeamKind } from "@/lib/admin/validate";
 
 // Where each team sits in Normal's structure (migration 0003): divisions at the root, domains
-// under a division (or at the root, unplaced), teams under a domain. Siblings are ordered as the
-// admin pages order them: sort_order, then name, then id.
+// under a division (or at the root, unplaced), teams under a domain. Since migration 0006 one
+// organisation node is the root above every division. Siblings are ordered as the admin pages
+// order them: sort_order, then name, then id.
 
 export type TeamNode = {
   id: string;

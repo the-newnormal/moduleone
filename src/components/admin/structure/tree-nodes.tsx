@@ -179,6 +179,36 @@ export function NodeRow({ row, handle, headingId }: { row: StructureRow; handle?
   );
 }
 
+// The organisation node (migration 0006), above every division: its name opens its page (who sits
+// there), and Edit renames it. It never moves or archives, so it has no handle or menu.
+export function OrganisationRow({ row }: { row: StructureRow }) {
+  const { openDialog } = useEditor();
+  return (
+    <section aria-labelledby={`organisation-${row.id}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border bg-card px-4 py-3">
+      <div className="grid min-w-0 flex-1 basis-48 gap-0.5">
+        <span className="text-xs text-muted-foreground">{KIND_LABELS[row.kind]}</span>
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <h2 id={`organisation-${row.id}`} className="min-w-0 text-2xl break-words">
+            <Link href={`/admin/teams/${row.id}`} className="underline-offset-4 hover:underline">
+              {row.name}
+            </Link>
+          </h2>
+          {row.code && <code className="font-mono text-xs text-muted-foreground">{row.code}</code>}
+          <span className="text-xs text-muted-foreground">
+            {people(row.members)}
+            {row.leads > 0 && ` · ${leads(row.leads)}`}
+          </span>
+        </div>
+        {row.note && <p className="text-sm whitespace-pre-line text-muted-foreground">{row.note}</p>}
+      </div>
+      <Button variant="ghost" size="sm" data-node-menu={row.id} onClick={() => openDialog({ type: "edit", id: row.id })}>
+        <PencilIcon />
+        Edit<span className="sr-only"> {row.name}</span>…
+      </Button>
+    </section>
+  );
+}
+
 function TeamItem({ row }: { row: StructureRow }) {
   const { attach, style, isDragging, dropBefore, handle } = useNode(row);
   return (

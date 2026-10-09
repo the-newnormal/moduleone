@@ -4,7 +4,7 @@ import { type ActionResult, fail, toUserMessage } from "@/lib/admin/errors";
 import { parseNodeFields } from "@/lib/admin/node-fields";
 import { revalidateTeamTree } from "@/lib/admin/revalidate";
 import { requireAdmin } from "@/lib/admin/session";
-import { asRecord, isIndex, isParentId, isTeamKind, isUuid, MAX_INDEX } from "@/lib/admin/validate";
+import { asRecord, isCreatableKind, isIndex, isParentId, isTeamKind, isUuid, MAX_INDEX } from "@/lib/admin/validate";
 
 // Writes to divisions, domains and teams: move, add, edit, archive and restore. The Structure page
 // uses all of them; a team's page uses updateNode for its Edit. Each one checks the admin grant
@@ -37,6 +37,7 @@ export async function moveNode(input: unknown): Promise<ActionResult> {
 
 // Add a division (parentId null), a domain (in a division, or null: unplaced) or a team (in a
 // domain): { kind, parentId, name, code, type, note }. It goes last among its active siblings.
+// A division goes in the organisation node when there is one (migration 0006), else at the top.
 export async function createNode(input: unknown): Promise<ActionResult<{ id: string }>> {
   const admin = await requireAdmin();
   if (!admin.ok) return admin;
@@ -45,7 +46,7 @@ export async function createNode(input: unknown): Promise<ActionResult<{ id: str
   const form = asRecord(input);
   const { kind } = form;
   const parentId = form.parentId ?? null;
-  if (!isTeamKind(kind) || !isParentId(parentId)) return fail("Choose what to add, and where.");
+  if (!isCreatableKind(kind) || !isParentId(parentId)) return fail("Choose what to add, and where.");
   // The database refuses these too, but in its constraints' words.
   if (kind === "division" && parentId !== null) return fail("A division can only sit at the top level.");
   if (kind === "team" && parentId === null) return fail("A team can only sit under a domain.");
@@ -53,11 +54,18 @@ export async function createNode(input: unknown): Promise<ActionResult<{ id: str
   const fields = parseNodeFields(kind, form);
   if (!fields.ok) return fail(fields.error);
 
+  let parent = parentId;
+  if (kind === "division") {
+    const org = await supabase.from("teams").select("id").eq("kind", "organisation").is("parent_id", null).limit(1);
+    if (org.error) return fail(toUserMessage(org.error, "createNode"));
+    parent = (org.data as { id: string }[] | null)?.[0]?.id ?? null;
+  }
+
   // Last place: one after the highest active sibling. When the siblings are numbered 0..n-1, as
   // admin_move_team leaves them, that's the number of active siblings; after an archive leaves a
   // gap it's still after all of them.
   const siblings = supabase.from("teams").select("sort_order").is("archived_at", null);
-  const last = await (parentId === null ? siblings.is("parent_id", null) : siblings.eq("parent_id", parentId))
+  const last = await (parent === null ? siblings.is("parent_id", null) : siblings.eq("parent_id", parent))
     .order("sort_order", { ascending: false })
     .limit(1);
   if (last.error) return fail(toUserMessage(last.error, "createNode"));
@@ -66,7 +74,7 @@ export async function createNode(input: unknown): Promise<ActionResult<{ id: str
 
   const { data, error } = await supabase
     .from("teams")
-    .insert({ kind, parent_id: parentId, ...fields.value, sort_order })
+    .insert({ kind, parent_id: parent, ...fields.value, sort_order })
     .select("id")
     .single();
   if (error) return fail(toUserMessage(error, "createNode"));

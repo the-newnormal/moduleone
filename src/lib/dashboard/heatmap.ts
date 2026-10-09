@@ -23,8 +23,12 @@ export type HeatmapGroup = {
 // The org chart (./org.ts) as the trend grid's rows: a group per division, headed by the division's
 // own row, its domains and their teams beneath in org-chart order, each row covering its team and
 // every team under it. Domains outside any division, and check-ins outside the scored tree, go
-// last, in "Other".
-export function heatmapGroups({ roots, loose }: Org): HeatmapGroup[] {
+// last, in "Other". The organisation node (migration 0006), when the viewer covers it, comes first
+// as a group of its own: its row rolls up the whole organisation.
+export function heatmapGroups(org: Org): HeatmapGroup[] {
+  const { loose } = org;
+  const organisations = org.roots.filter((root) => root.kind === "organisation");
+  const roots = org.roots.flatMap((root) => (root.kind === "organisation" ? root.children : [root]));
   const row = (node: OrgNode, depth: number): HeatmapRow => ({
     key: node.teamId,
     teamId: node.teamId,
@@ -40,15 +44,18 @@ export function heatmapGroups({ roots, loose }: Org): HeatmapGroup[] {
   ];
   const hasCheckins = (r: HeatmapRow) => r.cells.some((c) => c.health !== null || c.pending > 0);
 
-  const groups: HeatmapGroup[] = roots
-    .filter((root) => root.kind === "division")
-    .map((division) => ({
-      key: division.teamId,
-      label: division.name,
-      head: division.scored ? row(division, 0) : null,
-      rows: division.children.flatMap((child) => rows(child, 0)),
-    }))
-    .filter((group) => group.rows.length > 0 || (group.head !== null && hasCheckins(group.head)));
+  const group = (node: OrgNode, below: HeatmapRow[]): HeatmapGroup => ({
+    key: node.teamId,
+    label: node.name,
+    head: node.scored ? row(node, 0) : null,
+    rows: below,
+  });
+  const groups = [
+    ...organisations.map((node) => group(node, [])),
+    ...roots
+      .filter((root) => root.kind === "division")
+      .map((division) => group(division, division.children.flatMap((child) => rows(child, 0)))),
+  ].filter((g) => g.rows.length > 0 || (g.head !== null && hasCheckins(g.head)));
 
   const other = [
     ...roots.filter((root) => root.kind !== "division").flatMap((root) => rows(root, 0)),

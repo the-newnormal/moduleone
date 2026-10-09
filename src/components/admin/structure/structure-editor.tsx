@@ -36,7 +36,7 @@ import {
   type StructureActions,
 } from "./editor-context";
 import { ArchiveDialog, MoveDialog, NodeFormDialog } from "./node-dialogs";
-import { DivisionSection, StrayList, UnplacedSection } from "./tree-nodes";
+import { DivisionSection, OrganisationRow, StrayList, UnplacedSection } from "./tree-nodes";
 
 type Notice = { tone: "done" | "error"; text: string } | null;
 
@@ -170,6 +170,7 @@ export function StructureEditor({ rows, actions }: { rows: StructureRow[]; actio
           onDragEnd={onDragEnd}
           onDragCancel={() => setActiveId(null)}
         >
+          {tree.organisation && <OrganisationRow row={tree.organisation} />}
           <SortableContext id="list:divisions" items={tree.divisions.map((d) => d.row.id)} strategy={listStrategy}>
             {tree.divisions.length > 0 ? (
               <div className="grid gap-4">

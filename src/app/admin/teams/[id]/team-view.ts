@@ -121,7 +121,7 @@ export function loginGivenText(giverName: string | null, givenAt: string | null)
 
 // What a leader of this node sees: the node and everything under it.
 export function coverage(team: Pick<TeamSummary, "name" | "kind">): string {
-  if (team.kind === "division") return `${team.name} and everything in it`;
+  if (team.kind === "organisation" || team.kind === "division") return `${team.name} and everything in it`;
   return team.kind === "domain" ? `${team.name} and its sub-teams` : team.name;
 }
 
@@ -203,7 +203,8 @@ export function buildTeamView({
 
   const above = breadcrumb(teamId, teams).slice(0, -1);
   const crumbs: Crumb[] = above.map((t) => ({ key: t.id, label: t.name, href: `/admin/teams/${t.id}` }));
-  if (row.kind !== "division" && above[0]?.kind !== "division") {
+  // A domain, or a domain's team, outside every division (the organisation node may sit above).
+  if ((row.kind === "domain" || row.kind === "team") && !above.some((t) => t.kind === "division")) {
     crumbs.unshift({ key: "unplaced", label: "Unplaced", href: null });
   }
 

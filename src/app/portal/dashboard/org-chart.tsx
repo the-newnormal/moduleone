@@ -6,8 +6,9 @@ import { BANDS, barClass } from "./band";
 import { cellWord, describeCell, hidesRed } from "./describe";
 import { HeatmapTooltip } from "./heatmap-tooltip";
 
-// The org chart, one card per division, each box coloured by the last of its weeks (the week
-// picked on the page) with a bar for each week up to it. A box covers its team and every team
+// The org chart, one card per division (under the organisation's own box, once there is one), each
+// box coloured by the last of its weeks (the week picked on the page) with a bar for each week up
+// to it. A box covers its team and every team
 // under it (src/lib/dashboard/org.ts); open it to read that week's check-ins.
 
 const drillIn = (teamId: string | null, week: string) => `/portal/dashboard/${teamId ?? "none"}/${week}`;
@@ -164,11 +165,22 @@ function Card({
 }
 
 export function OrgChart({ org, config }: { org: Org; config: HealthConfig }) {
-  const divisions = org.roots.filter((root) => root.kind === "division");
-  const unplaced = org.roots.filter((root) => root.kind !== "division");
+  // The organisation node (migration 0006) holds every division: its own box, rolled up over the
+  // whole organisation, goes on top for a viewer who covers it, and its divisions get their cards.
+  const organisations = org.roots.filter((root) => root.kind === "organisation");
+  const roots = org.roots.flatMap((root) => (root.kind === "organisation" ? root.children : [root]));
+  const divisions = roots.filter((root) => root.kind === "division");
+  const unplaced = roots.filter((root) => root.kind !== "division");
   return (
     <HeatmapTooltip>
       <div className="grid items-start gap-4 md:grid-cols-2">
+        {organisations
+          .filter((node) => node.scored)
+          .map((node) => (
+            <section key={node.teamId} aria-label={node.name} className="grid rounded-xl border bg-card p-2 md:col-span-2">
+              <TeamRow row={node} config={config} heading />
+            </section>
+          ))}
         {divisions.map((division) => (
           <Card
             key={division.teamId}

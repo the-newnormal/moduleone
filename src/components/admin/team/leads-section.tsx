@@ -59,6 +59,7 @@ function removeLeadCopy(lead: LeadPerson, team: TeamSummary, noun: string) {
 
 // One line on what leading means here.
 export function leadsExplanation(team: Pick<TeamSummary, "kind">): string {
+  if (team.kind === "organisation") return "Leads see every check-in in the organisation.";
   if (team.kind === "division") return "Leads see the check-ins made in this division and in everything in it.";
   return team.kind === "domain"
     ? "Leads see the check-ins made in this domain and in its sub-teams."

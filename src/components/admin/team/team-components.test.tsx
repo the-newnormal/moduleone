@@ -271,6 +271,9 @@ describe("LeadsSection", () => {
     expect(text(render())).toContain("Leads see the check-ins made in this team.");
     expect(text(render(DOMAIN))).toContain("Leads see the check-ins made in this domain and in its sub-teams.");
     expect(text(render(DIVISION))).toContain("Leads see the check-ins made in this division and in everything in it.");
+    expect(text(render({ ...DIVISION, kind: "organisation", kindLabel: "Organisation" }))).toContain(
+      "Leads see every check-in in the organisation.",
+    );
   });
 
   it("speaks of a division as a division", () => {

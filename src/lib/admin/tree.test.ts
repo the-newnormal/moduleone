@@ -131,7 +131,7 @@ describe("buildTree", () => {
   });
 
   it("handles no rows", () => {
-    expect(buildTree([])).toEqual({ divisions: [], unplaced: [], archived: [], stray: [] });
+    expect(buildTree([])).toEqual({ organisation: null, divisions: [], unplaced: [], archived: [], stray: [] });
   });
 
   it("doesn't loop on a cycle", () => {
@@ -181,6 +181,12 @@ describe("canDrop", () => {
     ["team", "division", false],
     ["team", "domain", true],
     ["team", "team", false],
+    ["division", "organisation", true],
+    ["domain", "organisation", false],
+    ["team", "organisation", false],
+    ["organisation", null, false],
+    ["organisation", "organisation", false],
+    ["organisation", "division", false],
   ] as const)("%s into %s: %s", (kind, parent, allowed) => {
     expect(canDrop(kind, parent)).toBe(allowed);
   });
@@ -456,6 +462,63 @@ describe("moveAnnouncement", () => {
       "Moved Atlas to Unplaced, position 2",
     );
     expect(moveAnnouncement(ROWS, { teamId: "missing", parentId: null, index: 0 })).toBe("");
+  });
+});
+
+// Since migration 0006 one organisation node holds every division; unplaced domains stay at the top.
+describe("with an organisation node", () => {
+  const ORG: TeamRow[] = [
+    node("normal", "organisation", null, 0, { name: "The New Normal" }),
+    node("legacy", "domain", null, 1),
+    node("gather", "division", "normal", 0),
+    node("culture", "division", "normal", 1),
+    node("hq", "division", "normal", 2),
+    node("ipLab", "domain", "gather", 0),
+    node("ip1", "team", "ipLab", 0),
+  ];
+
+  it("puts the organisation on top and its divisions in order under it", () => {
+    const tree = buildTree(ORG);
+    expect(tree.organisation?.id).toBe("normal");
+    expect(tree.divisions.map((d) => d.row.id)).toEqual(["gather", "culture", "hq"]);
+    expect(tree.divisions[0].domains.map((d) => [d.row.id, ids(d.teams)])).toEqual([["ipLab", ["ip1"]]]);
+    expect(tree.unplaced.map((d) => d.row.id)).toEqual(["legacy"]);
+    expect(tree.stray).toEqual([]);
+  });
+
+  it("has no organisation before there is one", () => {
+    expect(buildTree(ROWS).organisation).toBeNull();
+  });
+
+  it("offers a division the organisation, with positions among its divisions", () => {
+    expect(moveOptions(ORG, "hq")).toEqual([
+      {
+        parentId: "normal",
+        label: "The New Normal",
+        current: true,
+        positions: [
+          { index: 0, label: "First", current: false },
+          { index: 1, label: "After Gather", current: false },
+          { index: 2, label: "After Culture", current: true },
+        ],
+      },
+    ]);
+  });
+
+  it("offers a domain the divisions in the organisation, then Unplaced", () => {
+    expect(moveOptions(ORG, "ipLab").map((o) => o.label)).toEqual(["Gather", "Culture", "Hq", "Unplaced"]);
+  });
+
+  it("never moves the organisation", () => {
+    expect(moveOptions(ORG, "normal")).toEqual([]);
+    expect(dropToMove(ORG, "normal", { type: "into", parentId: null })).toBeNull();
+    expect(dropToMove(ORG, "normal", { type: "onto", id: "legacy" })).toBeNull();
+  });
+
+  it("moves a division among the others in the organisation", () => {
+    const move = dropToMove(ORG, "hq", { type: "onto", id: "gather" });
+    expect(move).toEqual({ teamId: "hq", parentId: "normal", index: 0 });
+    expect(moveAnnouncement(ORG, move!)).toBe("Moved Hq to The New Normal, position 1");
   });
 });
 
