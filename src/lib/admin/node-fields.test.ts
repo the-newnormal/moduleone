@@ -7,14 +7,14 @@ describe("parseNodeFields", () => {
       parseNodeFields("domain", { name: "  Atlas ", code: " at.x ", type: "development", note: " Old\r\nnote " }),
     ).toEqual({
       ok: true,
-      value: { name: "Atlas", code: "AT.X", domain_type: "development", division_type: null, note: "Old\nnote" },
+      value: { name: "Atlas", code: "AT.X", domain_type: "development", division_type: null, leader_title: null, note: "Old\nnote" },
     });
   });
 
   it("puts a division's type in division_type", () => {
     expect(parseNodeFields("division", { name: "Gather", type: "strategy" })).toEqual({
       ok: true,
-      value: { name: "Gather", code: null, domain_type: null, division_type: "strategy", note: null },
+      value: { name: "Gather", code: null, domain_type: null, division_type: "strategy", leader_title: null, note: null },
     });
   });
 
@@ -22,7 +22,7 @@ describe("parseNodeFields", () => {
     for (const kind of ["division", "domain", "team"] as const) {
       expect(parseNodeFields(kind, { ...EMPTY_NODE_FORM, name: "X" })).toEqual({
         ok: true,
-        value: { name: "X", code: null, domain_type: null, division_type: null, note: null },
+        value: { name: "X", code: null, domain_type: null, division_type: null, leader_title: null, note: null },
       });
     }
   });
@@ -51,6 +51,18 @@ describe("parseNodeFields", () => {
     });
   });
 
+  it("cleans the title for its leaders into leader_title, and checks it", () => {
+    expect(parseNodeFields("organisation", { name: "The New Normal", leaderTitle: " President " })).toMatchObject({
+      ok: true,
+      value: { leader_title: "President" },
+    });
+    expect(parseNodeFields("division", { name: "Gather", leaderTitle: "t".repeat(61) })).toEqual({
+      ok: false,
+      errors: { leaderTitle: "Titles can be at most 60 characters." },
+      error: "Titles can be at most 60 characters.",
+    });
+  });
+
   it("refuses something that isn't a form", () => {
     expect(parseNodeFields("team", null)).toMatchObject({ ok: false, error: "Enter a name." });
     expect(parseNodeFields("team", "Atlas")).toMatchObject({ ok: false, error: "Enter a name." });
@@ -59,7 +71,7 @@ describe("parseNodeFields", () => {
   it("ignores fields it doesn't know", () => {
     expect(parseNodeFields("team", { name: "IP Lab 1", kind: "division", archived_at: "now", id: "x" })).toEqual({
       ok: true,
-      value: { name: "IP Lab 1", code: null, domain_type: null, division_type: null, note: null },
+      value: { name: "IP Lab 1", code: null, domain_type: null, division_type: null, leader_title: null, note: null },
     });
   });
 });
@@ -87,18 +99,19 @@ describe("nodeToForm", () => {
       kind: "domain" as const,
       domain_type: "lab" as const,
       division_type: null,
+      leader_title: null,
       note: null,
     };
     const form = nodeToForm(row);
-    expect(form).toEqual({ name: "IP Lab", code: "IP.X", type: "lab", note: "" });
+    expect(form).toEqual({ name: "IP Lab", code: "IP.X", type: "lab", leaderTitle: "", note: "" });
     expect(parseNodeFields("domain", form)).toEqual({
       ok: true,
-      value: { name: "IP Lab", code: "IP.X", domain_type: "lab", division_type: null, note: null },
+      value: { name: "IP Lab", code: "IP.X", domain_type: "lab", division_type: null, leader_title: null, note: null },
     });
   });
 
   it("uses the division type for a division and none for a team", () => {
-    const base = { name: "X", code: null, note: "n", domain_type: null };
+    const base = { name: "X", code: null, note: "n", domain_type: null, leader_title: null };
     expect(nodeToForm({ ...base, kind: "division", division_type: "strategy" }).type).toBe("strategy");
     expect(nodeToForm({ ...base, kind: "team", division_type: null }).type).toBe("");
   });

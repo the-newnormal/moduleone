@@ -22,6 +22,7 @@ const node = (id: string, name: string, kind: TeamRow["kind"], parent_id: string
   code: null,
   sort_order: 0,
   note: null,
+  leader_title: null,
   archived_at: null,
   ...extra,
 });
@@ -77,6 +78,16 @@ const view = (teamId: string, members = MEMBERS, leads = LEADS, grants: { member
   buildTeamView({ teamId, adminMemberId: ADMIN, teams: TEAMS, members, leads, grants });
 
 describe("buildTeamView", () => {
+  it("gives the node's title for its leaders to the leaders and hq sitting there, not to members", () => {
+    const teams = [...TEAMS.map((t) => (t.id === "team-ip1" ? { ...t, leader_title: "Captain" } : t))];
+    const v = buildTeamView({ teamId: "team-ip1", adminMemberId: "m-nobody", teams, members: MEMBERS, leads: LEADS, grants: [] })!;
+    expect(v.team.leaderTitle).toBe("Captain");
+    const titles = Object.fromEntries(v.people.map((p) => [p.name, p.title]));
+    expect(titles).toEqual({ "Hana Lim": "Captain", "Leo Tan": "Captain", "Mei Wong": null, "Zed Ong": null });
+    // Without a title, nobody gets one.
+    expect(view("team-ip1")!.people.every((p) => p.title === null)).toBe(true);
+  });
+
   it("is null for an unknown id", () => {
     expect(view("nope")).toBeNull();
   });
@@ -131,6 +142,7 @@ describe("buildTeamView", () => {
       domainType: null,
       divisionType: null,
       typeLabel: null,
+      leaderTitle: null,
       note: null,
       archived: false,
       everyoneLeads: false,

@@ -31,6 +31,7 @@ const TEAM: TeamSummary = {
   domainType: null,
   divisionType: null,
   typeLabel: null,
+  leaderTitle: null,
   note: null,
   archived: false,
   everyoneLeads: false,
@@ -64,6 +65,7 @@ const person = (id: string, name: string, changes: Partial<Person> = {}): Person
   name,
   role: "member",
   roleLabel: "Member",
+  title: null,
   isSelf: false,
   editable: true,
   hasLogin: false,
@@ -111,6 +113,19 @@ function row(html: string, name: string) {
 const inDialog = (content: React.ReactNode) => renderToStaticMarkup(<Dialog>{content}</Dialog>);
 
 describe("PeopleSection", () => {
+  it("shows the node's title next to someone who leads from it", () => {
+    const html = renderToStaticMarkup(
+      <PeopleSection
+        team={TEAM}
+        people={[person("m1", "Elijah Chao", { role: "leader", roleLabel: "Leader", title: "President" }), person("m2", "Mei Wong")]}
+        candidates={[]}
+        actions={actions}
+      />,
+    );
+    expect(html).toContain("Elijah Chao<span class=\"font-normal\"> · President</span>");
+    expect(html).not.toContain("Mei Wong<span class=\"font-normal\"> ·");
+  });
+
   const render = (team = TEAM, people = PEOPLE) =>
     renderToStaticMarkup(<PeopleSection team={team} people={people} candidates={[]} actions={actions} />);
 
@@ -239,7 +254,8 @@ describe("EditTeamForm", () => {
     const html = inDialog(<EditTeamForm team={TEAM} updateNode={actions.updateNode} onSaved={() => {}} />);
     expect(html).toMatch(/value="IP Lab 1"/);
     expect(html).toMatch(/value="IP.1"/);
-    expect(count(html, /<label/g)).toBe(3);
+    expect(count(html, /<label/g)).toBe(4); // name, code, title for its leaders, note
+    expect(html).toContain("Title for its leaders");
     expect(text(html)).not.toContain("Type");
     expect(text(html)).toContain("Edit IP Lab 1 It stays a team. To move it, use the Structure page.");
     expect(text(html)).toContain("1–8 letters or digits, optionally a dot and 1–8 more");
@@ -247,7 +263,7 @@ describe("EditTeamForm", () => {
 
   it("also edits a domain's type", () => {
     const html = inDialog(<EditTeamForm team={DOMAIN} updateNode={actions.updateNode} onSaved={() => {}} />);
-    expect(count(html, /<label/g)).toBe(4);
+    expect(count(html, /<label/g)).toBe(5);
     expect(text(html)).toContain("Type");
     expect(text(html)).toContain("It stays a domain.");
     expect(html).toContain("First line\nSecond line");

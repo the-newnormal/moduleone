@@ -110,6 +110,20 @@ export function parseCode(value: unknown): Parsed<string | null> {
   return ok(code);
 }
 
+export const TITLE_MAX = 60;
+
+// What the leaders who sit in a node are called, like President (0006's teams.leader_title):
+// trimmed, one line, at most 60 characters; empty means no title (null).
+export function parseLeaderTitle(value: unknown): Parsed<string | null> {
+  if (value === null || value === undefined) return ok(null);
+  if (typeof value !== "string") return fail("Titles must be text.");
+  const title = value.trim();
+  if (title === "") return ok(null);
+  if (CONTROL_OR_FORMAT.test(title)) return fail("Titles can't contain line breaks or hidden characters.");
+  if (length(title) > TITLE_MAX) return fail(`Titles can be at most ${TITLE_MAX} characters.`);
+  return ok(title);
+}
+
 export const NOTE_MAX = 500;
 
 // A note on a team: trimmed, at most 500 characters; empty means no note (null). Browsers send a

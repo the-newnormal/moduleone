@@ -12,6 +12,7 @@ import {
   isUuid,
   parseCode,
   parseEmail,
+  parseLeaderTitle,
   parseName,
   parseNote,
 } from "./validate";
@@ -174,6 +175,25 @@ describe("parseCode", () => {
 
   it("matches 0003's teams_code_format", () => {
     expect(CODE_RE.source).toBe("^[A-Z0-9]{1,8}(\\.[A-Z0-9]{1,8})?$");
+  });
+});
+
+describe("parseLeaderTitle", () => {
+  it("trims, and treats empty as no title", () => {
+    expect(parseLeaderTitle("  President ")).toEqual({ ok: true, value: "President" });
+    for (const empty of ["", "   ", null, undefined]) {
+      expect(parseLeaderTitle(empty)).toEqual({ ok: true, value: null });
+    }
+  });
+
+  it("allows up to 60 characters on one line, like 0006's teams_leader_title_format", () => {
+    expect(parseLeaderTitle("t".repeat(60)).ok).toBe(true);
+    expect(parseLeaderTitle("t".repeat(61))).toEqual({ ok: false, error: "Titles can be at most 60 characters." });
+    expect(parseLeaderTitle("Vice\nPresident")).toEqual({
+      ok: false,
+      error: "Titles can't contain line breaks or hidden characters.",
+    });
+    expect(parseLeaderTitle(3)).toEqual({ ok: false, error: "Titles must be text." });
   });
 });
 

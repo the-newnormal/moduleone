@@ -101,6 +101,7 @@ function PersonRow({
       <div className="grid min-w-0 gap-1">
         <p className="font-medium break-words">
           {name}
+          {person.title && <span className="font-normal"> · {person.title}</span>}
           {person.isSelf && <span className="font-normal text-muted-foreground"> (you)</span>}
         </p>
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">

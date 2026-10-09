@@ -9,15 +9,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { type ActionResult, settle } from "@/lib/admin/errors";
 import { type NodeField, type NodeForm, parseNodeFields, typeOptions } from "@/lib/admin/node-fields";
-import { NOTE_MAX, type TeamKind } from "@/lib/admin/validate";
+import { NOTE_MAX, type TeamKind, TITLE_MAX } from "@/lib/admin/validate";
 import { ActionError } from "./action-error";
 
 const NO_TYPE = "none"; // Radix Select items can't have an empty value
 
-const FIELDS: readonly NodeField[] = ["name", "code", "type", "note"];
+const FIELDS: readonly NodeField[] = ["name", "code", "type", "leaderTitle", "note"];
 
 // The form for adding or editing a division, domain or team, as a dialog's content: name, code
-// (upper-cased as you type), type (domains and divisions) and note, checked as you type with the
+// (upper-cased as you type), type (domains and divisions), the title of its leaders (like
+// President) and note, checked as you type with the
 // same checks as the createNode and updateNode server actions (parseNodeFields). The Structure
 // page uses it to add and edit, and a team's page for its Edit.
 // - `saved`: the values it starts from. When editing, Save stays off until something changes.
@@ -172,6 +173,26 @@ export function NodeFieldsForm<T>({
           {fieldError("type")}
         </div>
       )}
+
+      <div className="grid gap-1.5">
+        <Label htmlFor={`${id}-leaderTitle`}>Title for its leaders</Label>
+        <Input
+          id={`${id}-leaderTitle`}
+          value={form.leaderTitle}
+          autoComplete="off"
+          placeholder={kind === "organisation" ? "President" : undefined}
+          className="sm:max-w-72"
+          aria-invalid={shown("leaderTitle") ? true : undefined}
+          aria-describedby={describedBy("leaderTitle", true)}
+          onChange={(e) => edit("leaderTitle", e.target.value)}
+          onBlur={() => touch("leaderTitle")}
+        />
+        <p id={`${id}-leaderTitle-help`} className="text-xs text-muted-foreground">
+          Optional. What the leaders who sit here are called, like President; it doesn&apos;t change what
+          they see. At most {TITLE_MAX} characters.
+        </p>
+        {fieldError("leaderTitle")}
+      </div>
 
       <div className="grid gap-1.5">
         <Label htmlFor={`${id}-note`}>Note</Label>

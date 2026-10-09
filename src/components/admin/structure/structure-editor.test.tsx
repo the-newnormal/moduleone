@@ -22,6 +22,7 @@ function node(
     code: null,
     sort_order,
     note: null,
+    leader_title: null,
     archived_at: null,
     members: 0,
     leads: 0,

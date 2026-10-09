@@ -1,4 +1,5 @@
-// The fields an admin types for a division, domain or team: name, code, type and note. The add
+// The fields an admin types for a division, domain or team: name, code, type, the title of the
+// leaders who sit there (like President) and note. The add
 // and edit forms (on the Structure page, and Edit on a team's page) check them as you type, and
 // the createNode and updateNode server actions check them again before writing (the same
 // functions, so the messages match). Kind and position aren't here: a node's kind is fixed once
@@ -14,17 +15,18 @@ import {
   isDivisionType,
   isDomainType,
   parseCode,
+  parseLeaderTitle,
   parseName,
   parseNote,
   type TeamKind,
 } from "./validate";
 
-export type NodeField = "name" | "code" | "type" | "note";
+export type NodeField = "name" | "code" | "type" | "leaderTitle" | "note";
 
 // The form as typed. `type` is a domain or division type, or "" for none.
 export type NodeForm = Record<NodeField, string>;
 
-export const EMPTY_NODE_FORM: NodeForm = { name: "", code: "", type: "", note: "" };
+export const EMPTY_NODE_FORM: NodeForm = { name: "", code: "", type: "", leaderTitle: "", note: "" };
 
 // What the createNode and updateNode server actions take (src/app/admin/structure/actions.ts).
 export type CreateNodeInput = NodeForm & { kind: TeamKind; parentId: string | null };
@@ -36,6 +38,7 @@ export type NodeFields = {
   code: string | null;
   domain_type: DomainType | null;
   division_type: DivisionType | null;
+  leader_title: string | null;
   note: string | null;
 };
 
@@ -56,19 +59,20 @@ export function typeOptions(kind: TeamKind): { value: string; label: string }[] 
 
 // A row's current values as form text, for Edit.
 export function nodeToForm(
-  row: Pick<TeamRow, "name" | "code" | "kind" | "domain_type" | "division_type" | "note">,
+  row: Pick<TeamRow, "name" | "code" | "kind" | "domain_type" | "division_type" | "leader_title" | "note">,
 ): NodeForm {
   return {
     name: row.name,
     code: row.code ?? "",
     type: (row.kind === "domain" ? row.domain_type : row.kind === "division" ? row.division_type : null) ?? "",
+    leaderTitle: row.leader_title ?? "",
     note: row.note ?? "",
   };
 }
 
 const isEmpty = (v: unknown) => v === undefined || v === null || v === "";
 
-// Checks the four fields for a node of `kind`. Anything else in `input` is ignored.
+// Checks the five fields for a node of `kind`. Anything else in `input` is ignored.
 export function parseNodeFields(kind: TeamKind, input: unknown): ParsedNodeFields {
   const form = asRecord(input);
   const errors: NodeFieldErrors = {};
@@ -88,15 +92,25 @@ export function parseNodeFields(kind: TeamKind, input: unknown): ParsedNodeField
     else errors.type = `Pick one of the ${kind} types, or none.`;
   }
 
+  const leaderTitle = parseLeaderTitle(form.leaderTitle);
+  if (!leaderTitle.ok) errors.leaderTitle = leaderTitle.error;
+
   const note = parseNote(form.note);
   if (!note.ok) errors.note = note.error;
 
-  const first = errors.name ?? errors.code ?? errors.type ?? errors.note;
-  if (first !== undefined || !name.ok || !code.ok || !note.ok) {
+  const first = errors.name ?? errors.code ?? errors.type ?? errors.leaderTitle ?? errors.note;
+  if (first !== undefined || !name.ok || !code.ok || !leaderTitle.ok || !note.ok) {
     return { ok: false, errors, error: first ?? "Check the form." };
   }
   return {
     ok: true,
-    value: { name: name.value, code: code.value, domain_type, division_type, note: note.value },
+    value: {
+      name: name.value,
+      code: code.value,
+      domain_type,
+      division_type,
+      leader_title: leaderTitle.value,
+      note: note.value,
+    },
   };
 }

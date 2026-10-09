@@ -35,6 +35,7 @@ export type TeamSummary = {
   domainType: DomainType | null;
   divisionType: DivisionType | null;
   typeLabel: string | null; // "Lab", "IP", "Development domain"
+  leaderTitle: string | null; // what the leaders who sit here are called, like President (0006)
   note: string | null;
   archived: boolean;
   // Everyone placed here leads it, so it has no members: a division or the organisation once
@@ -52,6 +53,7 @@ export type Person = {
   name: string;
   role: Role;
   roleLabel: string;
+  title: string | null; // the node's title for its leaders ("President"), for a leader or hq sitting here
   isSelf: boolean; // the signed-in admin
   editable: boolean; // false for Master Admins and the admin's own row (RLS refuses those)
   hasLogin: boolean;
@@ -201,6 +203,7 @@ export function buildTeamView({
     domainType: row.kind === "domain" ? row.domain_type : null,
     divisionType: row.kind === "division" ? row.division_type : null,
     typeLabel: typeLabel(row),
+    leaderTitle: row.leader_title,
     note: row.note,
     archived: row.archived_at !== null,
     everyoneLeads:
@@ -250,6 +253,7 @@ export function buildTeamView({
         name: m.name,
         role,
         roleLabel: roleLabel(role),
+        title: role === "member" ? null : row.leader_title,
         isSelf: m.id === adminMemberId,
         editable,
         hasLogin,
