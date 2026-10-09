@@ -144,7 +144,7 @@ export default async function TeamWeekPage({
       ) : sectioned ? (
         sections.map((section) => (
           <section key={section.team ?? ""} aria-label={section.team ?? teamName} className="grid gap-4">
-            <h2 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+            <h2 className="font-sans text-xs font-semibold tracking-wide text-muted-foreground uppercase">
               {section.team ?? teamName}
             </h2>
             {section.checkins.map((checkin) => (

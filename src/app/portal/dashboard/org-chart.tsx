@@ -74,7 +74,7 @@ function TeamRow({ row, config, heading }: { row: Row; config: HealthConfig; hea
           </span>
         )}
         <Name
-          className={`truncate ${heading ? "text-xs font-semibold tracking-wide uppercase" : "font-medium"}`}
+          className={`truncate ${heading ? "font-sans text-xs font-semibold tracking-wide uppercase" : "font-medium"}`}
         >
           {row.name}
         </Name>
@@ -138,7 +138,7 @@ function Card({
       {head?.scored ? (
         <TeamRow row={head} config={config} heading />
       ) : (
-        <h2 className="flex min-h-9 items-center px-2.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+        <h2 className="flex min-h-9 items-center px-2.5 font-sans text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           {label}
         </h2>
       )}
