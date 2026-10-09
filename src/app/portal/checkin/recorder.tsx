@@ -9,7 +9,7 @@ import { QUESTIONS } from "@/lib/checkin/week";
 import { createClient } from "@/lib/supabase/client";
 import { prepareRecording, saveDraft } from "./actions";
 import { formatClock } from "./format";
-import { currentSave, releaseSave, trackSave, wasDeleted } from "./pending-save";
+import { currentSave, holdFailedTake, holdRecording, releaseSave, trackSave, wasDeleted } from "./pending-save";
 import { saveTake, type ReadyToUpload, type SaveOutcome, type Take } from "./take";
 
 // Opus in WebM where the browser has it (Chrome, Edge, Firefox), AAC in MP4 on Safari. Speech at
@@ -82,6 +82,14 @@ function release(media: RefObject<Media | null>) {
   live.recorder.onerror = null;
   if (live.recorder.state !== "inactive") live.recorder.stop();
   live.stream.getTracks().forEach((track) => track.stop());
+}
+
+// Stops a live recording with its save registered first, so Sign out and a return to the page wait
+// for the take from the moment it stops, not only once the stop event has collected it.
+function stopAndTrack(live: Media) {
+  window.clearInterval(live.timer);
+  void trackSave(live.saved);
+  live.recorder.stop(); // onstop collects the take and saves it
 }
 
 // heldOnly: shown under a draft (see saved-take.tsx) only for a take this tab still holds, saving or
@@ -187,6 +195,22 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
     };
   }, [recording]);
 
+  // While recording, Sign out (in the app bar beside this) can finish the recording first: the take
+  // is saved as Finish would, and Sign out waits for that save before ending the session.
+  useEffect(() => {
+    if (!recording) return;
+    return holdRecording(() => {
+      const live = media.current;
+      if (!live || live.recorder.state === "inactive") return;
+      setState({ step: "saving" });
+      stopAndTrack(live);
+    });
+  }, [recording]);
+
+  // A failed take shown here (with Try again) is safe only in this page: Sign out asks first.
+  const failedShown = state.step === "failed" && !state.updated;
+  useEffect(() => (failedShown ? holdFailedTake() : undefined), [failedShown]);
+
   // Move keyboard and screen-reader focus to each step's main button as the steps change, since
   // the button that was pressed has usually gone. Not on first load, when nothing has happened
   // (compared with the last step shown, so React's double effects in development don't count).
@@ -206,12 +230,12 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
     return outcome;
   }
 
+  // Finish, or the ten-minute limit.
   function finish() {
     const live = media.current;
     if (!live || live.recorder.state === "inactive") return;
-    window.clearInterval(live.timer);
     setState({ step: "saving" });
-    live.recorder.stop(); // onstop collects the take
+    stopAndTrack(live);
   }
 
   async function start() {

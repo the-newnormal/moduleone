@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { viewerAccess } from "@/lib/portal/access";
 import { createClient } from "@/lib/supabase/server";
 import AdminLayout from "./layout";
 
@@ -13,8 +14,15 @@ vi.mock("next/navigation", () => ({
     throw new Error("NEXT_HTTP_ERROR_FALLBACK;404");
   }),
   usePathname: () => "/admin/structure",
+  // The app bar's Sign out holds a router; rendering it needs only the hook.
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
 }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
+vi.mock("@/app/portal/actions", () => ({ signOut: vi.fn() }));
+vi.mock("@/lib/portal/access", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/portal/access")>();
+  return { ...actual, viewerAccess: vi.fn(actual.viewerAccess) };
+});
 
 const rpc = vi.fn();
 const getClaims = vi.fn();
@@ -29,12 +37,24 @@ const layout = () =>
   AdminLayout({ children: <p>the page</p>, params: Promise.resolve({}) } as unknown as LayoutProps<"/admin">);
 
 describe("AdminLayout", () => {
-  it("shows the admin nav around the page for an admin", async () => {
+  it("shows the app bar, with Admin current, and the admin nav around the page for an admin", async () => {
     rpc.mockImplementation(async (fn: string) =>
-      fn === "app_has_grant" ? { data: true, error: null } : { data: "a0000000-0000-4000-8000-000000000001", error: null },
+      fn === "app_has_grant"
+        ? { data: true, error: null }
+        : fn === "app_current_role"
+          ? { data: "hq", error: null }
+          : { data: "a0000000-0000-4000-8000-000000000001", error: null },
     );
     const html = renderToStaticMarkup(await layout());
+    expect(html).toMatch(/<header class="fixed inset-x-0 top-0[^"]*">[\s\S]*<\/header><div aria-hidden="true" class="h-\(--app-bar-h\)/);
+    expect(html).toContain('<nav aria-label="Main"');
+    // Admin's own page redirects to Structure, so Admin is marked as the section, not the page.
+    expect(html).toMatch(/<a aria-current="true"[^>]*href="\/admin"[^>]*>Admin<\/a>/);
+    expect(html).toContain('href="/portal/dashboard"'); // hq: Team health too
+    expect(html.split(">Sign out<")).toHaveLength(2);
     expect(html).toContain('<nav aria-label="Admin"');
+    expect(html).not.toContain("Back to portal"); // the app bar leads there
+    expect(html.match(/<header/g)).toHaveLength(1); // the app bar is the one banner
     expect(html).toContain("<main");
     expect(html).toContain("the page");
   });
@@ -43,7 +63,32 @@ describe("AdminLayout", () => {
     rpc.mockResolvedValue({ data: null, error: { code: "PGRST000", message: "down" } });
     const html = renderToStaticMarkup(await layout());
     expect(html).not.toContain('aria-label="Admin"');
+    // The app bar still leads back to the portal; its nav offers only what didn't need the checks.
+    expect(html).toContain('<nav aria-label="Main"');
+    expect(html).not.toContain('href="/admin"');
     expect(html).toContain("the page");
+  });
+
+  it("leaves Admin out of the app bar when its own check fails, though the grant check alone passed", async () => {
+    rpc.mockImplementation(async (fn: string) =>
+      fn === "app_has_grant"
+        ? { data: true, error: null }
+        : { data: null, error: { code: "PGRST000", message: "member lookup down" } },
+    );
+    const html = renderToStaticMarkup(await layout());
+    expect(html).toContain('<nav aria-label="Main"');
+    expect(html).not.toContain('href="/admin"');
+    expect(html).not.toContain('aria-label="Admin"');
+  });
+
+  it("keeps Admin in the app bar when its own check passed, though the bar's grant check failed", async () => {
+    rpc.mockImplementation(async (fn: string) =>
+      fn === "app_has_grant" ? { data: true, error: null } : { data: "a0000000-0000-4000-8000-000000000001", error: null },
+    );
+    // The bar's own check failed closed (portal access fails closed on any error).
+    vi.mocked(viewerAccess).mockResolvedValueOnce({ role: null, seesTeamHealth: false, isAdmin: false });
+    const html = renderToStaticMarkup(await layout());
+    expect(html).toMatch(/<a aria-current="true"[^>]*href="\/admin"[^>]*>Admin<\/a>/);
   });
 
   it("still sends everyone else away", async () => {

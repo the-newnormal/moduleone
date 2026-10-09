@@ -50,6 +50,17 @@
    panels, hairlines, and one warm colour, sun, for the single thing a screen wants you to do. The
    shadcn names map onto Normal's tokens: surface-000 is the page, surface-100 cards and panels,
    surface-200 hover and sunken wells, line the hairlines, line-strong control borders. */
+/* The app bar's height (src/app/_shell/app-bar.tsx: two rows of 40px below md, one from md up),
+   which also sizes the spacer holding its place, for what scrolls or sticks beneath it. */
+:root {
+  --app-bar-h: 105px;
+}
+@media (min-width: 48rem) {
+  :root {
+    --app-bar-h: 65px;
+  }
+}
+
 :root {
   /* PP Neue Montreal isn't licensed yet; the stacks fall back as Normal specifies. */
   --font-normal-sans: "PP Neue Montreal", "Neue Montreal", "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -96,6 +107,11 @@
      draws its own (or none, with outline-none) overrides this from the utilities layer. */
   :focus-visible {
     @apply outline-2 outline-offset-2 outline-ring;
+  }
+  /* The app bar is fixed to the top: a focused element or an anchor scrolls into view clear of it,
+     not under it. */
+  html {
+    scroll-padding-top: calc(var(--app-bar-h) + 1rem);
   }
   body {
     @apply bg-background text-foreground font-sans;

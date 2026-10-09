@@ -5,6 +5,7 @@ import type { TeamNode } from "@/lib/dashboard/tree";
 import { weeksEndingAt } from "@/lib/dashboard/weeks";
 import { loadMyWeek, type MyWeek } from "@/lib/portal/my-week";
 import { createClient } from "@/lib/supabase/server";
+import PortalLayout from "../layout";
 import PortalPage from "../page";
 import TeamWeekPage from "./[teamId]/[week]/page";
 import DashboardPage from "./page";
@@ -21,6 +22,7 @@ vi.mock("next/navigation", () => ({
     throw new Error("NEXT_NOT_FOUND");
   }),
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+  usePathname: () => "/portal",
 }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/dashboard/load", async (importOriginal) => ({
@@ -147,9 +149,13 @@ function expectNoGradeRead() {
 const CHECKED_IN_TILE = 'id="checked-in-title"';
 const NEEDS_A_LOOK_TILE = 'id="needs-a-look-title"';
 
+// The portal as the viewer gets it: the page under its layout's app bar, which holds the nav.
+const portal = async () =>
+  renderToStaticMarkup(await PortalLayout({ children: await PortalPage(), params: Promise.resolve({}) } as never));
+
 // The portal nav's links, in order.
 function nav(html: string): { label: string; href: string }[] {
-  const items = /<nav aria-label="Portal"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? "";
+  const items = /<nav aria-label="Main"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? "";
   return [...items.matchAll(/<a [^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/g)].map(([, href, label]) => ({ label, href }));
 }
 const PORTAL = { label: "Portal", href: "/portal" };
@@ -184,13 +190,13 @@ describe("a member", () => {
   });
 
   it("isn't offered Team health on the portal", async () => {
-    const html = renderToStaticMarkup(await PortalPage());
+    const html = await portal();
     expect(html).not.toContain("/portal/dashboard");
     expect(html).toContain("/portal/checkin");
   });
 
   it("gets their own check-in on the portal, and nothing that's graded or for leaders and admins", async () => {
-    const html = renderToStaticMarkup(await PortalPage());
+    const html = await portal();
     // The heat-map holds grades; for a member RLS would hand back their own graded check-ins.
     expect(loadHeatmapData).not.toHaveBeenCalled();
     expect(loadScoringConfig).not.toHaveBeenCalled();
@@ -213,7 +219,7 @@ describe("a member", () => {
   it("whose login isn't linked to anyone yet gets just the portal and their check-in", async () => {
     vi.mocked(loadMyWeek).mockResolvedValue({ state: "no_member" });
     vi.mocked(loadRole).mockResolvedValue(null);
-    const html = renderToStaticMarkup(await PortalPage());
+    const html = await portal();
     expect(nav(html)).toEqual([PORTAL, CHECKIN]);
     expect(html).toContain("Your account isn&#x27;t set up yet. Ask HQ.");
     expect(loadHeatmapData).not.toHaveBeenCalled();
@@ -223,12 +229,12 @@ describe("a member", () => {
 describe("leaders and hq", () => {
   it.each(["leader", "hq"] as const)("%s is offered Team health on the portal", async (role) => {
     vi.mocked(loadRole).mockResolvedValue(role);
-    expect(renderToStaticMarkup(await PortalPage())).toContain("/portal/dashboard");
+    expect(await portal()).toContain("/portal/dashboard");
   });
 
   it("the portal still renders, without Team health, if the role can't be read", async () => {
     vi.mocked(loadRole).mockRejectedValue(new Error("Couldn't load your role"));
-    const html = renderToStaticMarkup(await PortalPage());
+    const html = await portal();
     expect(html).not.toContain("/portal/dashboard");
     expect(html).toContain("Sign out");
   });
@@ -243,7 +249,7 @@ describe("leaders and hq", () => {
     async (role, scope, needsALook) => {
       vi.mocked(loadRole).mockResolvedValue(role);
       heatmapFor(role);
-      const html = renderToStaticMarkup(await PortalPage());
+      const html = await portal();
       expect(loadHeatmapData).toHaveBeenCalledOnce();
       // Six weeks of bars, oldest first, ending with this week.
       expect(vi.mocked(loadHeatmapData).mock.calls[0][1]).toEqual(weeksEndingAt(THIS_WEEK, 6));
@@ -280,7 +286,7 @@ describe("leaders and hq", () => {
       teams: [team("d1", "Culture", "domain", null), team("t1", "Atlas", "team", "d1")],
       ledTeams: ["d1", "t1"],
     });
-    renderToStaticMarkup(await PortalPage());
+    await portal();
     expect(queriesOf("members")).toEqual([
       { table: "members", columns: "id, team_id", filters: [["in", "team_id", ["d1", "t1"]]] },
     ]);
@@ -291,7 +297,7 @@ describe("leaders and hq", () => {
     queries = [];
     vi.mocked(loadRole).mockResolvedValue("hq");
     heatmapFor("hq");
-    renderToStaticMarkup(await PortalPage());
+    await portal();
     expect(queriesOf("members")).toEqual([
       { table: "members", columns: "id, team_id", filters: [["not", "team_id", "is", null]] },
     ]);
@@ -308,7 +314,7 @@ describe("leaders and hq", () => {
       teams: [team("top", "Gather", kind, null), team("t1", "Atlas", "team", "top")],
       ledTeams: ["top", "t1"],
     });
-    const html = renderToStaticMarkup(await PortalPage());
+    const html = await portal();
     expect(html).toContain('id="team-health-title"');
     expect(html).toContain(CHECKED_IN_TILE);
     if (shown) {
@@ -327,7 +333,7 @@ describe("leaders and hq", () => {
   it("leaves Team health out when the heat-map was read as a member, though the role check said leader", async () => {
     vi.mocked(loadRole).mockResolvedValue("leader");
     heatmapFor("member");
-    const html = renderToStaticMarkup(await PortalPage());
+    const html = await portal();
     expect(nav(html)).toEqual([PORTAL, CHECKIN, TEAM_HEALTH]);
     expect(html).not.toContain('id="team-health-title"');
     expect(html).not.toContain("Check-ins this week");
@@ -345,7 +351,7 @@ describe("leaders and hq", () => {
   it("a role that can't be read loads no heat-map, and is logged without its message", async () => {
     vi.mocked(loadRole).mockRejectedValue(new Error("Couldn't load your role: secret detail"));
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    const html = renderToStaticMarkup(await PortalPage());
+    const html = await portal();
     expect(html).toContain("Sign out");
     expect(html).not.toContain("Team health");
     expect(nav(html)).toEqual([PORTAL, CHECKIN]);
@@ -358,7 +364,7 @@ describe("leaders and hq", () => {
 describe("the Admin card", () => {
   it("is offered to an admin-grant holder, whatever their role", async () => {
     rpc.mockResolvedValue({ data: true, error: null });
-    const html = renderToStaticMarkup(await PortalPage());
+    const html = await portal();
     expect(rpc).toHaveBeenCalledWith("app_has_grant", { requested: "admin" });
     expect(html).toContain('href="/admin"');
     expect(html).not.toContain("/portal/dashboard"); // still a member: no Team health
@@ -366,11 +372,11 @@ describe("the Admin card", () => {
 
   it("isn't offered without the grant, or if the grant can't be checked", async () => {
     vi.mocked(loadRole).mockResolvedValue("hq");
-    expect(renderToStaticMarkup(await PortalPage())).not.toContain('href="/admin"');
+    expect(await portal()).not.toContain('href="/admin"');
 
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     rpc.mockResolvedValue({ data: null, error: { code: "57014", message: "timeout" } });
-    const html = renderToStaticMarkup(await PortalPage());
+    const html = await portal();
     expect(html).not.toContain('href="/admin"');
     expect(html).toContain("/portal/dashboard");
     log.mockRestore();
@@ -378,7 +384,7 @@ describe("the Admin card", () => {
 
   it("shows a member-role admin the way into admin and the thresholds in force, without the heat-map", async () => {
     rpc.mockResolvedValue({ data: true, error: null });
-    const html = renderToStaticMarkup(await PortalPage());
+    const html = await portal();
     expect(nav(html)).toEqual([PORTAL, CHECKIN, ADMIN]);
     expect(html).toContain('id="admin-title"');
     expect(html).toContain('href="/admin/structure"');
@@ -392,7 +398,7 @@ describe("the Admin card", () => {
     rpc.mockResolvedValue({ data: true, error: null });
     vi.mocked(loadRole).mockResolvedValue("leader");
     heatmapFor("leader");
-    const html = renderToStaticMarkup(await PortalPage());
+    const html = await portal();
     expect(nav(html)).toEqual([PORTAL, CHECKIN, TEAM_HEALTH, ADMIN]);
     expect(html).toContain("Green 3 or more · Yellow 2 to under 3 · Red under 2");
     expect(loadScoringConfig).not.toHaveBeenCalled();
@@ -402,7 +408,7 @@ describe("the Admin card", () => {
     rpc.mockResolvedValue({ data: true, error: null });
     vi.mocked(loadScoringConfig).mockRejectedValue(new Error("down"));
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    const html = renderToStaticMarkup(await PortalPage());
+    const html = await portal();
     expect(html).toContain('href="/admin/scoring"');
     expect(html).toContain("Weights and thresholds.");
     expect(log).toHaveBeenCalledWith("portal scoring failed", { code: undefined, status: undefined });
@@ -415,7 +421,7 @@ describe("the Admin card", () => {
   ])("is left out, and the failure logged by its code, when the grant check %s", async (_, fail) => {
     fail();
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    const html = renderToStaticMarkup(await PortalPage());
+    const html = await portal();
     expect(nav(html)).toEqual([PORTAL, CHECKIN]);
     expect(html).not.toContain('href="/admin"');
     expect(html).not.toContain('id="admin-title"');
