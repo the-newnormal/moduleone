@@ -4,8 +4,9 @@
 -- rename it). Every division sits under it; domains and teams never do. Someone who sits in it
 -- (say, the person above all divisions) checks in at the organisation's own level and, as its
 -- leader, sees every check-in in every division under it (app_led_team_ids already follows the
--- tree down). That shows as much as hq does, so only the project owner places people there (from
--- the Supabase dashboard or the server); signed-in admins are refused. It is never archived,
+-- tree down). That shows as much as hq does, so only the project owner places people there or
+-- makes someone a lead of it (from the Supabase dashboard or the server); signed-in admins are
+-- refused. It is never archived,
 -- moved or turned into anything else, and there is only ever one.
 --
 -- Automatic leadership: anyone placed in a division, or in the organisation, leads it. A member
@@ -238,6 +239,41 @@ begin
   return null;
 end $$;
 revoke execute on function members_check_team() from public, anon, authenticated;
+
+-- A lead row needs a leader and an active node, as in 0005; on the organisation itself only the
+-- project owner adds one (a lead of the organisation sees every check-in, like someone sitting
+-- there). Also checked when the server rewrites a row (authenticated can't update).
+create or replace function team_leads_check() returns trigger
+  language plpgsql security definer set search_path = '' as $$
+declare
+  lead_role        text;
+  target_kind      text;
+  target_archived  timestamptz;
+begin
+  if tg_op = 'UPDATE' and new.team_id is not distinct from old.team_id
+     and new.member_id is not distinct from old.member_id then
+    return null;
+  end if;
+  if current_setting('transaction_isolation') <> 'read committed' then
+    raise exception using errcode = 'invalid_transaction_state',
+      message = 'Change the team tree in a READ COMMITTED transaction.';
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended('moduleone:team_tree', 0));
+  select m.role into lead_role from public.members m where m.id = new.member_id;
+  select t.kind, t.archived_at into target_kind, target_archived from public.teams t where t.id = new.team_id;
+  if target_kind = 'organisation' and auth.uid() is not null then
+    raise exception using errcode = 'insufficient_privilege',
+      message = 'Only the project owner can make someone a lead of the organisation itself.';
+  elsif lead_role is distinct from 'leader' then
+    raise exception using errcode = 'check_violation',
+      message = 'Only members with the leader role can lead a team. Make them a leader first.';
+  elsif target_archived is not null then
+    raise exception using errcode = 'check_violation',
+      message = format('That %s is archived. Restore it first.', target_kind);
+  end if;
+  return null;
+end $$;
+revoke execute on function team_leads_check() from public, anon, authenticated;
 
 -- Nobody sitting in a division or the organisation is a member: members_lead_where_placed makes
 -- them leaders as they arrive, and this refuses making one a member afterwards.

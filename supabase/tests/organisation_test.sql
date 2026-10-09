@@ -13,7 +13,7 @@
 --   plain      a member with no team
 --   chief      hq, no team
 begin;
-select plan(59);
+select plan(61);
 
 create function pg_temp.n(sql text) returns int language plpgsql as $$
 declare result int;
@@ -182,10 +182,18 @@ select is(
 select is(
   pg_temp.error_of(format('insert into members (name, team_id) values (%L, %L)', 'DO newcomer', pg_temp.org())),
   '42501: Only the project owner can place people in the organisation itself.', 'nor add someone straight into it');
+select is(
+  pg_temp.error_of(format('insert into team_leads (team_id, member_id) values (%L, %L)', pg_temp.org(), 'c6000000-0000-4000-8000-000000000003')),
+  '42501: Only the project owner can make someone a lead of the organisation itself.',
+  'nor make a leader a lead of the organisation');
 reset role;
 
 set local role service_role;
 set local request.jwt.claims to '{"role": "service_role"}';
+select is(
+  pg_temp.error_of(format('insert into team_leads (team_id, member_id) values (%L, %L)', pg_temp.org(), 'c6000000-0000-4000-8000-000000000003')),
+  'no error', 'the owner can make a leader a lead of the organisation');
+delete from team_leads where member_id = 'c6000000-0000-4000-8000-000000000003';
 select is(
   pg_temp.error_of(format('update members set team_id = %L where id = %L', pg_temp.org(), 'c6000000-0000-4000-8000-000000000002')),
   'no error', 'the server (or the owner in the dashboard) places boss in the organisation');
