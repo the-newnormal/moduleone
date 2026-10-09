@@ -60,6 +60,8 @@ describe("updateSession", () => {
   it.each([
     ["/portal", "/portal"],
     ["/portal/checkin?week=2", "/portal/checkin?week=2"],
+    ["/admin", "/admin"],
+    ["/admin/scoring?x=1", "/admin/scoring?x=1"],
   ])("sends a signed-out visitor from %s to /login?next=…", async (path, next) => {
     fakeSupabase({ signedIn: false });
     const target = redirectTarget(await visit(path));
@@ -68,7 +70,7 @@ describe("updateSession", () => {
     expect([...target.searchParams]).toEqual([["next", next]]);
   });
 
-  it.each(["/login", "/portalx", "/auth/callback?code=c0de"])(
+  it.each(["/login", "/portalx", "/administrator", "/auth/callback?code=c0de"])(
     "lets a signed-out visitor through to %s",
     async (path) => {
       fakeSupabase({ signedIn: false });
