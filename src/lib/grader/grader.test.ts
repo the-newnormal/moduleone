@@ -237,7 +237,8 @@ describe("gradeCheckin reply", () => {
   it("after a refusal fallback, returns the model that took over and every billed attempt", async () => {
     vi.stubEnv("ANTHROPIC_MODEL", "claude-sonnet-5-5");
     // The reply names the model that took over, after a marker block. Top-level usage covers only
-    // the answering attempt; iterations list the declined one too.
+    // the answering attempt; iterations list the declined one too, billed here because it declined
+    // partway through its output.
     create.mockResolvedValue(
       reply({
         model: "claude-opus-4-8",
@@ -265,6 +266,33 @@ describe("gradeCheckin reply", () => {
         { model: "claude-opus-4-8", usage: { inputTokens: 50, outputTokens: 400, cacheReadTokens: 0, cacheWriteTokens: 1500 } },
       ],
     });
+  });
+
+  it("leaves out a fallback's declined attempt that produced no output (not billed)", async () => {
+    vi.stubEnv("ANTHROPIC_MODEL", "claude-sonnet-5-5");
+    create.mockResolvedValue(
+      reply({
+        model: "claude-opus-4-8",
+        content: [
+          { type: "fallback", from: { model: "claude-sonnet-5-5" }, to: { model: "claude-opus-4-8" } },
+          { type: "text", text: JSON.stringify(GOOD) },
+        ],
+        usage: {
+          input_tokens: 50,
+          output_tokens: 400,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+          iterations: [
+            { type: "message", model: "claude-sonnet-5-5", input_tokens: 535, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+            { type: "fallback_message", model: "claude-opus-4-8", input_tokens: 50, output_tokens: 400, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+          ],
+        },
+      }),
+    );
+    const grade = await gradeCheckin({ transcript: TRANSCRIPT });
+    expect(grade.attempts).toEqual([
+      { model: "claude-opus-4-8", usage: { inputTokens: 50, outputTokens: 400, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+    ]);
   });
 
   it("counts missing cache fields as zero", async () => {

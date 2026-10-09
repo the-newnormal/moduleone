@@ -143,14 +143,22 @@ const toUsage = (usage: Usage) => ({
 });
 
 // The top-level usage covers only the attempt that answered. When a refusal fallback ran,
-// usage.iterations lists each model attempt (the declined one and the fallback) with its own
-// model and tokens, so each is priced at its own model's rates.
+// usage.iterations lists each model attempt (the declined one, as a `message` entry, and the
+// fallback) with its own model and tokens, so each is priced at its own model's rates.
+// A decline that came before any output (no output tokens) is billed only in the bio,
+// frontier_llm and reasoning_extraction categories, and a fallback response doesn't say which
+// category it was; none of those fits grading a check-in, so such an attempt is left out.
 function billedAttempts(
   usage: Usage & { iterations?: ({ type: string; model?: string | null } & Partial<Usage>)[] | null },
   answeredBy: string,
 ): GradeAttempt[] {
-  const attempts = (usage.iterations ?? []).flatMap((it) =>
-    (it.type === "message" || it.type === "fallback_message") && it.input_tokens !== undefined && it.output_tokens !== undefined
+  const iterations = usage.iterations ?? [];
+  const fellBack = iterations.some((it) => it.type === "fallback_message");
+  const attempts = iterations.flatMap((it) =>
+    (it.type === "message" || it.type === "fallback_message") &&
+    it.input_tokens !== undefined &&
+    it.output_tokens !== undefined &&
+    !(fellBack && it.type === "message" && it.output_tokens === 0)
       ? [
           {
             model: it.model ?? answeredBy,
