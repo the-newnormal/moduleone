@@ -150,7 +150,7 @@ select ok(
 -- ---------- founding structure (loaded by 0003) ----------
 select is(
   (select count(*)::int from teams where id::text not like 'b1000000-%'),
-  25, 'the founding structure has exactly 25 nodes (4 divisions, 14 domains, 7 teams), nothing more'
+  26, 'the founding structure has exactly 26 nodes (the organisation, 4 divisions, 14 domains, 7 teams), nothing more'
 );
 select results_eq(
   $$select t.name, t.division_type, t.sort_order, t.note, t.archived_at is null
@@ -164,8 +164,9 @@ select results_eq(
   'the four founding divisions, in order, with their types and notes'
 );
 select is(
-  (select count(*)::int from teams where kind = 'division' and parent_id is not null),
-  0, 'every division sits at the top level'
+  (select count(*)::int from teams d left join teams p on p.id = d.parent_id
+   where d.kind = 'division' and p.kind is distinct from 'organisation'),
+  0, 'every division sits under the organisation (0006)'
 );
 select results_eq(
   $$select t.code, t.name, t.kind, coalesce(p.code, p.name), p.kind, t.domain_type, t.division_type,
@@ -480,7 +481,7 @@ select alike(
   '23514: %"teams_not_own_parent"%', 'a node cannot be its own parent');
 select alike(
   pg_temp.error_of($$insert into teams (name, kind, parent_id) values ('x', 'division', 'b1000000-0000-4000-8000-000000000001')$$),
-  '23514: %"teams_division_at_top"%', 'a division has no parent');
+  '23514: A division can only sit under the organisation.', 'a division sits under nothing but the organisation');
 select alike(pg_temp.error_of($$insert into teams (name, kind) values ('x', 'team')$$),
   '23514: %"teams_team_has_parent"%', 'a team has a parent');
 select is(
@@ -496,10 +497,12 @@ select is(
   (select array_agg(name order by name) from teams where id::text like 'b1000000-%'),
   array['TT Division 1', 'TT Domain 1', 'TT Team 1.1'], 'm11 sees their team, its domain and its division, nothing else'
 );
-select is(
-  (select array_agg(x order by x) from unnest(app_visible_team_ids()) x),
-  array['b1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000011', 'b1000000-0000-4000-8000-000000000021']::uuid[],
-  'app_visible_team_ids() is m11''s team plus its ancestors'
+select set_eq(
+  $$select unnest(app_visible_team_ids())$$,
+  $$select id from teams
+    where id in ('b1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000011', 'b1000000-0000-4000-8000-000000000021')
+       or kind = 'organisation'$$,
+  'app_visible_team_ids() is m11''s team plus its ancestors, up to the organisation (0006)'
 );
 select is(app_led_team_ids(), '{}'::uuid[], 'a plain member leads nothing (an empty array, not null)');
 select is(pg_temp.n($$select 1 from checkins where id::text like 'd1000000-%'$$), 1, 'm11 sees only their own check-in');
@@ -673,7 +676,7 @@ select is(pg_temp.n($$select 1 from teams where id::text like 'b1000000-%'$$), 2
 select is(pg_temp.n($$select 1 from team_leads where member_id::text like 'c1000000-%'$$), 2, 'admin sees every lead row');
 select lives_ok(
   $$insert into teams (name, kind, division_type) values ('TT New division', 'division', 'strategy')$$,
-  'admin can add a division at the top level'
+  'admin can add a division the pre-0006 way (no parent): it goes under the organisation'
 );
 select lives_ok(
   $$insert into teams (name, kind, parent_id, domain_type) values ('TT New domain', 'domain', pg_temp.team('TT New division'), 'ip')$$,
@@ -709,7 +712,7 @@ select alike(
 );
 select alike(
   pg_temp.error_of($$update teams set parent_id = 'b1000000-0000-4000-8000-000000000011' where id = 'b1000000-0000-4000-8000-000000000001'$$),
-  '23514: %"teams_division_at_top"%', 'a cycle is refused: a division cannot move under its own domain'
+  '23514: A division can only sit under the organisation.', 'a cycle is refused: a division cannot move under its own domain'
 );
 select alike(
   pg_temp.error_of($$update teams set parent_id = id where id = 'b1000000-0000-4000-8000-000000000011'$$),
@@ -1177,7 +1180,7 @@ select is(pg_temp.order_of('b1000000-0000-4000-8000-000000000036'), 'TT MB:0, TT
 select is(
   (select array_agg(sort_order order by sort_order) from teams where parent_id is null and archived_at is null),
   (select array_agg(g) from generate_series(0, (select count(*)::int - 1 from teams where parent_id is null and archived_at is null)) g),
-  'the top level (divisions and unplaced domains together) is renumbered 0, 1, 2, …'
+  'the top level (the organisation and unplaced domains together) is renumbered 0, 1, 2, …'
 );
 select is((select sort_order from teams where id = 'b1000000-0000-4000-8000-000000000037'), 0, 'with NA first');
 select alike(
@@ -1196,7 +1199,7 @@ select alike(
 );
 select alike(
   pg_temp.error_of($$select admin_move_team('b1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000002', 0)$$),
-  '23514: A division can only sit at the top level.', 'dropping a division under another is refused in words'
+  '23514: A division can only sit under the organisation.', 'dropping a division under another is refused in words'
 );
 select alike(
   pg_temp.error_of($$select admin_move_team('b1000000-0000-4000-8000-000000000011', 'b1000000-0000-4000-8000-000000000011', 0)$$),

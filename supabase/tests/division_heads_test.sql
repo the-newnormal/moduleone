@@ -8,9 +8,9 @@
 --   admin    role leader, no team, grant admin; at the end placed in DH Division
 --   head     a leader with no team yet, then placed in DH Division
 --   deputy   a leader in DH Other domain, then made a lead of DH Division
---   plain    a member with no team
+--   plain    a member with no team, then placed in DH Other (which makes them its leader, 0006)
 begin;
-select plan(28);
+select plan(32);
 
 create function pg_temp.n(sql text) returns int language plpgsql as $$
 declare result int;
@@ -73,12 +73,14 @@ select is(
   pg_temp.error_of($$update members set team_id = 'b5000000-0000-4000-8000-000000000004' where id = 'c5000000-0000-4000-8000-000000000004'$$),
   'no error', 'a plain member can sit in a division too'
 );
+select is((select role from members where id = 'c5000000-0000-4000-8000-000000000004'), 'leader',
+  'and leads it from then on (0006)');
 select is(
   pg_temp.error_of($$insert into team_leads (team_id, member_id) values ('b5000000-0000-4000-8000-000000000001', 'c5000000-0000-4000-8000-000000000003')$$),
   'no error', 'an admin can make a leader from elsewhere a lead of a division'
 );
 select is(
-  pg_temp.error_of($$insert into team_leads (team_id, member_id) values ('b5000000-0000-4000-8000-000000000004', 'c5000000-0000-4000-8000-000000000004')$$),
+  pg_temp.error_of($$insert into team_leads (team_id, member_id) values ('b5000000-0000-4000-8000-000000000001', 'c5000000-0000-4000-8000-000000000006')$$),
   '23514: Only members with the leader role can lead a team. Make them a leader first.',
   'a division lead must still be a leader'
 );
@@ -133,11 +135,17 @@ select is(pg_temp.n($$select 1 from checkins where id = 'd5000000-0000-4000-8000
 select is(pg_temp.n($$select 1 from checkins where id = 'd5000000-0000-4000-8000-000000000006'$$), 1,
   'as well as in their own team');
 
--- ---------- a plain member in a division sees only their own ----------
+-- ---------- a member placed in a division leads it too (0006) ----------
 set local request.jwt.claims to '{"sub": "a5000000-0000-4000-8000-000000000004", "role": "authenticated"}';
-select is(pg_temp.n($$select 1 from checkins where id = 'd5000000-0000-4000-8000-000000000006'$$), 0,
-  'a member sitting in a division doesn''t see the check-ins made under it');
-select is(app_led_team_ids(), '{}'::uuid[], 'and leads nothing');
+select is(pg_temp.n($$select 1 from checkins where id = 'd5000000-0000-4000-8000-000000000006'$$), 1,
+  'someone placed in a division as a member sees the check-ins made under it');
+select set_eq(
+  $$select unnest(app_led_team_ids())$$,
+  array['b5000000-0000-4000-8000-000000000004', 'b5000000-0000-4000-8000-000000000005']::uuid[],
+  'because they lead the division and everything in it'
+);
+select is(pg_temp.n($$select 1 from checkins where id = 'd5000000-0000-4000-8000-000000000005'$$), 0,
+  'but nothing in another division');
 reset role;
 
 -- ---------- a domain with people, leads and check-ins can become a division ----------
@@ -160,7 +168,14 @@ set local role authenticated;
 set local request.jwt.claims to '{"sub": "a5000000-0000-4000-8000-000000000001", "role": "authenticated"}';
 select is(
   pg_temp.error_of($$update teams set kind = 'division' where name = 'DH Unplaced'$$),
-  'no error', 'and a check-in, and still becomes a division'
+  '23514: Everyone in a division leads it. Make its 1 member leaders, or move them out, first.',
+  'and a check-in; it becomes a division only once nobody sits in it as a member (0006)'
+);
+select is(pg_temp.error_of($$update members set role = 'leader' where name = 'DH sitter'$$), 'no error',
+  'the admin makes the sitter a leader');
+select is(
+  pg_temp.error_of($$update teams set kind = 'division' where name = 'DH Unplaced'$$),
+  'no error', 'and then it becomes a division, people, lead and check-in included'
 );
 select is(
   pg_temp.error_of($$update teams set archived_at = now() where name = 'DH Unplaced'$$),

@@ -30,6 +30,10 @@ jobs:
       - run: scripts/check-migrations.sh
       # RLS tests in supabase/tests/: who can read and write what, as anon, member, leader and hq.
       - run: supabase test db
+      # 0006 on a database at 0005 with people in divisions, an archived division and check-ins, as
+      # production gets it. Leaves the database at 0005.
+      - run: supabase db reset --version 0005 --no-seed
+      - run: scripts/check-organisation-upgrade.sh
       # 0003 on a database that already has teams, people and check-ins, as production gets it.
       # Leaves the database at 0002, so it runs last.
       - run: supabase db reset --version 0002 --no-seed
