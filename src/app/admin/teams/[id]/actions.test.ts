@@ -1413,12 +1413,13 @@ describe("removePerson", () => {
     expect(deleteUser.mock.invocationCallOrder[0]).toBeLessThan(serviceFrom.mock.invocationCallOrder[1]);
   });
 
-  it("still counts the login as closed when that unlink fails, and logs only code and status", async () => {
+  // A row may still hold the deleted login, so removed_login_id stays: the record of what's left.
+  it("keeps removed_login_id and says the login is still to sort out when that unlink fails, logging only code and status", async () => {
     userQueue.members = [personRow({ auth_user_id: LOGIN })];
     removal = removed("removed", LOGIN);
-    serviceQueue.members = [rows(), dbError("08006", `down for ${EMAIL}`), done()];
-    await expect(removePerson(PERSON)).resolves.toEqual({ ok: true, value: { outcome: "removed", loginKept: false } });
-    expect(serviceQueries).toEqual([LOGIN_CHECK, RELINK_CHECK, CLEAR]);
+    serviceQueue.members = [rows(), dbError("08006", `down for ${EMAIL}`)];
+    await expect(removePerson(PERSON)).resolves.toEqual({ ok: true, value: { outcome: "removed", loginKept: true } });
+    expect(serviceQueries).toEqual([LOGIN_CHECK, RELINK_CHECK]);
     expect(console.error).toHaveBeenCalledExactlyOnceWith("removePerson relink check failed", { code: "08006", status: undefined });
     expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("example.com");
     expectRevalidated();

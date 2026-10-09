@@ -1015,6 +1015,11 @@ async function softDeleteLogin(
     .from("members")
     .update({ auth_user_id: null, login_given_by: null, login_given_at: null })
     .eq("auth_user_id", loginId);
-  if (given.error) logError(`${context} relink check`, given.error);
+  if (given.error) {
+    // A row may still hold the deleted login: not done, so a removal keeps removed_login_id (and
+    // says the login is still to sort out) rather than forgetting it.
+    logError(`${context} relink check`, given.error);
+    return "failed";
+  }
   return "deleted";
 }
