@@ -133,6 +133,7 @@ describe("buildTeamView", () => {
       typeLabel: null,
       note: null,
       archived: false,
+      everyoneLeads: false,
     });
     expect(v.crumbs).toEqual([
       { key: "div-gather", label: "Gather", href: "/admin/teams/div-gather" },
@@ -152,6 +153,31 @@ describe("buildTeamView", () => {
       { key: "unplaced", label: "Unplaced", href: null },
       { key: "dom-legacy", label: "Legacy", href: "/admin/teams/dom-legacy" },
     ]);
+  });
+
+  it("handles the organisation node above every division (since 0006)", () => {
+    const teams = [node("org", "The New Normal", "organisation", null), ...TEAMS.map((t) => (t.id === "div-gather" ? { ...t, parent_id: "org" } : t))];
+    const members = [...MEMBERS, member("m-eli", "Eli Chao", "leader", "org")];
+    const at = (teamId: string) => buildTeamView({ teamId, adminMemberId: ADMIN, teams, members, leads: LEADS, grants: [] })!;
+    expect(at("org").team).toMatchObject({ kind: "organisation", kindLabel: "Organisation", typeLabel: null });
+    expect(at("org").crumbs).toEqual([]);
+    expect(at("org").people.map((p) => p.name)).toEqual(["Eli Chao"]);
+    // No "Unplaced" above what's in a division under it, and still above an unplaced domain.
+    expect(at("dom-ip").crumbs.map((c) => c.label)).toEqual(["The New Normal", "Gather"]);
+    expect(at("dom-legacy").crumbs.map((c) => c.label)).toEqual(["Unplaced"]);
+    // Whoever sits in it leads everything below.
+    expect(at("div-gather").inheritedLeads).toEqual([{ id: "m-eli", name: "Eli Chao", domainId: "org", domainName: "The New Normal" }]);
+    // Everyone placed in a division or in it leads it, once there's an organisation (0006); before,
+    // a division takes members too.
+    expect([at("org"), at("div-gather"), at("dom-ip")].map((v) => v.team.everyoneLeads)).toEqual([true, true, false]);
+    expect(view("div-gather")!.team.everyoneLeads).toBe(false);
+    // Only the project owner places people there or decides who leads it: nothing to change here.
+    expect(at("org").people.every((p) => !p.editable && !p.canGiveLogin)).toBe(true);
+    expect(at("org").candidates).toEqual([]);
+    // Nor are they offered to move into any other team.
+    expect(at("team-ip2").candidates.map((c) => c.id)).not.toContain("m-eli");
+    expect(at("team-ip2").candidates.length).toBeGreaterThan(0);
+    expect(at("org").leadOptions).toEqual([]);
   });
 
   it("marks an archived team", () => {
@@ -400,5 +426,6 @@ describe("coverage", () => {
     expect(coverage({ name: "IP Lab 1", kind: "team" })).toBe("IP Lab 1");
     expect(coverage({ name: "IP Lab", kind: "domain" })).toBe("IP Lab and its sub-teams");
     expect(coverage({ name: "Gather", kind: "division" })).toBe("Gather and everything in it");
+    expect(coverage({ name: "The New Normal", kind: "organisation" })).toBe("The New Normal and everything in it");
   });
 });

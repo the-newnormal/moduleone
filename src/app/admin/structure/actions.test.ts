@@ -226,11 +226,17 @@ describe("createNode", () => {
     expectRevalidated();
   });
 
-  it("adds a division last at the top level, with its type", async () => {
-    results = [{ data: [{ sort_order: 5 }], error: null }, { data: { id: NEW_ID }, error: null }];
+  it("adds a division last at the top level, with its type, when there's no organisation node", async () => {
+    results = [{ data: [], error: null }, { data: [{ sort_order: 5 }], error: null }, { data: { id: NEW_ID }, error: null }];
     await createNode({ kind: "division", parentId: null, name: "Labs", type: "strategy", note: "New." });
-    expect(queries[0].calls).toContainEqual(["is", "parent_id", null]);
-    expect(queries[1].calls[0]).toEqual([
+    expect(queries[0].calls).toEqual([
+      ["select", "id"],
+      ["eq", "kind", "organisation"],
+      ["is", "parent_id", null],
+      ["limit", 1],
+    ]);
+    expect(queries[1].calls).toContainEqual(["is", "parent_id", null]);
+    expect(queries[2].calls[0]).toEqual([
       "insert",
       {
         kind: "division",
@@ -242,6 +248,16 @@ describe("createNode", () => {
         note: "New.",
         sort_order: 6,
       },
+    ]);
+  });
+
+  it("adds a division last in the organisation node when there is one", async () => {
+    results = [{ data: [{ id: PARENT }], error: null }, { data: [{ sort_order: 2 }], error: null }, { data: { id: NEW_ID }, error: null }];
+    await createNode({ kind: "division", parentId: null, name: "Labs" });
+    expect(queries[1].calls).toContainEqual(["eq", "parent_id", PARENT]);
+    expect(queries[2].calls[0]).toEqual([
+      "insert",
+      expect.objectContaining({ kind: "division", parent_id: PARENT, sort_order: 3 }),
     ]);
   });
 
@@ -271,6 +287,7 @@ describe("createNode", () => {
 
   it.each([
     [{ kind: "region", parentId: null, name: "X" }, "Choose what to add, and where."],
+    [{ kind: "organisation", parentId: null, name: "X" }, "Choose what to add, and where."],
     [{ kind: "team", parentId: "nope", name: "X" }, "Choose what to add, and where."],
     [{ kind: "division", parentId: PARENT, name: "X" }, "A division can only sit at the top level."],
     [{ kind: "team", parentId: null, name: "X" }, "A team can only sit under a domain."],

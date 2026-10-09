@@ -50,7 +50,12 @@ describe("toUserMessage", () => {
     expect(console.error).toHaveBeenCalledWith("addTeam failed", { code: "23514", status: undefined });
   });
 
-  it.each(["Only admins can move teams.", "You lead where this is going, so another admin has to move it there."])(
+  it.each([
+    "Only admins can move teams.",
+    "You lead where this is going, so another admin has to move it there.",
+    "Only the project owner can place people in the organisation itself.",
+    "Only the project owner can make someone a lead of the organisation itself.",
+  ])(
     "shows 0003's own 42501 sentence: %s",
     (message) => {
       expect(toUserMessage(pg("42501", message))).toBe(message);

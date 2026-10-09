@@ -37,6 +37,10 @@ export type TeamSummary = {
   typeLabel: string | null; // "Lab", "IP", "Development domain"
   note: string | null;
   archived: boolean;
+  // Everyone placed here leads it, so it has no members: a division or the organisation once
+  // migration 0006 is live (it adds the organisation node and that rule together). People added as
+  // members arrive as leaders, and a leader here can't be made a member.
+  everyoneLeads: boolean;
 };
 
 // The breadcrumb above the name, top first, without the team itself, each linking to its page. A
@@ -121,7 +125,7 @@ export function loginGivenText(giverName: string | null, givenAt: string | null)
 
 // What a leader of this node sees: the node and everything under it.
 export function coverage(team: Pick<TeamSummary, "name" | "kind">): string {
-  if (team.kind === "division") return `${team.name} and everything in it`;
+  if (team.kind === "organisation" || team.kind === "division") return `${team.name} and everything in it`;
   return team.kind === "domain" ? `${team.name} and its sub-teams` : team.name;
 }
 
@@ -199,11 +203,14 @@ export function buildTeamView({
     typeLabel: typeLabel(row),
     note: row.note,
     archived: row.archived_at !== null,
+    everyoneLeads:
+      (row.kind === "division" || row.kind === "organisation") && teams.some((t) => t.kind === "organisation"),
   };
 
   const above = breadcrumb(teamId, teams).slice(0, -1);
   const crumbs: Crumb[] = above.map((t) => ({ key: t.id, label: t.name, href: `/admin/teams/${t.id}` }));
-  if (row.kind !== "division" && above[0]?.kind !== "division") {
+  // A domain, or a domain's team, outside every division (the organisation node may sit above).
+  if ((row.kind === "domain" || row.kind === "team") && !above.some((t) => t.kind === "division")) {
     crumbs.unshift({ key: "unplaced", label: "Unplaced", href: null });
   }
 
@@ -227,11 +234,15 @@ export function buildTeamView({
   const ledAbove = (m: MemberRow) =>
     nodesAbove.find((t) => (m.role === "leader" && m.team_id === t.id) || leadRows.get(t.id)?.has(m.id));
 
+  // Only the project owner places people in the organisation node (migration 0006), and whoever
+  // sits there sees every check-in: its page shows who's there but offers no changes.
+  const ownerOnly = row.kind === "organisation";
+
   const people: Person[] = members
     .filter((m) => m.team_id === teamId)
     .map((m) => {
       const role = asRole(m.role);
-      const editable = isEditableMember({ id: m.id, role }, adminMemberId);
+      const editable = !ownerOnly && isEditableMember({ id: m.id, role }, adminMemberId);
       const hasLogin = m.auth_user_id !== null;
       const giver = m.login_given_by ? (memberById.get(m.login_given_by)?.name ?? null) : null;
       return {
@@ -254,8 +265,16 @@ export function buildTeamView({
     })
     .sort(byName);
 
+  // Not whoever sits in the organisation either: only the project owner moves them.
+  const organisationId = teams.find((t) => t.kind === "organisation")?.id;
   const candidates: Candidate[] = members
-    .filter((m) => m.team_id !== teamId && isEditableMember({ id: m.id, role: asRole(m.role) }, adminMemberId))
+    .filter(
+      (m) =>
+        !ownerOnly &&
+        m.team_id !== teamId &&
+        (organisationId === undefined || m.team_id !== organisationId) &&
+        isEditableMember({ id: m.id, role: asRole(m.role) }, adminMemberId),
+    )
     .map((m) => ({ id: m.id, name: m.name, teamId: m.team_id, teamName: nameOfTeam(m.team_id) }))
     .sort((a, b) => Number(a.teamId !== null) - Number(b.teamId !== null) || byName(a, b));
 
@@ -301,6 +320,7 @@ export function buildTeamView({
   const leadOptions: LeadPerson[] = members
     .filter(
       (m) =>
+        !ownerOnly &&
         m.role === "leader" &&
         m.id !== adminMemberId &&
         !leadIds.has(m.id) &&

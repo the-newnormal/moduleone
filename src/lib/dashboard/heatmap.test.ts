@@ -115,4 +115,42 @@ describe("heatmapGroups", () => {
   it("returns no groups for an empty org", () => {
     expect(heatmapGroups({ roots: [], loose: [] })).toEqual([]);
   });
+
+  describe("with an organisation node", () => {
+    const PENDING: HeatmapCell[] = [{ week: "2026-10-05", health: null, pending: 1 }];
+    const divisions = () => [
+      node("ga", "Gather", "division", [node("ip", "IP Lab", "domain")]),
+      node("cu", "Culture", "division", [node("at", "Atlas", "domain")]),
+    ];
+
+    it("puts the organisation's own row first, then a group per division under it", () => {
+      const organisation = { ...node("tn", "The New Normal", "organisation", divisions()), cells: PENDING };
+      const groups = heatmapGroups({ roots: [organisation], loose: [] });
+      expect(groups.map((g) => [g.label, g.head?.name ?? null, g.rows.map((r) => r.name)])).toEqual([
+        ["The New Normal", "The New Normal", []],
+        ["Gather", "Gather", ["IP Lab"]],
+        ["Culture", "Culture", ["Atlas"]],
+      ]);
+    });
+
+    it("keeps the organisation's row for a viewer who covers it even in weeks without check-ins", () => {
+      const organisation = node("tn", "The New Normal", "organisation", divisions());
+      expect(heatmapGroups({ roots: [organisation], loose: [] })[0]).toMatchObject({ label: "The New Normal", rows: [] });
+    });
+
+    it("leaves the organisation out for a viewer who doesn't cover it, and still groups their divisions", () => {
+      const organisation = node("tn", "The New Normal", "organisation", divisions(), false);
+      expect(rows({ roots: [organisation], loose: [] })).toEqual([
+        ["Gather", [["IP Lab", 0, true]]],
+        ["Culture", [["Atlas", 0, true]]],
+      ]);
+    });
+
+    it("keeps unplaced domains beside it in Other", () => {
+      const organisation = { ...node("tn", "The New Normal", "organisation", divisions()), cells: PENDING };
+      const groups = heatmapGroups({ roots: [organisation, node("lg", "Legacy", "domain")], loose: [] });
+      expect(groups.map((g) => g.label)).toEqual(["The New Normal", "Gather", "Culture", null]);
+      expect(groups[3].rows.map((r) => r.name)).toEqual(["Legacy"]);
+    });
+  });
 });

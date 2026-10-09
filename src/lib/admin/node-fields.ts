@@ -84,6 +84,7 @@ export function parseNodeFields(kind: TeamKind, input: unknown): ParsedNodeField
     if (kind === "domain" && isDomainType(form.type)) domain_type = form.type;
     else if (kind === "division" && isDivisionType(form.type)) division_type = form.type;
     else if (kind === "team") errors.type = "Teams don't have a type.";
+    else if (kind === "organisation") errors.type = "The organisation doesn't have a type.";
     else errors.type = `Pick one of the ${kind} types, or none.`;
   }
 
