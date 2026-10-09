@@ -69,7 +69,7 @@ const person = (id: string, name: string, changes: Partial<Person> = {}): Person
   hasLogin: false,
   loginGiven: null,
   canGiveLogin: false,
-  ownerGivesLogin: null,
+  ownerGivesLogin: false,
   canResendInvite: false,
   otherLeads: [],
   leadsHere: false,
@@ -160,14 +160,10 @@ describe("PeopleSection", () => {
     expect(count(html, />Give login</g)).toBe(1);
   });
 
-  it("leaves Give login to the project owner for someone who holds grants or leads the organisation", () => {
-    const html = render(TEAM, [
-      person("m-gus", "Gus Tay", { ownerGivesLogin: "grants" }),
-      person("m-eli", "Eli Chao", { ownerGivesLogin: "organisation" }),
-    ]);
+  it("leaves Give login to the project owner for someone who holds grants", () => {
+    const html = render(TEAM, [person("m-gus", "Gus Tay", { ownerGivesLogin: true })]);
     expect(row(html, "Gus Tay")).toContain("They hold grants, so the project owner gives them a login.");
-    expect(row(html, "Eli Chao")).toContain("They lead the organisation, so the project owner gives them a login.");
-    expect(html).not.toContain("Give login (");
+    expect(row(html, "Gus Tay")).not.toContain("Give login (");
   });
 
   it("says 'domain' on a domain's page", () => {

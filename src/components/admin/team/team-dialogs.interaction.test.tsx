@@ -36,7 +36,7 @@ const person = (id: string, name: string, changes: Partial<Person> = {}): Person
   hasLogin: false,
   loginGiven: null,
   canGiveLogin: true,
-  ownerGivesLogin: null,
+  ownerGivesLogin: false,
   canResendInvite: false,
   otherLeads: [],
   leadsHere: false,

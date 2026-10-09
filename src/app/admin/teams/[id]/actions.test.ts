@@ -29,7 +29,6 @@ import {
   NOT_GIVEN_HERE,
   NOT_IN_TEAM,
   NOT_YOURSELF,
-  ORGANISATION_LOGIN,
   PERSON_CHANGED,
   PERSON_GONE,
   PICK_ROLE,
@@ -493,64 +492,6 @@ describe("the organisation node", () => {
     expect(writes()).toEqual([{ table: "members", calls: [["select", "team_id"], ["eq", "id", PERSON], ["maybeSingle"]] }]);
   });
 
-  describe("giving a login", () => {
-    const LOGIN_REFUSED = { ok: false, error: ORGANISATION_LOGIN };
-    beforeEach(() => {
-      // The invite's login was made now (see giveLogin's tests).
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(new Date("2026-10-09T04:30:00.000Z"));
-    });
-    const expectNoInvite = () => {
-      expect(createServiceRoleClient).not.toHaveBeenCalled();
-      expect(inviteUserByEmail).not.toHaveBeenCalled();
-    };
-
-    it("refuses someone who sits in it, before any email goes out", async () => {
-      userQueue.teams = [organisationIs(ORG)];
-      userQueue.members = [memberRow({ team_id: ORG.toUpperCase() })];
-      userQueue.member_grants = [rows()];
-      await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual(LOGIN_REFUSED);
-      expectNoInvite();
-    });
-
-    it("refuses someone with a lead row on it, wherever they sit", async () => {
-      userQueue.teams = [organisationIs(ORG)];
-      userQueue.members = [memberRow({ team_id: OTHER_TEAM })];
-      userQueue.member_grants = [rows()];
-      userQueue.team_leads = [{ data: [{ member_id: PERSON }], error: null }];
-      await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual(LOGIN_REFUSED);
-      expect(userQueries.at(-1)).toEqual({
-        table: "team_leads",
-        calls: [["select", "member_id"], ["eq", "member_id", PERSON], ["eq", "team_id", ORG], ["limit", 1]],
-      });
-      expectNoInvite();
-    });
-
-    it("still gives one to anyone else", async () => {
-      loginAllowed(rows(PERSON));
-      userQueue.teams = [organisationIs(ORG)];
-      userQueue.team_leads = [rows()];
-      await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: true, value: null });
-      expect(inviteUserByEmail).toHaveBeenCalledOnce();
-    });
-
-    it("shows 0006's refusal and removes the new login if the owner placed them there meanwhile", async () => {
-      const sentence = "Only the project owner gives a login to someone in the organisation.";
-      loginAllowed(dbError("42501", sentence), rows());
-      await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: sentence });
-      expect(deleteUser).toHaveBeenCalledExactlyOnceWith(NEW_LOGIN);
-      expect(revalidatePath).not.toHaveBeenCalled();
-      expect(console.error).not.toHaveBeenCalled();
-    });
-
-    it("logs any other refusal of the link, and says 'something went wrong'", async () => {
-      loginAllowed(dbError("42501", "permission denied for table members"), rows());
-      await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
-      expect(deleteUser).toHaveBeenCalledExactlyOnceWith(NEW_LOGIN);
-      expect(console.error).toHaveBeenCalledExactlyOnceWith("giveLogin link failed", { code: "42501", status: undefined });
-    });
-  });
-
   it("still changes the role of someone elsewhere once there is one, unless they sit in it by then", async () => {
     userQueue.teams = [organisationIs(OTHER)];
     userQueue.members = [{ data: { team_id: TEAM }, error: null }, rows(PERSON)];
@@ -591,9 +532,8 @@ describe("giveLogin", () => {
 
     // 3. the member and their grants, read as the admin (RLS applies)
     expect(userQueries).toEqual([
-      { table: "members", calls: [["select", "id, role, auth_user_id, team_id"], ["eq", "id", PERSON], ["maybeSingle"]] },
+      { table: "members", calls: [["select", "id, role, auth_user_id"], ["eq", "id", PERSON], ["maybeSingle"]] },
       { table: "member_grants", calls: [["select", "grant_name"], ["eq", "member_id", PERSON], ["limit", 1]] },
-      ORG_LOOKUP,
     ]);
     // 4. nothing from an earlier login, then the invite, coming back to the site's callback
     expect(storageFrom).toHaveBeenCalledExactlyOnceWith("checkin-audio");

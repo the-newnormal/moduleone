@@ -38,4 +38,3 @@ export const INVITE_USED =
 
 // Every change to who sits in or leads the organisation node (migration 0006)
 export const ORGANISATION_OWNER_ONLY = "Only the project owner decides who sits in the organisation and who leads it.";
-export const ORGANISATION_LOGIN = "Only the project owner gives a login to someone who sits in or leads the organisation.";

@@ -30,7 +30,6 @@ const OWN_PERMISSION_MESSAGES = new Set([
   // Migration 0006: only the project owner staffs the organisation node.
   "Only the project owner can place people in the organisation itself.",
   "Only the project owner can make someone a lead of the organisation itself.",
-  "Only the project owner gives a login to someone in the organisation.",
 ]);
 
 // Table check constraints (as opposed to the triggers' sentences) fail with Postgres's wording,

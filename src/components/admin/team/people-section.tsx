@@ -110,8 +110,7 @@ function PersonRow({
         {person.loginGiven && <p className="text-xs text-muted-foreground">{person.loginGiven}</p>}
         {person.ownerGivesLogin && (
           <p className="text-xs text-muted-foreground">
-            {person.ownerGivesLogin === "grants" ? "They hold grants" : "They lead the organisation"}, so the
-            project owner gives them a login.
+            They hold grants, so the project owner gives them a login.
           </p>
         )}
       </div>

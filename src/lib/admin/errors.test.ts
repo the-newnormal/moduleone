@@ -55,7 +55,6 @@ describe("toUserMessage", () => {
     "You lead where this is going, so another admin has to move it there.",
     "Only the project owner can place people in the organisation itself.",
     "Only the project owner can make someone a lead of the organisation itself.",
-    "Only the project owner gives a login to someone in the organisation.",
   ])(
     "shows 0003's own 42501 sentence: %s",
     (message) => {
