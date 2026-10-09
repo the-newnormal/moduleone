@@ -300,7 +300,7 @@ describe("the trend grid", () => {
   });
 
   it("prints how many check-ins were red under the score, and spells it out for a single week", async () => {
-    // 28 Sep: IP Lab 1's one check-in (4) was red. This week: 16 and two 0.6s, yellow with two reds.
+    // 28 Sep: IP Lab 1's one check-in (4) was red. This week: 16 and two 0.6s, a red 5.7 with two reds.
     const awful = checkin("ip1", THIS_WEEK, [1, 1, 1]);
     heatmapData("hq", [], { checkins: [awful, awful] });
     const html = await trend({ weeks: "4" });
@@ -310,6 +310,15 @@ describe("the trend grid", () => {
     const week = await trend({ weeks: "1" });
     expect(week.match(/>\d+ red</g)).toBeNull();
     expect(week).toContain("3 graded check-ins: 1 green, 0 yellow, 2 red");
+  });
+
+  it("puts the waiting clock beside the count in a two-line cell, clear of the score", async () => {
+    const waiting = { ...checkin("ip1", THIS_WEEK, [1, 1, 1]), activity_score: null, excellence_score: null, morale_score: null };
+    heatmapData("hq", [], { checkins: [checkin("ip1", THIS_WEEK, [1, 1, 1]), waiting] });
+    const html = await trend({ weeks: "4" });
+    // Gather, IP Lab and IP Lab 1 this week: one red each, one waiting each.
+    expect(html.match(/>1 red<\/span><svg[^>]*lucide-clock/g)).toHaveLength(3);
+    expect(html).not.toContain("absolute right-1 bottom-1");
   });
 
   it("colours only what a leader leads", async () => {
@@ -363,10 +372,10 @@ describe("the colour tally at the top", () => {
   it("counts the week's teams by colour on the org chart, not the domain or division above them", async () => {
     heatmapData("hq");
     const html = await page({});
-    expect(html).toContain(">Teams, this week</h2>");
+    expect(html).toContain(">Teams, this week</p>");
     expect(tally(html)).toEqual({ green: 1, yellow: 0, red: 0 }); // IP Lab 1 only
     const earlier = await page({ week: "2026-09-28" });
-    expect(earlier).toMatch(/>Teams, week of 28 Sept?<\/h2>/);
+    expect(earlier).toMatch(/>Teams, week of 28 Sept?<\/p>/);
     expect(tally(earlier)).toEqual({ green: 0, yellow: 0, red: 1 });
   });
 
@@ -380,7 +389,7 @@ describe("the colour tally at the top", () => {
   it("counts only the teams a leader leads", async () => {
     heatmapData("leader", ["ip1"]);
     const html = await page({});
-    expect(html).toContain(">Teams you lead, this week</h2>");
+    expect(html).toContain(">Teams you lead, this week</p>");
     expect(tally(html)).toEqual({ green: 1, yellow: 0, red: 0 });
   });
 
@@ -388,7 +397,7 @@ describe("the colour tally at the top", () => {
     heatmapData("hq");
     for (const weeks of ["1", "12"]) {
       const html = await trend(weeks);
-      expect(html).toContain(">Teams, this week</h2>");
+      expect(html).toContain(">Teams, this week</p>");
       expect(tally(html)).toEqual({ green: 1, yellow: 0, red: 0 });
     }
   });

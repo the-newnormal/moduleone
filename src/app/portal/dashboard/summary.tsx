@@ -22,10 +22,11 @@ export function BandSummary({
   const when = week === thisWeek ? "this week" : `week of ${formatWeek(week)}`;
   return (
     <section aria-labelledby="band-summary" className="grid gap-2 rounded-xl border bg-card px-4 py-3 text-sm">
-      <h2 id="band-summary" className="font-sans text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+      {/* Names the region without adding a heading the view switch and the chart would fall under. */}
+      <p id="band-summary" className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
         {`${role === "hq" ? "Teams" : "Teams you lead"}, ${when}`}
-      </h2>
-      <ul className="flex flex-wrap gap-x-5 gap-y-1">
+      </p>
+      <ul className="flex flex-wrap gap-x-4 gap-y-1">
         {ORDER.map((band) => {
           const { label, Icon, icon } = BANDS[band];
           return (

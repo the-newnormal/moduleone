@@ -78,6 +78,29 @@ describe("teamCounts", () => {
     expect(teamCounts(org)).toEqual({ green: 0, yellow: 1, red: 2, ungraded: 1 });
   });
 
+  it("leaves out a team archived since its last check-in, whatever the range, and counts its domain instead", () => {
+    // IP Lab 2 archived after a check-in last week; IP Lab 1 gone already. IP Lab's own check-in is red.
+    const teams = TEAMS.map((t) =>
+      t.id === "ip2" ? { ...t, archived_at: "2026-10-01T00:00:00Z" } : t,
+    ).filter((t) => t.id !== "ip1");
+    const checkins = [
+      ...CHECKINS.filter((c) => c.team_id !== "ip1" && c.team_id !== "ip2"),
+      checkin("ip2", LAST_WEEK, GREEN),
+    ];
+    const tally = (weeks: string[]) =>
+      teamCounts(buildOrg({ teams, checkins, weeks, config: RULES, covers: coverage("hq", []) }));
+    // IP Lab and Barbeques red, Atlas yellow, Dinners nothing graded, over one week or two.
+    expect(tally([THIS_WEEK])).toEqual({ green: 0, yellow: 1, red: 2, ungraded: 1 });
+    expect(tally(WEEKS)).toEqual({ green: 0, yellow: 1, red: 2, ungraded: 1 });
+    // In the week it still had a check-in, it counts, and its domain doesn't.
+    expect(teamCounts(buildOrg({ teams, checkins, weeks: [LAST_WEEK], config: RULES, covers: coverage("hq", []) }))).toEqual({
+      green: 2,
+      yellow: 0,
+      red: 0,
+      ungraded: 2,
+    });
+  });
+
   it("counts a week waiting for the grader as ungraded", () => {
     const waiting = [...CHECKINS, checkin("dn", THIS_WEEK, null)];
     expect(counts(coverage("hq", []), waiting)).toEqual({ green: 1, yellow: 2, red: 1, ungraded: 1 });

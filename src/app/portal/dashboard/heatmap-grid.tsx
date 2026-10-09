@@ -75,16 +75,19 @@ function Cell({
             </>
           )}
         </span>
-        {reds > 0 && <RedCount count={reds} />}
-        {detailed && <span className="pr-3 font-normal text-muted-foreground">{detail}</span>}
-        {band && cell.pending > 0 && (
-          // Clear of the count on the second line: top corner then.
-          <Clock
-            aria-hidden
-            className={`absolute right-1 size-3 text-muted-foreground ${reds > 0 ? "top-1" : "bottom-1"}`}
-            strokeWidth={2.5}
-          />
+        {reds > 0 ? (
+          // A second line: the count, and the clock beside it rather than against the score.
+          <span className="flex items-center gap-1">
+            <RedCount count={reds} />
+            {cell.pending > 0 && <Clock aria-hidden className="size-3 shrink-0 text-muted-foreground" strokeWidth={2.5} />}
+          </span>
+        ) : (
+          band &&
+          cell.pending > 0 && (
+            <Clock aria-hidden className="absolute right-1 bottom-1 size-3 text-muted-foreground" strokeWidth={2.5} />
+          )
         )}
+        {detailed && <span className="pr-3 font-normal text-muted-foreground">{detail}</span>}
       </Link>
     </td>
   );
