@@ -155,7 +155,7 @@ const portal = async () =>
 
 // The portal nav's links, in order.
 function nav(html: string): { label: string; href: string }[] {
-  const items = /<nav aria-label="Portal"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? "";
+  const items = /<nav aria-label="Main"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? "";
   return [...items.matchAll(/<a [^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/g)].map(([, href, label]) => ({ label, href }));
 }
 const PORTAL = { label: "Portal", href: "/portal" };

@@ -39,7 +39,8 @@ export async function loadPortalAccess(supabase: SupabaseClient): Promise<Portal
 }
 
 // The signed-in viewer's access, once per request: the app bar's nav (in the portal and admin
-// layouts) and the portal's tiles share the answer. Callers check the viewer is signed in first.
+// layouts) and the portal's tiles share the answer. It means something only for a signed-in viewer,
+// so what it guards checks that too (the portal layout before calling it; the admin layout beside it).
 export const viewerAccess = cache(async (): Promise<PortalAccess> => loadPortalAccess(await createClient()));
 
 export type NavItem = { id: "portal" | "checkin" | "team-health" | "admin"; href: string; label: string };

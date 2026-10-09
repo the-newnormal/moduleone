@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useRef } from "react";
 import type { NavItem } from "@/lib/portal/access";
 
 // The item a path belongs to: Portal on the portal itself only; the others on their own page and
@@ -13,27 +14,41 @@ export function currentItem(items: readonly NavItem[], pathname: string): NavIte
   return item?.id ?? null;
 }
 
-// Pills, the current one filled with ink. Below md they take a row of their own under the logomark
-// and Sign out, and never wrap (that would make the stuck bar taller still): on the narrowest
-// screens the row scrolls sideways, padded so the focus ring isn't clipped.
+// Keeps a tab in the row's view, for when the row scrolls sideways.
+const reveal = (tab: HTMLElement | null) => tab?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+
+// Pills, the current one filled with ink: "page" on the item's own page, "true" on a page under it.
+// Below md they take a row of their own under the logomark and Sign out, and never wrap (that would
+// make the stuck bar taller still); they tighten below 360px so all four fit at 320, and should the
+// row still overflow (larger text), it scrolls sideways, keeping the current and a focused tab in
+// view, padded so the focus ring isn't clipped.
 export function AppNav({ items }: { items: readonly NavItem[] }) {
-  const current = currentItem(items, usePathname());
+  const pathname = usePathname();
+  const current = currentItem(items, pathname);
+  const currentTab = useRef<HTMLAnchorElement>(null);
+  useEffect(() => reveal(currentTab.current), [current]);
+
   return (
-    <nav aria-label="Portal" className="order-last w-full md:order-none md:mr-auto md:w-auto">
-      <ul className="-m-1 flex gap-1 overflow-x-auto p-1">
-        {items.map((item) => (
-          <li key={item.id}>
-            <Link
-              href={item.href}
-              aria-current={item.id === current ? "page" : undefined}
-              className={`inline-flex h-10 shrink-0 items-center rounded-full px-2.5 text-[15px] font-medium whitespace-nowrap sm:px-4 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
-                item.id === current ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-accent"
-              }`}
-            >
-              {item.label}
-            </Link>
-          </li>
-        ))}
+    <nav aria-label="Main" className="order-last w-full md:order-none md:mr-auto md:w-auto">
+      <ul className="-m-1 flex scroll-px-1 gap-0.5 overflow-x-auto p-1 min-[360px]:gap-1">
+        {items.map((item) => {
+          const isCurrent = item.id === current;
+          return (
+            <li key={item.id}>
+              <Link
+                ref={isCurrent ? currentTab : undefined}
+                href={item.href}
+                aria-current={isCurrent ? (pathname === item.href ? "page" : "true") : undefined}
+                onFocus={(event) => reveal(event.currentTarget)}
+                className={`inline-flex h-10 shrink-0 items-center rounded-full px-1.5 text-[14px] font-medium whitespace-nowrap min-[360px]:px-2 min-[360px]:text-[15px] sm:px-4 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
+                  isCurrent ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-accent"
+                }`}
+              >
+                {item.label}
+              </Link>
+            </li>
+          );
+        })}
       </ul>
     </nav>
   );

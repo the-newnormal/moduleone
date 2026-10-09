@@ -23,6 +23,11 @@ let unsaved = false;
 // reply was lost after it had saved) isn't offered again.
 let deletedPath: string | null = null;
 
+// The recording going on in this tab, if any: how to finish it and start saving its take. Sign out
+// sits beside the recorder in the app bar, so it finishes the recording first, as leaving the page
+// would, and then waits for the save like any other.
+let recording: (() => void) | null = null;
+
 function warn(event: BeforeUnloadEvent) {
   if (unsaved) event.preventDefault();
 }
@@ -61,6 +66,23 @@ export function trackSave<T extends SaveOutcome | null>(save: Promise<T>): Promi
     },
   );
   return save;
+}
+
+// The recorder, while it records: `finish` stops the recording and tracks its save (trackSave).
+// Returns the release, for when the recording ends by itself.
+export function holdRecording(finish: () => void): () => void {
+  recording = finish;
+  return () => {
+    if (recording === finish) recording = null;
+  };
+}
+
+// Finishes a recording still going, if any, so its take is saving (currentSave) before anything
+// ends the session.
+export function finishRecording() {
+  const finish = recording;
+  recording = null;
+  finish?.();
 }
 
 export function currentSave(): Promise<SaveOutcome | null> | null {

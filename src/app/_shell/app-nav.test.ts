@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { NavItem } from "@/lib/portal/access";
 import { currentItem } from "./app-nav";
 
-// The app bar marks the page the viewer is on, so the same bar reads right on every page.
+// The app bar marks the page the viewer is on (its section, on a page under it), so the same bar
+// reads right on every page.
 const ALL: NavItem[] = [
   { id: "portal", href: "/portal", label: "Portal" },
   { id: "checkin", href: "/portal/checkin", label: "Check-in" },

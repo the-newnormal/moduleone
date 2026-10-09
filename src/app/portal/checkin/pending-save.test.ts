@@ -262,3 +262,39 @@ describe("forgetDeletedTake", () => {
     expect(wasDeleted({ ...failed, take: { ...take, uploadedPath: null } })).toBe(false);
   });
 });
+
+// Sign out sits beside the recorder in the app bar, so it finishes a recording still going first.
+describe("finishRecording", () => {
+  it("does nothing when nothing is recording", async () => {
+    const { finishRecording, currentSave } = await load();
+    finishRecording();
+    expect(currentSave()).toBeNull();
+  });
+
+  it("finishes the recording held, once, and its save is then the one in progress", async () => {
+    const { holdRecording, finishRecording, trackSave, currentSave } = await load();
+    const save = deferred<SaveOutcome | null>();
+    const finish = vi.fn(() => void trackSave(save.promise));
+    holdRecording(finish);
+    finishRecording();
+    finishRecording();
+    expect(finish).toHaveBeenCalledTimes(1);
+    expect(currentSave()).toBe(save.promise);
+  });
+
+  it("leaves a recording that ended by itself alone, and a newer one held", async () => {
+    const { holdRecording, finishRecording } = await load();
+    const first = vi.fn();
+    const second = vi.fn();
+    const releaseFirst = holdRecording(first);
+    releaseFirst();
+    finishRecording();
+    expect(first).not.toHaveBeenCalled();
+    holdRecording(first);
+    holdRecording(second); // a new recording replaced it
+    releaseFirst(); // the old one's release can't drop the new one
+    finishRecording();
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+});

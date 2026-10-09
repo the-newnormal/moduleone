@@ -10,18 +10,20 @@ export const metadata: Metadata = { title: "Admin · Module One" };
 // 404. Layouts don't re-run on client navigation, so every page under /admin calls
 // requireAdminPage itself too (it's cached per request, so this costs nothing extra). If the check
 // itself fails, the layout leaves out the nav and lets the page throw, so admin/error.tsx shows.
-// The app bar the portal shares goes on top; its nav fails closed, as it does there.
+// The app bar the portal shares goes on top; its nav fails closed, as it does there, and its Admin
+// item follows this layout's own check, so a failed check never leaves the bar offering Admin.
 export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
   const [admin, access] = await Promise.all([requireAdminLayout("/admin"), viewerAccess()]);
 
   return (
     <>
-      <AppBar nav={portalNav(access)} />
+      <AppBar nav={portalNav({ ...access, isAdmin: admin !== null })} />
       <div className="mx-auto grid w-full max-w-6xl grid-cols-[minmax(0,1fr)] gap-8 px-4 py-10">
-        <header className="grid gap-3 border-b pb-4">
+        {/* Not a <header>: the app bar is the page's one banner. */}
+        <div className="grid gap-3 border-b pb-4">
           <p className="text-sm font-medium tracking-wide text-muted-foreground uppercase">Admin</p>
           {admin && <AdminNav />}
-        </header>
+        </div>
         <main className="grid grid-cols-[minmax(0,1fr)] gap-6">{children}</main>
       </div>
     </>

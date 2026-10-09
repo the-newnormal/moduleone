@@ -9,7 +9,7 @@ import { QUESTIONS } from "@/lib/checkin/week";
 import { createClient } from "@/lib/supabase/client";
 import { prepareRecording, saveDraft } from "./actions";
 import { formatClock } from "./format";
-import { currentSave, releaseSave, trackSave, wasDeleted } from "./pending-save";
+import { currentSave, holdRecording, releaseSave, trackSave, wasDeleted } from "./pending-save";
 import { saveTake, type ReadyToUpload, type SaveOutcome, type Take } from "./take";
 
 // Opus in WebM where the browser has it (Chrome, Edge, Firefox), AAC in MP4 on Safari. Speech at
@@ -185,6 +185,20 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
       document.removeEventListener("visibilitychange", left);
       tracks.forEach((track) => track.removeEventListener("mute", left));
     };
+  }, [recording]);
+
+  // While recording, Sign out (in the app bar beside this) can finish the recording first: the take
+  // is saved as Finish would, and Sign out waits for that save before ending the session.
+  useEffect(() => {
+    if (!recording) return;
+    return holdRecording(() => {
+      const live = media.current;
+      if (!live || live.recorder.state === "inactive") return;
+      window.clearInterval(live.timer);
+      void trackSave(live.saved); // registered now, before onstop runs, so Sign out waits for it
+      setState({ step: "saving" });
+      live.recorder.stop(); // onstop collects the take and saves it
+    });
   }, [recording]);
 
   // Move keyboard and screen-reader focus to each step's main button as the steps change, since

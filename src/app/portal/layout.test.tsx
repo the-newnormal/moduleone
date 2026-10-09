@@ -34,9 +34,11 @@ const layout = async () =>
   renderToStaticMarkup(
     await PortalLayout({ children: <main>the page</main>, params: Promise.resolve({}) } as unknown as LayoutProps<"/portal">),
   );
+// The nav's tabs in order: [the page you're on], (the section a page under it belongs to).
 const nav = (html: string) =>
-  [...(/<nav aria-label="Portal"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? "").matchAll(/<a ([^>]*)>([^<]*)<\/a>/g)].map(
-    ([, attrs, label]) => (attrs.includes('aria-current="page"') ? `[${label}]` : label),
+  [...(/<nav aria-label="Main"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? "").matchAll(/<a ([^>]*)>([^<]*)<\/a>/g)].map(
+    ([, attrs, label]) =>
+      attrs.includes('aria-current="page"') ? `[${label}]` : attrs.includes('aria-current="true"') ? `(${label})` : label,
   );
 
 describe("PortalLayout", () => {
@@ -51,7 +53,8 @@ describe("PortalLayout", () => {
   it.each([
     ["/portal", ["[Portal]", "Check-in", "Team health", "Admin"]],
     ["/portal/checkin", ["Portal", "[Check-in]", "Team health", "Admin"]],
-    ["/portal/dashboard/trend", ["Portal", "Check-in", "[Team health]", "Admin"]],
+    ["/portal/dashboard", ["Portal", "Check-in", "[Team health]", "Admin"]],
+    ["/portal/dashboard/trend", ["Portal", "Check-in", "(Team health)", "Admin"]],
   ])("marks the page it's on: %s", async (path, items) => {
     pathname = path;
     expect(nav(await layout())).toEqual(items);

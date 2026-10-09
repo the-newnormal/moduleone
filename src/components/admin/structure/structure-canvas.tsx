@@ -389,7 +389,7 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
           )}
         </div>
 
-        <div className="sticky top-2 z-20 grid gap-2 empty:hidden">
+        <div className="sticky top-[calc(var(--app-bar-h)+0.5rem)] z-20 grid gap-2 empty:hidden">
           <div role="alert" className="empty:hidden">
             {notice?.tone === "error" && (
               <div className="flex items-start gap-2 rounded-lg border border-destructive/50 bg-background p-3 text-sm shadow-sm">
