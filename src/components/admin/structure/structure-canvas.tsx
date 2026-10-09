@@ -173,7 +173,7 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
     const item = target === null ? undefined : layout.items.find((i) => i.id === target);
     const box = pane.current;
     if (item && box) {
-      const panelWidth = box.clientWidth >= 2 * 448 ? 448 : 0;
+      const panelWidth = box.clientWidth > 448 ? 448 : 0;
       const zoom = Math.max(flow.getZoom(), 0.8);
       const cx = item.x + item.width / 2;
       const cy = item.y + item.height / 2;
