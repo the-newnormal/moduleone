@@ -13,7 +13,7 @@
 --   plain      a member with no team
 --   chief      hq, no team
 begin;
-select plan(61);
+select plan(69);
 
 create function pg_temp.n(sql text) returns int language plpgsql as $$
 declare result int;
@@ -47,11 +47,13 @@ grant execute on function pg_temp.n(text), pg_temp.error_of(text), pg_temp.org()
 -- ---------- the organisation as 0006 left it ----------
 select is((select count(*)::int from teams where kind = 'organisation'), 1, 'there is exactly one organisation');
 select results_eq(
-  $$select name, parent_id, sort_order, code, domain_type, division_type, note, archived_at
+  $$select name, parent_id, sort_order, code, domain_type, division_type, note, archived_at, leader_title
     from teams where kind = 'organisation'$$,
-  $$values ('The New Normal'::text, null::uuid, 0, null::text, null::text, null::text, null::text, null::timestamptz)$$,
-  'it is The New Normal, at the top, with nothing else set'
+  $$values ('The New Normal'::text, null::uuid, 0, null::text, null::text, null::text, null::text, null::timestamptz, 'President'::text)$$,
+  'it is The New Normal, at the top, whose leaders are called President, with nothing else set'
 );
+select is((select count(*)::int from teams where leader_title is not null and kind <> 'organisation'), 0,
+  'no other node has a title yet');
 select is(
   (select count(*)::int from teams d where d.kind = 'division' and d.parent_id is distinct from pg_temp.org()),
   0, 'every founding division sits under it'
@@ -110,6 +112,17 @@ select is(
   'no error', 'an admin can rename the organisation and note it'
 );
 select is((select name from teams where kind = 'organisation'), 'The Newer Normal', 'the new name is saved');
+select is(pg_temp.error_of($$update teams set leader_title = 'Chair' where kind = 'organisation'$$), 'no error',
+  'an admin can rename the title of whoever sits there');
+select is((select leader_title from teams where kind = 'organisation'), 'Chair', 'the new title is saved');
+select is(pg_temp.error_of($$update teams set leader_title = 'Divisional Leader' where id = 'b6000000-0000-4000-8000-000000000001'$$),
+  'no error', 'and give a division one');
+select alike(pg_temp.error_of($$update teams set leader_title = ' Chair' where kind = 'organisation'$$),
+  '23514: %"teams_leader_title_format"%', 'a title with spaces around it is refused');
+select alike(pg_temp.error_of($$update teams set leader_title = '' where kind = 'organisation'$$),
+  '23514: %"teams_leader_title_format"%', 'an empty title is refused (null clears it)');
+select alike(pg_temp.error_of(format('update teams set leader_title = %L where kind = %L', repeat('t', 61), 'organisation')),
+  '23514: %"teams_leader_title_format"%', 'a title over 60 characters is refused');
 select is(pg_temp.error_of($$update teams set archived_at = now() where kind = 'organisation'$$),
   '23514: The organisation can''t be archived.', 'it cannot be archived');
 select is(pg_temp.error_of($$update teams set kind = 'division' where kind = 'organisation'$$),
@@ -266,6 +279,10 @@ select is(pg_temp.org() = any (app_led_team_ids()), false, 'they don''t lead the
 set local request.jwt.claims to '{"sub": "a6000000-0000-4000-8000-000000000005", "role": "authenticated"}';
 select is(pg_temp.n($$select 1 from teams where kind = 'organisation'$$), 1,
   'a member in a team sees the organisation above them');
+select is(
+  pg_temp.error_of($$update teams set leader_title = 'Emperor' where kind = 'organisation'$$)
+    || '|' || (select leader_title from teams where kind = 'organisation'),
+  'no error|Chair', 'but cannot rename its title (the update changes nothing)');
 select is(pg_temp.n($$select 1 from checkins where id = 'd6000000-0000-4000-8000-000000000002'$$), 0,
   'but not its check-ins');
 select is(pg_temp.n($$select 1 from members where id = 'c6000000-0000-4000-8000-000000000002'$$), 0,

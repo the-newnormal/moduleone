@@ -47,10 +47,14 @@ do $$
 declare
   got text;
 begin
-  select string_agg(name || '|' || coalesce(parent_id::text, '-') || '|' || sort_order, ', ') into got
+  select string_agg(name || '|' || coalesce(parent_id::text, '-') || '|' || sort_order || '|' || leader_title, ', ') into got
   from teams where kind = 'organisation';
-  if got is distinct from 'The New Normal|-|0' then
-    raise exception 'there should be one organisation, The New Normal, at the top; got %', got;
+  if got is distinct from 'The New Normal|-|0|President' then
+    raise exception 'there should be one organisation, The New Normal, at the top, led by its President; got %', got;
+  end if;
+  select string_agg(name, ', ') into got from teams where leader_title is not null and kind <> 'organisation';
+  if got is not null then
+    raise exception 'only the organisation should have a title; got %', got;
   end if;
 
   select string_agg(d.name || ':' || d.sort_order, ', ' order by d.sort_order, d.name) into got

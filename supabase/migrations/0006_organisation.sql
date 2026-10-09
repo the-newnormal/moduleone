@@ -21,14 +21,28 @@
 -- top level" (null) for a division to mean the organisation, and a division that becomes a domain
 -- without a new parent is unplaced. Unplaced domains still sit at the top level, outside it.
 --
--- No policy or grant changes: everyone who can see a division sees the organisation above it
--- (app_visible_team_ids walks up), and admins rename it through the teams update policy.
+-- Titles: a node can say what the leaders who sit in it are called (teams.leader_title). The
+-- organisation's starts as "President", so whoever sits there shows as President; admins rename
+-- it like the node's name. It is a label only: what anyone sees comes from where they sit and
+-- their role, never from a title.
+--
+-- No policy changes: everyone who can see a division sees the organisation above it
+-- (app_visible_team_ids walks up), and admins rename it, and its title, through the teams update
+-- policy (the new column is granted like the others).
 
 -- ---------- the organisation kind ----------
 alter table teams drop constraint teams_kind;
 alter table teams add constraint teams_kind check (kind in ('organisation', 'division', 'domain', 'team'));
 -- teams_check_tree now says where a division sits (under the organisation), in words.
 alter table teams drop constraint teams_division_at_top;
+-- What the leaders who sit in a node are called ("President" for the organisation); null shows
+-- the plain role. Trimmed, 1 to 60 characters.
+alter table teams
+  add column leader_title text,
+  add constraint teams_leader_title_format
+    check (leader_title is null or (leader_title = btrim(leader_title) and char_length(leader_title) between 1 and 60));
+grant insert (leader_title), update (leader_title) on table teams to authenticated;
+
 -- At most one organisation, even with triggers off. teams_fill_tree refuses a second in words
 -- first.
 create unique index teams_one_organisation on teams (kind) where kind = 'organisation';
@@ -387,8 +401,8 @@ grant execute on function admin_move_team(uuid, uuid, int) to authenticated, ser
 -- ---------- the organisation, and every division under it ----------
 -- Safe to run on a database that already has one: it is matched by kind. The divisions keep their
 -- order (sort_order), now among themselves under the organisation.
-insert into teams (name, kind, sort_order)
-select 'The New Normal', 'organisation', 0
+insert into teams (name, kind, sort_order, leader_title)
+select 'The New Normal', 'organisation', 0, 'President'
 where not exists (select 1 from teams where kind = 'organisation');
 
 update teams set parent_id = (select id from teams where kind = 'organisation')
