@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { gradeCheckin, GradingError } from "@/lib/grader";
 import { transcribe, TranscriptionError } from "@/lib/stt";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { createServiceRoleClient } from "@/lib/supabase/admin";
 import { processCheckin } from "./process";
 
 // Mocked whole, so their `import "server-only"` never runs; the error classes are the real ones.
-vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
+vi.mock("@/lib/supabase/admin", () => ({ createServiceRoleClient: vi.fn() }));
 vi.mock("@/lib/stt", async () => ({ ...(await vi.importActual("@/lib/stt/types")), transcribe: vi.fn() }));
 vi.mock("@/lib/grader", async () => ({ ...(await vi.importActual("@/lib/grader/types")), gradeCheckin: vi.fn() }));
 
@@ -55,7 +55,7 @@ const claim = (overrides: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   updates = [];
   updateError = null;
-  vi.mocked(createAdminClient).mockReturnValue({ rpc, from, storage: { from: storageFrom } } as never);
+  vi.mocked(createServiceRoleClient).mockReturnValue({ rpc, from, storage: { from: storageFrom } } as never);
   rpc.mockReset().mockResolvedValue(claim());
   download.mockReset().mockResolvedValue({ data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }), error: null });
   vi.mocked(transcribe)
@@ -326,7 +326,7 @@ describe("processCheckin", () => {
     rpc.mockResolvedValue({ data: null, error: { code: "PGRST301", message: "JWT expired" } });
     expect(await processCheckin(CHECKIN)).toBe("failed");
 
-    vi.mocked(createAdminClient).mockImplementation(() => {
+    vi.mocked(createServiceRoleClient).mockImplementation(() => {
       throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY (server-only).");
     });
     expect(await processCheckin(CHECKIN)).toBe("failed");

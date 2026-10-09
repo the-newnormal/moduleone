@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { processCheckin } from "@/lib/checkin/process";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { createServiceRoleClient } from "@/lib/supabase/admin";
 import {
   deleteExpiredRecordings,
   needsProcessing,
@@ -11,7 +11,7 @@ import {
 } from "./housekeeping";
 
 // Mocked whole, so their `import "server-only"` never runs.
-vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
+vi.mock("@/lib/supabase/admin", () => ({ createServiceRoleClient: vi.fn() }));
 vi.mock("@/lib/checkin/process", () => ({ processCheckin: vi.fn() }));
 
 const NOW = new Date("2026-10-08T04:00:00Z");
@@ -112,7 +112,7 @@ describe("tidyMemberAudio", () => {
       error: null,
     });
     remove.mockReset().mockResolvedValue({ data: [], error: null });
-    vi.mocked(createAdminClient)
+    vi.mocked(createServiceRoleClient)
       .mockReset()
       .mockReturnValue({ from, storage: { from: () => ({ list, remove }) } } as never);
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -187,7 +187,7 @@ describe("tidyMemberAudio", () => {
   });
 
   it("never throws", async () => {
-    vi.mocked(createAdminClient).mockImplementation(() => {
+    vi.mocked(createServiceRoleClient).mockImplementation(() => {
       throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
     });
     await expect(tidyMemberAudio(MEMBER, WEEK)).resolves.toBeUndefined();
@@ -225,7 +225,7 @@ describe("processPendingCheckins", () => {
   beforeEach(() => {
     calls = [];
     result = { data: [], error: null };
-    vi.mocked(createAdminClient).mockReset().mockReturnValue({ from } as never);
+    vi.mocked(createServiceRoleClient).mockReset().mockReturnValue({ from } as never);
     vi.mocked(processCheckin).mockReset().mockResolvedValue("graded");
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
@@ -277,7 +277,7 @@ describe("processPendingCheckins", () => {
   });
 
   it("never throws", async () => {
-    vi.mocked(createAdminClient).mockImplementation(() => {
+    vi.mocked(createServiceRoleClient).mockImplementation(() => {
       throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
     });
     await expect(processPendingCheckins(NOW)).resolves.toBeNull();
@@ -291,7 +291,7 @@ describe("deleteExpiredRecordings", () => {
   const files = (n: number) => Array.from({ length: n }, (_, i) => `${MEMBER}/2026-07-0${i % 7}-take-${i}.webm`);
 
   beforeEach(() => {
-    vi.mocked(createAdminClient).mockReset().mockReturnValue({ rpc, storage: { from: storageFrom } } as never);
+    vi.mocked(createServiceRoleClient).mockReset().mockReturnValue({ rpc, storage: { from: storageFrom } } as never);
     rpc.mockReset().mockResolvedValue({ data: files(3), error: null });
     remove.mockReset().mockResolvedValue({ data: [], error: null });
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -324,7 +324,7 @@ describe("deleteExpiredRecordings", () => {
     expect(await deleteExpiredRecordings()).toBeNull();
     rpc.mockResolvedValue({ data: null, error: { code: "42501", message: "denied" } });
     expect(await deleteExpiredRecordings()).toBeNull();
-    vi.mocked(createAdminClient).mockImplementation(() => {
+    vi.mocked(createServiceRoleClient).mockImplementation(() => {
       throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
     });
     expect(await deleteExpiredRecordings()).toBeNull();

@@ -6,7 +6,7 @@ import { baseMimeType, draftPath, extensionFor, isOwnAudioPath, MAX_AUDIO_BYTES 
 import { noticeVersion } from "@/lib/checkin/notice";
 import { processCheckin } from "@/lib/checkin/process";
 import { currentWeekStart } from "@/lib/checkin/week";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { createServiceRoleClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { UPLOAD_MAX_AGE_MS } from "./housekeeping";
 
@@ -82,6 +82,7 @@ function noticeRequired(): CheckinError {
 
 type Session = {
   supabase: Awaited<ReturnType<typeof createClient>>;
+  authUserId: string;
   member: { id: string; team_id: string | null };
 };
 
@@ -100,17 +101,18 @@ async function sessionMember(): Promise<Session | CheckinError> {
     return fail("failed");
   }
   if (!member) return fail("no_member");
-  return { supabase, member };
+  return { supabase, authUserId: data.claims.sub, member };
 }
 
-// Whether the member has accepted the current privacy notice. Checked before recording and again
-// before submitting, because submitting is what sends the recording to the transcription service,
-// and a change of service changes the notice.
-async function noticeAccepted({ supabase, member }: Session): Promise<boolean | CheckinError> {
+// Whether the member has accepted the current privacy notice, with this login. Checked before
+// recording and again before submitting, because submitting is what sends the recording to the
+// transcription service, and a change of service changes the notice.
+async function noticeAccepted({ supabase, authUserId, member }: Session): Promise<boolean | CheckinError> {
   const { data, error } = await supabase
     .from("recording_notices")
     .select("member_id")
     .eq("member_id", member.id)
+    .eq("auth_user_id", authUserId)
     .eq("notice_version", noticeVersion())
     .maybeSingle();
   if (error) {
@@ -127,7 +129,7 @@ function raised(error: { code?: string; message?: string } | null, message: stri
 
 // Deletes a file in the member's folder unless a check-in points at it. Best-effort: a file left
 // behind is removed later by the page's housekeeping.
-async function removeFile(admin: ReturnType<typeof createAdminClient>, memberId: string, path: string) {
+async function removeFile(admin: ReturnType<typeof createServiceRoleClient>, memberId: string, path: string) {
   if (!isOwnAudioPath(path, memberId)) return;
   const { data: used, error } = await admin
     .from("checkins")
@@ -146,12 +148,12 @@ export async function acceptNotice(version: string): Promise<AcceptNoticeResult>
   const session = await sessionMember();
   if ("status" in session) return session;
   if (version !== noticeVersion()) return noticeRequired();
-  const { error } = await createAdminClient()
+  const { error } = await createServiceRoleClient()
     .from("recording_notices")
     .upsert(
-      { member_id: session.member.id, notice_version: noticeVersion() },
+      { member_id: session.member.id, auth_user_id: session.authUserId, notice_version: noticeVersion() },
       // Keep the first acceptance time if the button is pressed twice.
-      { onConflict: "member_id,notice_version", ignoreDuplicates: true },
+      { onConflict: "member_id,auth_user_id,notice_version", ignoreDuplicates: true },
     );
   if (error) {
     console.error("acceptNotice failed", { code: error.code });
@@ -187,7 +189,7 @@ export async function prepareRecording(mimeType: string): Promise<PrepareRecordi
   if (!ext) return fail("unsupported_audio");
 
   const path = draftPath(session.member.id, weekStart, ext);
-  const { data: signed, error: signError } = await createAdminClient()
+  const { data: signed, error: signError } = await createServiceRoleClient()
     .storage.from(BUCKET)
     .createSignedUploadUrl(path, { upsert: false });
   if (signError) {
@@ -214,7 +216,7 @@ export async function saveDraft(input: {
   if (!isOwnAudioPath(path, memberId, currentWeekStart())) return fail("bad_path");
 
   // The upload went straight from the browser to Storage, so check what actually arrived.
-  const admin = createAdminClient();
+  const admin = createServiceRoleClient();
   const { data: file, error: infoError } = await admin.storage.from(BUCKET).info(path);
   if (infoError || !file) {
     const status = (infoError as { status?: number } | null)?.status;
@@ -284,7 +286,7 @@ export async function deleteDraft(shown: string): Promise<DeleteDraftResult> {
   const session = await sessionMember();
   if ("status" in session) return session;
   if (typeof shown !== "string") return fail("bad_path");
-  const admin = createAdminClient();
+  const admin = createServiceRoleClient();
   const { data: path, error } = await admin.rpc("delete_checkin_draft", {
     p_member_id: session.member.id,
     p_audio_path: shown,
@@ -309,7 +311,7 @@ export async function submitCheckin(shown: string): Promise<SubmitCheckinResult>
   const accepted = await noticeAccepted(session);
   if (accepted !== true) return accepted === false ? noticeRequired() : accepted;
 
-  const { data: id, error } = await createAdminClient().rpc("submit_checkin_draft", {
+  const { data: id, error } = await createServiceRoleClient().rpc("submit_checkin_draft", {
     p_member_id: session.member.id,
     p_audio_path: shown,
   });

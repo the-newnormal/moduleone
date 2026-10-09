@@ -5,7 +5,7 @@
 --   team R: leader lead_r, members m1 and m2      hq      role hq, no team, no grants
 --   auditor no team, recordings grant             outsider signed in, but no members row
 begin;
-select plan(117);
+select plan(121);
 
 -- ---------- fixtures ----------
 insert into auth.users (id, email) values
@@ -58,6 +58,9 @@ select is(
 select columns_are('public', 'checkin_drafts',
   array['member_id', 'week_start', 'audio_path', 'mime_type', 'duration_ms', 'recorded_at', 'created_at'],
   'checkin_drafts has exactly the expected columns');
+select columns_are('public', 'recording_notices',
+  array['member_id', 'auth_user_id', 'notice_version', 'accepted_at'],
+  'recording_notices has exactly the expected columns');
 select has_column('public', 'checkins', c, format('checkins has %s', c))
   from unnest(array['submitted_at', 'audio_duration_ms', 'transcript_model', 'transcript_warnings', 'grader_model', 'graded_at',
                     'processing_started_at', 'processing_attempts', 'processing_error']) c;
@@ -307,7 +310,8 @@ select throws_ok(
 
 -- m2 keeps a draft for the visibility checks below. In Storage: m1's submitted recording, m2's
 -- draft, and a take m2 uploaded but never saved (or threw away), which nothing points at. A
--- privacy-notice acknowledgement for m1.
+-- privacy-notice acknowledgement for m1, and one an earlier login on m1's member row gave (the row
+-- has since been given m1's login).
 select lives_ok(
   $$select save_checkin_draft('c1000000-0000-4000-8000-000000000003', pg_temp.take('c1000000-0000-4000-8000-000000000003', 'draft.webm'), 'audio/webm', 30000)$$,
   'm2 records a draft'
@@ -316,7 +320,9 @@ insert into storage.objects (bucket_id, name) values
   ('checkin-audio', pg_temp.take('c1000000-0000-4000-8000-000000000002', 'take-4.webm')),
   ('checkin-audio', pg_temp.take('c1000000-0000-4000-8000-000000000003', 'draft.webm')),
   ('checkin-audio', pg_temp.take('c1000000-0000-4000-8000-000000000003', 'unsaved.webm'));
-insert into recording_notices (member_id, notice_version) values ('c1000000-0000-4000-8000-000000000002', 'test.openai');
+insert into recording_notices (member_id, auth_user_id, notice_version) values
+  ('c1000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000002', 'test.openai'),
+  ('c1000000-0000-4000-8000-000000000002', 'a1000000-0000-4000-8000-000000000006', 'test.openai');
 reset role;
 
 -- ---------- m2: their own draft only, no writes ----------
@@ -342,7 +348,7 @@ select throws_ok(
 );
 select throws_ok($$delete from checkin_drafts$$, '42501', null, 'm2 cannot delete a draft directly');
 select throws_ok(
-  $$insert into recording_notices (member_id, notice_version) values ('c1000000-0000-4000-8000-000000000003', 'x')$$,
+  $$insert into recording_notices (member_id, auth_user_id, notice_version) values ('c1000000-0000-4000-8000-000000000003', 'a1000000-0000-4000-8000-000000000003', 'x')$$,
   '42501', null, 'm2 cannot record a notice acknowledgement directly'
 );
 select throws_ok(
@@ -366,6 +372,10 @@ select throws_ok(
 set local request.jwt.claims to '{"sub": "a1000000-0000-4000-8000-000000000002", "role": "authenticated"}';
 select is(pg_temp.n($$select 1 from checkin_drafts where member_id::text like 'c1000000-%'$$), 0, 'm1 cannot see m2''s draft');
 select is(pg_temp.n($$select 1 from recording_notices where member_id::text like 'c1000000-%'$$), 1, 'm1 sees their own notice acknowledgement');
+select is(
+  pg_temp.n($$select 1 from recording_notices where auth_user_id <> auth.uid()$$),
+  0, 'm1 does not inherit the notice an earlier login on their member row accepted'
+);
 select is(
   pg_temp.n($$select 1 from storage.objects where bucket_id = 'checkin-audio' and name like 'c1000000-%'$$),
   1, 'm1 can play only their own recording'
@@ -450,6 +460,17 @@ select isnt(
 select is(
   pg_temp.n($$select 1 from checkin_drafts where member_id = 'c1000000-0000-4000-8000-000000000001'$$),
   0, 'a draft whose recording expired is removed'
+);
+
+-- The acknowledgement is the login's: it goes when the login is deleted.
+select is(
+  pg_temp.n($$select 1 from recording_notices where auth_user_id = 'a1000000-0000-4000-8000-000000000006'$$),
+  1, 'the earlier login''s acknowledgement is there'
+);
+delete from auth.users where id = 'a1000000-0000-4000-8000-000000000006';
+select is(
+  pg_temp.n($$select 1 from recording_notices where auth_user_id = 'a1000000-0000-4000-8000-000000000006'$$),
+  0, 'deleting a login deletes the notice acknowledgements it gave'
 );
 
 select * from finish();

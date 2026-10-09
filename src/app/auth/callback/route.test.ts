@@ -69,6 +69,39 @@ describe("GET /auth/callback", () => {
     expect(location(res)).toBe(`${ORIGIN}/login?error=link`);
   });
 
+  it("verifies an invite (type=invite) and continues to next", async () => {
+    const res = await callback("?token_hash=inv1&type=invite&next=%2Fportal");
+    expect(verifyOtp).toHaveBeenCalledExactlyOnceWith({ type: "invite", token_hash: "inv1" });
+    expect(location(res)).toBe(`${ORIGIN}/portal`);
+  });
+
+  it("treats a token_hash without a type as type=email", async () => {
+    await callback("?token_hash=abc");
+    expect(verifyOtp).toHaveBeenCalledExactlyOnceWith({ type: "email", token_hash: "abc" });
+  });
+
+  it("sends a failed invite back to /login?error=link", async () => {
+    verifyOtp.mockResolvedValue({ error: { code: "otp_expired", status: 403 } });
+    const res = await callback("?token_hash=old&type=invite&next=%2Fportal");
+    expect(location(res)).toBe(`${ORIGIN}/login?error=link`);
+  });
+
+  it.each(["recovery", "email_change", "signup", "magiclink", "sms", "", "EMAIL", "invite "])(
+    "refuses any other type (%j) without verifying",
+    async (type) => {
+      const res = await callback(`?token_hash=abc&type=${encodeURIComponent(type)}&next=%2Fportal`);
+      expect(createClient).not.toHaveBeenCalled();
+      expect(verifyOtp).not.toHaveBeenCalled();
+      expect(location(res)).toBe(`${ORIGIN}/login?error=link`);
+    },
+  );
+
+  it("refuses a PKCE code with an unknown type", async () => {
+    const res = await callback("?code=c0de&type=recovery");
+    expect(exchangeCodeForSession).not.toHaveBeenCalled();
+    expect(location(res)).toBe(`${ORIGIN}/login?error=link`);
+  });
+
   it("sends a link with neither token_hash nor code to /login?error=link", async () => {
     const res = await callback("?next=%2Fportal");
     expect(createClient).not.toHaveBeenCalled();

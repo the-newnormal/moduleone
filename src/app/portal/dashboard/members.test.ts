@@ -30,9 +30,14 @@ vi.mock("../actions", () => ({ signOut: vi.fn() }));
 
 const CONFIG = { weights: {}, thresholds: { green: 3, yellow: 2 } } as never;
 
+// app_has_grant('admin') for the signed-in user.
+const rpc = vi.fn();
+
 beforeEach(() => {
+  rpc.mockReset().mockResolvedValue({ data: false, error: null });
   vi.mocked(createClient).mockResolvedValue({
     auth: { getClaims: async () => ({ data: { claims: { sub: "u1", email: "m@example.com" } } }) },
+    rpc,
   } as never);
   vi.mocked(loadHeatmapData).mockResolvedValue({
     teams: [],
@@ -81,5 +86,27 @@ describe("leaders and hq", () => {
     const html = renderToStaticMarkup(await PortalPage());
     expect(html).not.toContain("/portal/dashboard");
     expect(html).toContain("Sign out");
+  });
+});
+
+describe("the Admin card", () => {
+  it("is offered to an admin-grant holder, whatever their role", async () => {
+    rpc.mockResolvedValue({ data: true, error: null });
+    const html = renderToStaticMarkup(await PortalPage());
+    expect(rpc).toHaveBeenCalledWith("app_has_grant", { requested: "admin" });
+    expect(html).toContain('href="/admin"');
+    expect(html).not.toContain("/portal/dashboard"); // still a member: no Team health
+  });
+
+  it("isn't offered without the grant, or if the grant can't be checked", async () => {
+    vi.mocked(loadRole).mockResolvedValue("hq");
+    expect(renderToStaticMarkup(await PortalPage())).not.toContain('href="/admin"');
+
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    rpc.mockResolvedValue({ data: null, error: { code: "57014", message: "timeout" } });
+    const html = renderToStaticMarkup(await PortalPage());
+    expect(html).not.toContain('href="/admin"');
+    expect(html).toContain("/portal/dashboard");
+    log.mockRestore();
   });
 });

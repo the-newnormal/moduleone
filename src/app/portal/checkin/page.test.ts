@@ -149,6 +149,16 @@ describe("/portal/checkin", () => {
     expect(html).not.toContain("Start recording");
   });
 
+  it("looks for the notice accepted with this login, not the member row's earlier one", async () => {
+    await render();
+    expect(queries.find((q) => q.table === "recording_notices")?.filters).toEqual(
+      expect.arrayContaining([
+        ["member_id", MEMBER],
+        ["auth_user_id", "u1"],
+      ]),
+    );
+  });
+
   it("shows the recorder when there's nothing yet", async () => {
     const html = await render();
     expect(html).toContain("Start recording");

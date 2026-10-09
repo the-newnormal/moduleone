@@ -1,5 +1,5 @@
 import "server-only";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { createServiceRoleClient } from "@/lib/supabase/admin";
 import { gradeCheckin, GradingError } from "@/lib/grader";
 import { transcribe, TranscriptionError } from "@/lib/stt";
 
@@ -41,7 +41,7 @@ const GRADE_MIN_MS = 120_000;
 export async function processCheckin(checkinId: string): Promise<ProcessOutcome> {
   let admin;
   try {
-    admin = createAdminClient();
+    admin = createServiceRoleClient();
   } catch (error) {
     console.error("processCheckin: no service-role client", { checkinId, error: describe(error) });
     return "failed";

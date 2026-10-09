@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_AUDIO_BYTES } from "@/lib/checkin/audio";
 import { noticeVersion } from "@/lib/checkin/notice";
 import { processCheckin } from "@/lib/checkin/process";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { createServiceRoleClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { acceptNotice, deleteDraft, prepareRecording, saveDraft, submitCheckin } from "./actions";
 
@@ -15,7 +15,7 @@ vi.mock("next/server", async (importOriginal) => ({
 }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 // Mocked whole, so their `import "server-only"` never runs.
-vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
+vi.mock("@/lib/supabase/admin", () => ({ createServiceRoleClient: vi.fn() }));
 vi.mock("@/lib/checkin/process", () => ({ processCheckin: vi.fn() }));
 
 // Thursday 8 October 2026, noon in Singapore: the week of Monday 5 October.
@@ -103,7 +103,7 @@ beforeEach(() => {
   adminQueries = [];
   checkinsUsingPath = [];
   vi.mocked(createClient).mockResolvedValue({ auth: { getClaims }, from: rlsFrom } as never);
-  vi.mocked(createAdminClient).mockReset().mockReturnValue({ rpc, from: adminFrom, storage: { from: storageFrom } } as never);
+  vi.mocked(createServiceRoleClient).mockReset().mockReturnValue({ rpc, from: adminFrom, storage: { from: storageFrom } } as never);
   getClaims.mockReset().mockResolvedValue({ data: { claims: { sub: USER } }, error: null });
   rpc.mockReset().mockResolvedValue({ data: null, error: null });
   upsert.mockReset().mockResolvedValue({ data: null, error: null });
@@ -141,13 +141,13 @@ describe("every check-in action", () => {
       code: "signed_out",
       message: "Your session has ended. Sign in again.",
     });
-    expect(createAdminClient).not.toHaveBeenCalled();
+    expect(createServiceRoleClient).not.toHaveBeenCalled();
   });
 
   it.each(ACTIONS)("%s refuses a signed-in user with no members row", async (_name, action) => {
     reads.members = { data: null, error: null };
     expect(await action()).toMatchObject({ status: "error", code: "no_member" });
-    expect(createAdminClient).not.toHaveBeenCalled();
+    expect(createServiceRoleClient).not.toHaveBeenCalled();
   });
 
   it.each(ACTIONS)("%s takes the member from the session's user id", async (_name, action) => {
@@ -163,11 +163,11 @@ describe("every check-in action", () => {
 });
 
 describe("acceptNotice", () => {
-  it("records the current notice version for the session's member, once", async () => {
+  it("records the current notice version for the session's member and login, once", async () => {
     expect(await acceptNotice(noticeVersion())).toEqual({ status: "accepted" });
     expect(upsert).toHaveBeenCalledExactlyOnceWith(
-      { member_id: MEMBER, notice_version: noticeVersion() },
-      { onConflict: "member_id,notice_version", ignoreDuplicates: true },
+      { member_id: MEMBER, auth_user_id: USER, notice_version: noticeVersion() },
+      { onConflict: "member_id,auth_user_id,notice_version", ignoreDuplicates: true },
     );
     expect(revalidatePath).toHaveBeenCalledExactlyOnceWith(PAGE);
   });
@@ -201,10 +201,11 @@ describe("prepareRecording", () => {
     expect(result).toMatchObject({ status: "ready", contentType: "audio/mp4", path: expect.stringMatching(/\.m4a$/) });
   });
 
-  it("checks the current notice version", async () => {
+  it("checks the current notice version, accepted with this login", async () => {
     await prepareRecording("audio/webm");
     expect(queries.find((q) => q.table === "recording_notices")?.filters).toEqual([
       ["member_id", MEMBER],
+      ["auth_user_id", USER],
       ["notice_version", noticeVersion()],
     ]);
   });

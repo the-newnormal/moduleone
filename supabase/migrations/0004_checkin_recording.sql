@@ -93,12 +93,15 @@ create policy checkin_drafts_select on checkin_drafts for select to authenticate
 -- ---------- recording_notices: the one-time privacy notice ----------
 -- Before their first recording a member reads what is recorded, who processes it (and where), who
 -- sees the results and how long recordings are kept. A new notice version (say, a different
--- transcription provider) asks again.
+-- transcription provider) asks again. The acceptance is the person's, kept with the login that gave
+-- it: a member row can be given a new login (giveLogin, or the project owner in the dashboard), and
+-- that person reads the notice for themselves.
 create table recording_notices (
   member_id       uuid not null references members(id) on delete cascade,
+  auth_user_id    uuid not null references auth.users(id) on delete cascade,
   notice_version  text not null check (length(notice_version) between 1 and 100),
   accepted_at     timestamptz not null default now(),
-  primary key (member_id, notice_version)
+  primary key (member_id, auth_user_id, notice_version)
 );
 alter table recording_notices enable row level security;
 
@@ -106,7 +109,7 @@ grant select on table recording_notices to authenticated;
 grant all on table recording_notices to service_role;
 
 create policy recording_notices_select on recording_notices for select to authenticated
-  using (member_id = app_current_member_id());
+  using (member_id = app_current_member_id() and auth_user_id = auth.uid());
 
 -- ---------- storage: a recording is private to the speaker until it is submitted ----------
 -- 0002 lets holders of the recordings grant play every file in 'checkin-audio'. This restrictive

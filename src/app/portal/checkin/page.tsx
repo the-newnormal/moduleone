@@ -87,6 +87,7 @@ async function loadView(
       .from("recording_notices")
       .select("member_id")
       .eq("member_id", member.id)
+      .eq("auth_user_id", authUserId)
       .eq("notice_version", noticeVersion())
       .maybeSingle(),
     supabase

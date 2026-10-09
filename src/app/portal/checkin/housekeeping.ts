@@ -1,7 +1,7 @@
 import "server-only";
 import { isOwnAudioPath } from "@/lib/checkin/audio";
 import { processCheckin } from "@/lib/checkin/process";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { createServiceRoleClient } from "@/lib/supabase/admin";
 
 const BUCKET = "checkin-audio";
 
@@ -65,7 +65,7 @@ export function orphanedFiles(
 // it misses is picked up on the next visit.
 export async function tidyMemberAudio(memberId: string, weekStart: string): Promise<void> {
   try {
-    const admin = createAdminClient();
+    const admin = createServiceRoleClient();
     const bucket = admin.storage.from(BUCKET);
 
     // A draft from an earlier week can't be submitted any more: the window closed on Sunday.
@@ -122,7 +122,7 @@ const REMOVE_BATCH = 100;
 
 export async function deleteExpiredRecordings(): Promise<{ deleted: number } | null> {
   try {
-    const admin = createAdminClient();
+    const admin = createServiceRoleClient();
     const { data, error } = await admin.rpc("forget_expired_checkin_audio");
     if (error) {
       console.error("deleteExpiredRecordings: finding expired recordings failed", { code: error.code });
@@ -155,7 +155,7 @@ const SWEEP_LIMIT = 20;
 // (or a run and a page view) processing the same check-in at once. Never throws.
 export async function processPendingCheckins(now: Date = new Date()): Promise<{ due: number; graded: number } | null> {
   try {
-    const { data, error } = await createAdminClient()
+    const { data, error } = await createServiceRoleClient()
       .from("checkins")
       .select("id, submitted_at, graded_at, processing_started_at, processing_error, processing_attempts")
       .not("submitted_at", "is", null)

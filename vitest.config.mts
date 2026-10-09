@@ -5,8 +5,8 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
-      // Next resolves 'server-only' to an empty module on the server; outside React's server
-      // environment it throws on import. Tests run server modules directly, so use the empty one.
+      // `import "server-only"` throws outside React's server build; Next.js resolves it to an empty
+      // module on the server, and tests run server code, so do the same here.
       "server-only": fileURLToPath(new URL("./node_modules/server-only/empty.js", import.meta.url)),
     },
   },
