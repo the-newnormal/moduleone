@@ -17,6 +17,7 @@ import {
 import { MoveIcon, PlusIcon, UsersIcon, XIcon } from "lucide-react";
 import { startTransition, useCallback, useEffect, useMemo, useOptimistic, useRef, useState, useTransition } from "react";
 import {
+  buildNoTeamPeople,
   buildTeamView,
   type GrantRow,
   type LeadRow,
@@ -40,10 +41,11 @@ import { settle } from "@/lib/admin/errors";
 import { applyMove, buildTree, moveAnnouncement, type TeamMove } from "@/lib/admin/tree";
 import { ArchivedSection, type Report } from "./archived-list";
 import { type Dragged, type DropPlan, type PlacePlan, placeAction, planDrop } from "./canvas-drop";
-import { canvasPeopleOf, itemAt, layoutStructure, personNodeId } from "./canvas-layout";
+import { canvasPeopleOf, itemAt, layoutStructure, NO_TEAM_ID, personNodeId } from "./canvas-layout";
 import { CanvasContext, type CanvasNode, dragging, flowNodes, NODE_TYPES, PERSON_HINT_ID } from "./canvas-nodes";
 import type { StructureRow } from "./counts";
 import { type EditorDialog, menuButton, nodeSelector, type StructureActions } from "./editor-context";
+import { NoTeamPanel } from "./no-team-panel";
 import { NodePanel } from "./node-panel";
 import { ArchiveDialog, MoveDialog, NodeFormDialog } from "./node-dialogs";
 
@@ -131,14 +133,21 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
 
   // ---------- the side panel ----------
 
+  // A node's id, or NO_TEAM_ID for everyone with no team.
   const [panelId, setPanelId] = useState<string | null>(null);
   const panel = useMemo(
     () =>
-      panelId === null
+      panelId === null || panelId === NO_TEAM_ID
         ? null
         : buildTeamView({ teamId: panelId, adminMemberId, teams: view, members: people, leads, grants }),
     [panelId, adminMemberId, view, people, leads, grants],
   );
+  const noTeam = useMemo(
+    () =>
+      panelId === NO_TEAM_ID ? buildNoTeamPeople({ adminMemberId, teams: view, members: people, leads, grants }) : null,
+    [panelId, adminMemberId, view, people, leads, grants],
+  );
+  const noTeamCount = useMemo(() => people.filter((m) => m.team_id === null && m.removed_at === null).length, [people]);
   const openPanel = useCallback((id: string) => {
     setPanelId(id);
     focusSoon("[data-panel-heading]");
@@ -146,7 +155,8 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
   const closePanel = useCallback(() => {
     const id = panelId;
     setPanelId(null);
-    if (id) focusSoon(nodeSelector(id), "#structure-heading");
+    if (id === NO_TEAM_ID) focusSoon("[data-no-team-button]", "#structure-heading");
+    else if (id) focusSoon(nodeSelector(id), "#structure-heading");
   }, [panelId]);
 
   // ---------- moving ----------
@@ -295,7 +305,7 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
       if (change.type === "select" && change.selected) {
         const item = layout.items.find((i) => i.id === change.id);
         if (item?.type === "node") openPanel(item.id);
-        if (item?.type === "person" && item.person.teamId) openPanel(item.person.teamId);
+        if (item?.type === "person") openPanel(item.person.teamId ?? NO_TEAM_ID);
       }
     }
   };
@@ -378,6 +388,9 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
             <UsersIcon />
             {showPeople ? "Hide people" : "Show people"}
           </Button>
+          <Button variant="outline" data-no-team-button onClick={() => openPanel(NO_TEAM_ID)}>
+            No team ({noTeamCount})
+          </Button>
           {saving && <span className="text-sm text-muted-foreground">Saving…</span>}
           {drag?.plan && (
             <span
@@ -437,6 +450,7 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
             <Controls showInteractive={false} />
             <MiniMap pannable zoomable ariaLabel="Overview of the chart" className="!hidden sm:!block" />
           </ReactFlow>
+          {noTeam && <NoTeamPanel people={noTeam} actions={teamActions} onClose={closePanel} />}
           {panel && (
             <NodePanel
               key={panel.team.id}
@@ -449,7 +463,8 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
             />
           )}
           <p id={PERSON_HINT_ID} hidden>
-            Press Enter or Space for their team&apos;s people and leads. Drag them onto a box to move them there.
+            Press Enter or Space for their team&apos;s people and leads (or, for someone with no team, everyone with
+            no team). Drag them onto a box to move them there.
           </p>
         </div>
 

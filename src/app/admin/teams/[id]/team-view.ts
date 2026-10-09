@@ -9,7 +9,8 @@ import { breadcrumb, KIND_LABELS, type TeamRow, typeLabel } from "@/lib/admin/tr
 import type { DivisionType, DomainType, TeamKind } from "@/lib/admin/validate";
 
 // members columns the page reads.
-export const MEMBER_COLUMNS = "id, name, role, team_id, auth_user_id, login_given_by, login_given_at";
+export const MEMBER_COLUMNS =
+  "id, name, role, team_id, auth_user_id, login_given_by, login_given_at, login_email_changed_by, login_email_changed_at, removed_at";
 
 export type MemberRow = {
   id: string;
@@ -19,6 +20,9 @@ export type MemberRow = {
   auth_user_id: string | null;
   login_given_by: string | null;
   login_given_at: string | null;
+  login_email_changed_by: string | null;
+  login_email_changed_at: string | null;
+  removed_at: string | null; // removed from Module One (0009): shown nowhere, offered for nothing
 };
 
 export type LeadRow = { team_id: string; member_id: string };
@@ -66,6 +70,14 @@ export type Person = {
   canGiveLogin: boolean;
   ownerGivesLogin: boolean; // as canGiveLogin, but holds grants
   canResendInvite: boolean; // not a Master Admin or the admin, with a login given in Module One
+  emailChanged: string | null; // "Sign-in email changed by Hana Lim on 9 Oct 2026", while they have a login
+  // Change email and Remove from Module One: not a Master Admin or the admin, and not someone the
+  // project owner keeps (below). Change email needs a login.
+  canChangeEmail: boolean;
+  canRemove: boolean;
+  // Why neither is offered, when that's the project owner's call: they hold grants, or they sit in
+  // or lead the organisation (both servers refuse these too).
+  ownerKeeps: "grants" | "organisation" | null;
   otherLeads: string[]; // names of the teams they also lead (team_leads), lost if made a member
   leadsHere: boolean; // a team_leads row for this team too, so they lead it wherever they sit
   // The name of the nearest node above this one (its domain or division) where they have a lead
@@ -116,10 +128,19 @@ const byName = <T extends { id: string; name: string }>(a: T, b: T) =>
 // "Login given by Hana Lim on 9 Oct 2026", or less when the giver's row is gone or the date is
 // unreadable; null when nobody recorded giving it (logins made in the Supabase dashboard).
 export function loginGivenText(giverName: string | null, givenAt: string | null): string | null {
-  const on = formatDate(givenAt);
-  if (giverName && on) return `Login given by ${giverName} on ${on}`;
-  if (giverName) return `Login given by ${giverName}`;
-  if (on) return `Login given on ${on}`;
+  return byWhom("Login given", giverName, givenAt);
+}
+
+// "Sign-in email changed by Hana Lim on 9 Oct 2026", the same way.
+export function emailChangedText(changerName: string | null, changedAt: string | null): string | null {
+  return changedAt === null && changerName === null ? null : byWhom("Sign-in email changed", changerName, changedAt);
+}
+
+function byWhom(what: string, name: string | null, at: string | null): string | null {
+  const on = formatDate(at);
+  if (name && on) return `${what} by ${name} on ${on}`;
+  if (name) return `${what} by ${name}`;
+  if (on) return `${what} on ${on}`;
   return null;
 }
 
@@ -156,6 +177,28 @@ export function removeDescription(person: Who, team: Where): string {
   if (person.leadsHere) return `${stays} They still lead ${team.name}, as an added lead.`;
   if (person.leadsDomain) return `${stays} They still lead ${person.leadsDomain}, which holds this ${team.kind}.`;
   return `${stays} They'll stop seeing the check-ins made in ${coverage(team)}.`;
+}
+
+// "Remove from Module One". team: where they sit, null for someone with no team.
+export function removePersonDescription(
+  person: Pick<Person, "name" | "hasLogin" | "otherLeads">,
+  team: Pick<TeamSummary, "name"> | null,
+): string {
+  const leads = person.otherLeads.length > 0 ? nameList(person.otherLeads) : null;
+  const leaving = team
+    ? `They leave ${team.name}${leads ? ` and stop leading ${leads}` : ""}.`
+    : leads
+      ? `They stop leading ${leads}.`
+      : "";
+  return [
+    person.hasLogin ? `${person.name} won't be able to sign in any more.` : "",
+    leaving,
+    "Anything they recorded stays, so past weeks on the heat-map don't change.",
+    person.hasLogin ? "" : "If they've never had a login and left nothing behind, they're deleted completely.",
+    "This can't be undone here.",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 // "A", "A and B", "A, B and C".
@@ -215,14 +258,7 @@ export function buildTeamView({
     crumbs.unshift({ key: "unplaced", label: "Unplaced", href: null });
   }
 
-  const leadsOf = new Map<string, string[]>();
-  for (const lead of leads) {
-    const name = nameOfTeam(lead.team_id);
-    if (name === null) continue;
-    leadsOf.set(lead.member_id, [...(leadsOf.get(lead.member_id) ?? []), name]);
-  }
-
-  const holdsGrants = new Set(grants.map((g) => g.member_id));
+  const everyone = peopleContext({ adminMemberId, teams, members, leads, grants });
   const leadIds = new Set(leads.filter((l) => l.team_id === teamId).map((l) => l.member_id));
 
   // A node is also led by whoever leads a node above it (its domain, its division): leaders placed
@@ -240,38 +276,22 @@ export function buildTeamView({
   // giving them a login (admins may, by the owner's decision).
   const ownerOnly = row.kind === "organisation";
 
-  const people: Person[] = members
+  const people: Person[] = everyone.current
     .filter((m) => m.team_id === teamId)
-    .map((m) => {
-      const role = asRole(m.role);
-      const loginsHere = isEditableMember({ id: m.id, role }, adminMemberId);
-      const editable = !ownerOnly && loginsHere;
-      const hasLogin = m.auth_user_id !== null;
-      const giver = m.login_given_by ? (memberById.get(m.login_given_by)?.name ?? null) : null;
-      return {
-        id: m.id,
-        name: m.name,
-        role,
-        roleLabel: roleLabel(role),
-        title: role === "member" ? null : row.leader_title,
-        isSelf: m.id === adminMemberId,
-        editable,
-        hasLogin,
-        // A login deleted in the Supabase dashboard leaves login_given_* behind; don't show it.
-        loginGiven: hasLogin ? loginGivenText(giver, m.login_given_at) : null,
-        canGiveLogin: loginsHere && !hasLogin && !holdsGrants.has(m.id),
-        ownerGivesLogin: loginsHere && !hasLogin && holdsGrants.has(m.id),
-        canResendInvite: loginsHere && hasLogin && m.login_given_at !== null,
-        otherLeads: [...(leadsOf.get(m.id) ?? [])].sort((a, b) => a.localeCompare(b, "en")),
+    .map((m) =>
+      personOf(m, everyone, {
+        ownerOnly,
+        leaderTitle: row.leader_title,
         leadsHere: leadIds.has(m.id),
-        leadsDomain: role === "leader" ? (ledAboveByRow(m)?.name ?? null) : null,
-      };
-    })
+        leadsDomain: asRole(m.role) === "leader" ? (ledAboveByRow(m)?.name ?? null) : null,
+      }),
+    )
     .sort(byName);
 
-  // Not whoever sits in the organisation either: only the project owner moves them.
-  const organisationId = teams.find((t) => t.kind === "organisation")?.id;
-  const candidates: Candidate[] = members
+  // Not whoever sits in the organisation either: only the project owner moves them. Nor anyone
+  // removed from Module One (from here on, every list leaves them out).
+  const { organisationId } = everyone;
+  const candidates: Candidate[] = everyone.current
     .filter(
       (m) =>
         !ownerOnly &&
@@ -295,13 +315,13 @@ export function buildTeamView({
   };
   const leadPeople: LeadPerson[] = [...leadIds]
     .map((id) => memberById.get(id))
-    .filter((m): m is MemberRow => m !== undefined)
+    .filter((m): m is MemberRow => m !== undefined && m.removed_at === null)
     .map(asLead)
     .sort(byName);
 
   // Each person once: someone with a lead row here is listed with it (so it can be removed);
   // someone who sits here and also leads a node above, as sitting here (with that node said).
-  const ownLeaders: OwnLeader[] = members
+  const ownLeaders: OwnLeader[] = everyone.current
     .filter((m) => m.team_id === teamId && m.role === "leader" && !leadIds.has(m.id))
     .map((m) => {
       const via = ledAboveByRow(m);
@@ -309,7 +329,7 @@ export function buildTeamView({
     })
     .sort(byName);
 
-  const inheritedLeads: InheritedLead[] = members
+  const inheritedLeads: InheritedLead[] = everyone.current
     .filter((m) => m.role === "leader" && !leadIds.has(m.id) && m.team_id !== teamId)
     .flatMap((m) => {
       const via = ledAbove(m);
@@ -321,7 +341,7 @@ export function buildTeamView({
   // Leaders only (the database refuses anyone else), never the admin (RLS refuses that too), and
   // not someone who already leads this node: through team_leads, by sitting in it, or through a
   // node above it.
-  const leadOptions: LeadPerson[] = members
+  const leadOptions: LeadPerson[] = everyone.current
     .filter(
       (m) =>
         !ownerOnly &&
@@ -335,4 +355,130 @@ export function buildTeamView({
     .sort(byName);
 
   return { team, crumbs, people, candidates, ownLeaders, leads: leadPeople, inheritedLeads, leadOptions };
+}
+
+// ---------- people, wherever they're listed ----------
+
+type PeopleContext = {
+  adminMemberId: string;
+  current: MemberRow[]; // everyone not removed from Module One
+  memberById: Map<string, MemberRow>; // everyone, removed too (to name who gave a login)
+  holdsGrants: Set<string>;
+  leadsOf: Map<string, string[]>; // the names of the nodes each person has a lead row for
+  organisationId: string | undefined;
+  leadsOrganisation: Set<string>; // lead rows on the organisation node
+};
+
+function peopleContext({
+  adminMemberId,
+  teams,
+  members,
+  leads,
+  grants,
+}: {
+  adminMemberId: string;
+  teams: readonly TeamRow[];
+  members: readonly MemberRow[];
+  leads: readonly LeadRow[];
+  grants: readonly GrantRow[];
+}): PeopleContext {
+  const teamName = new Map(teams.map((t) => [t.id, t.name]));
+  const leadsOf = new Map<string, string[]>();
+  for (const lead of leads) {
+    const name = teamName.get(lead.team_id);
+    if (name === undefined) continue;
+    leadsOf.set(lead.member_id, [...(leadsOf.get(lead.member_id) ?? []), name]);
+  }
+  const organisationId = teams.find((t) => t.kind === "organisation")?.id;
+  return {
+    adminMemberId,
+    current: members.filter((m) => m.removed_at === null),
+    memberById: new Map(members.map((m) => [m.id, m])),
+    holdsGrants: new Set(grants.map((g) => g.member_id)),
+    leadsOf,
+    organisationId,
+    leadsOrganisation: new Set(leads.filter((l) => l.team_id === organisationId).map((l) => l.member_id)),
+  };
+}
+
+// One person's row. `here`: what depends on the node they're listed under (none for No team).
+function personOf(
+  m: MemberRow,
+  context: PeopleContext,
+  here: { ownerOnly: boolean; leaderTitle: string | null; leadsHere: boolean; leadsDomain: string | null },
+): Person {
+  const { adminMemberId, memberById, holdsGrants, leadsOf, organisationId, leadsOrganisation } = context;
+  const role = asRole(m.role);
+  const loginsHere = isEditableMember({ id: m.id, role }, adminMemberId);
+  const hasLogin = m.auth_user_id !== null;
+  const nameOf = (id: string | null) => (id ? (memberById.get(id)?.name ?? null) : null);
+  const ownerKeeps = !loginsHere
+    ? null
+    : holdsGrants.has(m.id)
+      ? "grants"
+      : (organisationId !== undefined && m.team_id === organisationId) || leadsOrganisation.has(m.id)
+        ? "organisation"
+        : null;
+  const canRemove = loginsHere && !here.ownerOnly && ownerKeeps === null;
+  return {
+    id: m.id,
+    name: m.name,
+    role,
+    roleLabel: roleLabel(role),
+    title: role === "member" ? null : here.leaderTitle,
+    isSelf: m.id === adminMemberId,
+    editable: !here.ownerOnly && loginsHere,
+    hasLogin,
+    // A login deleted in the Supabase dashboard leaves login_given_* behind; don't show it.
+    loginGiven: hasLogin ? loginGivenText(nameOf(m.login_given_by), m.login_given_at) : null,
+    canGiveLogin: loginsHere && !hasLogin && !holdsGrants.has(m.id),
+    ownerGivesLogin: loginsHere && !hasLogin && holdsGrants.has(m.id),
+    canResendInvite: loginsHere && hasLogin && m.login_given_at !== null,
+    emailChanged:
+      hasLogin && changedSinceGiven(m)
+        ? emailChangedText(nameOf(m.login_email_changed_by), m.login_email_changed_at)
+        : null,
+    canChangeEmail: canRemove && hasLogin,
+    canRemove,
+    ownerKeeps,
+    otherLeads: [...(leadsOf.get(m.id) ?? [])].sort((a, b) => a.localeCompare(b, "en")),
+    leadsHere: here.leadsHere,
+    leadsDomain: here.leadsDomain,
+  };
+}
+
+// Whether the recorded email change is about the login they have now: a login given after it (once
+// the earlier one was deleted in the dashboard) has had no change yet. The record stays either way.
+function changedSinceGiven(m: Pick<MemberRow, "login_given_at" | "login_email_changed_at">): boolean {
+  if (m.login_email_changed_at === null) return false;
+  if (m.login_given_at === null) return true;
+  const changed = Date.parse(m.login_email_changed_at);
+  const given = Date.parse(m.login_given_at);
+  return !Number.isFinite(changed) || !Number.isFinite(given) || changed >= given;
+}
+
+// Everyone who sits in no node (and wasn't removed), for the Structure page's No team panel: their
+// logins, Change email and Remove from Module One. Placing them is done by dragging, so no role or
+// team controls (editable is false).
+export function buildNoTeamPeople({
+  adminMemberId,
+  teams,
+  members,
+  leads,
+  grants = [],
+}: {
+  adminMemberId: string;
+  teams: readonly TeamRow[];
+  members: readonly MemberRow[];
+  leads: readonly LeadRow[];
+  grants?: readonly GrantRow[];
+}): Person[] {
+  const context = peopleContext({ adminMemberId, teams, members, leads, grants });
+  return context.current
+    .filter((m) => m.team_id === null)
+    .map((m) => ({
+      ...personOf(m, context, { ownerOnly: false, leaderTitle: null, leadsHere: false, leadsDomain: null }),
+      editable: false,
+    }))
+    .sort(byName);
 }

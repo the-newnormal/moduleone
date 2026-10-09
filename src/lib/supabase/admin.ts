@@ -4,8 +4,9 @@ import { createClient } from "@supabase/supabase-js";
 // THE ONLY SERVICE-ROLE CLIENT. It bypasses RLS entirely, so only the files listed in
 // admin-imports.test.ts may import it, which fails if anything else does:
 // - the admin team page's actions (src/app/admin/teams/[id]/actions.ts), where giveLogin invites an
-//   email and links the new login to a member row, and resendInvite re-sends an unused invite, each
-//   after checking, as the signed-in admin, that it may;
+//   email and links the new login to a member row, resendInvite re-sends an unused invite,
+//   changeEmail changes the address a login signs in with, and removePerson deletes the login of
+//   someone removed from Module One, each after checking, as the signed-in admin, that it may;
 // - the check-in's server code (src/app/portal/checkin/actions.ts and housekeeping.ts,
 //   src/lib/checkin/process.ts), which writes recordings, drafts, transcripts and scores for the
 //   member it takes from the session, never from the request (members only read; CLAUDE.md);

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Candidate, InheritedLead, LeadPerson, OwnLeader, Person, TeamSummary } from "@/app/admin/teams/[id]/team-view";
 import { Dialog } from "@/components/ui/dialog";
 import { AddPeoplePanel } from "./add-people-dialog";
+import { ChangeEmailForm } from "./change-email-dialog";
 import { EditTeamForm, savedForm } from "./edit-team-dialog";
 import { GiveLoginForm } from "./give-login-dialog";
 import { AddLeadPanel, LeadsSection } from "./leads-section";
@@ -20,6 +21,8 @@ const actions = {
   addLead: vi.fn(ok),
   removeLead: vi.fn(ok),
   updateNode: vi.fn(ok),
+  changeEmail: vi.fn(async () => ({ ok: true as const, value: { invited: false } })),
+  removePerson: vi.fn(async () => ({ ok: true as const, value: { outcome: "removed" as const, loginKept: false } })),
 };
 
 const TEAM: TeamSummary = {
@@ -73,6 +76,10 @@ const person = (id: string, name: string, changes: Partial<Person> = {}): Person
   canGiveLogin: false,
   ownerGivesLogin: false,
   canResendInvite: false,
+  emailChanged: null,
+  canChangeEmail: false,
+  canRemove: false,
+  ownerKeeps: null,
   otherLeads: [],
   leadsHere: false,
   leadsDomain: null,
@@ -193,6 +200,80 @@ describe("PeopleSection", () => {
     expect(row(html, "Gus Tay")).not.toContain("Give login (");
   });
 
+  it("offers Change email only where it's allowed, and Remove from Module One only where it's allowed", () => {
+    const html = render(TEAM, [
+      person("m-mei", "Mei Wong", { hasLogin: true, canChangeEmail: true, canRemove: true }),
+      person("m-zed", "Zed Ong", { canGiveLogin: true, canRemove: true }),
+      person("m-leo", "Leo Tan", { role: "leader", roleLabel: "Leader", hasLogin: true }),
+    ]);
+    expect(row(html, "Mei Wong")).toContain("Change email (Mei Wong)");
+    expect(row(html, "Mei Wong")).toContain("Remove from Module One (Mei Wong)");
+    expect(row(html, "Zed Ong")).not.toContain("Change email");
+    expect(row(html, "Zed Ong")).toContain("Remove from Module One (Zed Ong)");
+    expect(row(html, "Leo Tan")).not.toMatch(/Change email|Remove from Module One/);
+    expect(row(html, "Leo Tan")).toContain("Remove from team (Leo Tan)");
+    expect(count(html, />Change email<span class="sr-only">/g)).toBe(1);
+    expect(count(html, />Remove from Module One<span class="sr-only">/g)).toBe(2);
+  });
+
+  it("says only the project owner changes the sign-in email of, or removes, someone who holds grants", () => {
+    const html = render(TEAM, [
+      person("m-gus", "Gus Tay", { hasLogin: true, ownerKeeps: "grants" }),
+      person("m-ivy", "Ivy Ho", { ownerKeeps: "grants", ownerGivesLogin: true }),
+    ]);
+    expect(row(html, "Gus Tay")).toContain(
+      "Can sign in They hold grants, so only the project owner can change their sign-in email or remove them.",
+    );
+    expect(row(html, "Ivy Ho")).toContain(
+      "No login yet They hold grants, so the project owner gives them a login. Only the project owner can remove them.",
+    );
+    for (const name of ["Gus Tay", "Ivy Ho"]) {
+      expect(row(html, name)).not.toMatch(/Change email|Remove from Module One|Give login \(/);
+      expect(row(html, name).match(/They hold grants/g)).toHaveLength(1);
+    }
+  });
+
+  it("says only the project owner changes the sign-in email of, or removes, someone who leads the organisation, except on the organisation's own page", () => {
+    const note = "They lead the organisation, so only the project owner can change their sign-in email or remove them.";
+    const vee = person("m-vp", "Vee Pang", { role: "leader", roleLabel: "Leader", hasLogin: true, ownerKeeps: "organisation" });
+    const html = render(DIVISION, [vee]);
+    expect(row(html, "Vee Pang")).toContain(note);
+    expect(row(html, "Vee Pang")).not.toMatch(/Change email|Remove from Module One/);
+    // There the page says it once for everyone.
+    const organisation = render({ ...TEAM, kind: "organisation", kindLabel: "Organisation" }, [{ ...vee, editable: false }]);
+    expect(text(organisation)).not.toContain(note);
+  });
+
+  it("says on the organisation's page that only the project owner changes its people's sign-in email or removes them", () => {
+    const html = render({ ...TEAM, kind: "organisation", kindLabel: "Organisation" }, [
+      person("m-vp", "Vee Pang", {
+        role: "leader",
+        roleLabel: "Leader",
+        editable: false,
+        hasLogin: true,
+        canResendInvite: true,
+        ownerKeeps: "organisation",
+      }),
+    ]);
+    expect(text(html)).toContain(
+      "Only the project owner places people in the organisation, changes their sign-in email or removes them, since whoever sits here sees the check-ins of every division.",
+    );
+    expect(row(html, "Vee Pang")).toBe("Vee Pang Leader Can sign in Resend invite (Vee Pang)");
+  });
+
+  it("says who changed someone's sign-in email and when, after who gave the login", () => {
+    const html = render(TEAM, [
+      person("m-mei", "Mei Wong", {
+        hasLogin: true,
+        loginGiven: "Login given by Hana Lim on 1 Oct 2026",
+        emailChanged: "Sign-in email changed by Ada Boss on 9 Oct 2026",
+      }),
+    ]);
+    expect(row(html, "Mei Wong")).toContain(
+      "Can sign in Login given by Hana Lim on 1 Oct 2026 Sign-in email changed by Ada Boss on 9 Oct 2026",
+    );
+  });
+
   it("says 'domain' on a domain's page", () => {
     expect(row(render(DOMAIN), "Zed Ong")).toContain("Remove from domain (Zed Ong)");
   });
@@ -258,6 +339,27 @@ describe("GiveLoginForm", () => {
     expect(text(html)).toContain("Give Zed Ong a login");
     expect(text(html)).toContain("a link that signs in as Zed Ong. Use an address only they read.");
     expect(text(html)).toContain("Send invite");
+  });
+});
+
+describe("ChangeEmailForm", () => {
+  it("asks only for the new address, and says who can sign in with it and what happens to an unused invite", () => {
+    const html = inDialog(
+      <ChangeEmailForm person={{ id: "m-mei", name: "Mei Wong" }} changeEmail={actions.changeEmail} onDone={() => {}} />,
+    );
+    // The page never knows their current address, so there's nothing to show or prefill.
+    expect(html).toMatch(/<label[^>]*for="([^"]+)"[^>]*>New email address<\/label><input[^>]*type="email"[^>]*id="\1"/);
+    expect(count(html, /<input/g)).toBe(1);
+    expect(html).toMatch(/<input[^>]*value=""/);
+    expect(text(html)).toContain("Change Mei Wong's sign-in email");
+    expect(text(html)).toContain("Use an address only they read: whoever reads it can sign in as Mei Wong.");
+    expect(text(html)).toContain(
+      "If they've used their login already (or it was set up ready to use), nobody is emailed about the change, so tell them yourself; they stay signed in where they are.",
+    );
+    expect(text(html)).toContain(
+      "If they're still waiting to use their invite, a new one goes to the new address and the old one stops working.",
+    );
+    expect(text(html)).toMatch(/Cancel Change email$/);
   });
 });
 

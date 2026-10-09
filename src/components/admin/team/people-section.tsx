@@ -3,16 +3,23 @@
 import Link from "next/link";
 import { useId, useState } from "react";
 import type { Candidate, Person, TeamSummary } from "@/app/admin/teams/[id]/team-view";
-import { demoteDescription, promoteDescription, removeDescription } from "@/app/admin/teams/[id]/team-view";
+import {
+  demoteDescription,
+  promoteDescription,
+  removeDescription,
+  removePersonDescription,
+} from "@/app/admin/teams/[id]/team-view";
 import { Badge } from "@/components/ui/badge";
+import type { Removal } from "@/app/admin/teams/[id]/actions";
 import { AddPeopleDialog } from "./add-people-dialog";
+import { ChangeEmailDialog } from "./change-email-dialog";
 import { ConfirmButton } from "./confirm-button";
 import { GiveLoginDialog } from "./give-login-dialog";
 import type { TeamActions } from "./types";
 
-type PeopleActions = Pick<
+export type PeopleActions = Pick<
   TeamActions,
-  "addMember" | "createMember" | "giveLogin" | "resendInvite" | "removeFromTeam" | "setRole"
+  "addMember" | "createMember" | "giveLogin" | "resendInvite" | "removeFromTeam" | "setRole" | "changeEmail" | "removePerson"
 >;
 
 type Props = {
@@ -42,8 +49,8 @@ export function PeopleSection({ team, people, candidates, actions }: Props) {
       </div>
       {team.kind === "organisation" && (
         <p className="text-sm text-muted-foreground">
-          Only the project owner places people in the organisation, since whoever sits here sees the check-ins of
-          every division.
+          Only the project owner places people in the organisation, changes their sign-in email or removes them,
+          since whoever sits here sees the check-ins of every division.
         </p>
       )}
       {team.archived && (
@@ -58,7 +65,8 @@ export function PeopleSection({ team, people, candidates, actions }: Props) {
       {people.length === 0 ? (
         <p className="text-muted-foreground">Nobody is in this {noun} yet.</p>
       ) : (
-        <ul className="divide-y">
+        // Rows lay out by the list's width, not the window's: the Structure side panel is narrow.
+        <ul className="@container divide-y">
           {people.map((person) => (
             <PersonRow
               key={person.id}
@@ -78,16 +86,30 @@ export function PeopleSection({ team, people, candidates, actions }: Props) {
   );
 }
 
-function PersonRow({
+// What Remove from Module One says it did.
+export function removedMessage(name: string, { outcome, loginKept }: Removal): string {
+  const done =
+    outcome === "deleted"
+      ? `Removed ${name} from Module One. They had nothing recorded, so they're deleted completely.`
+      : `Removed ${name} from Module One. Anything they recorded stays.`;
+  return loginKept
+    ? `${done} Their login couldn't be fully cleaned up: it opens nothing now, and the project owner can finish in Supabase.`
+    : done;
+}
+
+// One person, with what an admin may change about them. team: the node they're listed under, or
+// null in the Structure page's No team panel (rows there aren't editable: they're placed by
+// dragging).
+export function PersonRow({
   team,
   person,
   actions,
   onDone,
   heading,
 }: {
-  team: TeamSummary;
+  team: TeamSummary | null;
   person: Person;
-  actions: PeopleActions;
+  actions: Pick<PeopleActions, "giveLogin" | "resendInvite" | "removeFromTeam" | "setRole" | "changeEmail" | "removePerson">;
   onDone: (message: string) => void;
   heading: string; // where focus goes when a change takes this row's button away
 }) {
@@ -95,9 +117,10 @@ function PersonRow({
   const leader = person.role === "leader";
   // Each button says whose it is, for screen readers.
   const who = <span className="sr-only"> ({name})</span>;
+  const editable = person.editable && team !== null;
 
   return (
-    <li className="grid gap-3 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+    <li className="grid gap-3 py-3 @3xl:grid-cols-[minmax(0,1fr)_auto] @3xl:items-center">
       <div className="grid min-w-0 gap-1">
         <p className="font-medium break-words">
           {name}
@@ -109,15 +132,23 @@ function PersonRow({
           <span>{person.hasLogin ? "Can sign in" : "No login yet"}</span>
         </p>
         {person.loginGiven && <p className="text-xs text-muted-foreground">{person.loginGiven}</p>}
-        {person.ownerGivesLogin && (
+        {person.emailChanged && <p className="text-xs text-muted-foreground">{person.emailChanged}</p>}
+        {(person.ownerKeeps === "grants" || person.ownerGivesLogin) && (
           <p className="text-xs text-muted-foreground">
-            They hold grants, so the project owner gives them a login.
+            {person.hasLogin
+              ? "They hold grants, so only the project owner can change their sign-in email or remove them."
+              : "They hold grants, so the project owner gives them a login. Only the project owner can remove them."}
+          </p>
+        )}
+        {person.ownerKeeps === "organisation" && team?.kind !== "organisation" && (
+          <p className="text-xs text-muted-foreground">
+            They lead the organisation, so only the project owner can change their sign-in email or remove them.
           </p>
         )}
       </div>
 
-      {(person.editable || person.canGiveLogin || person.canResendInvite) && (
-        <div className="flex flex-wrap gap-2 sm:justify-end">
+      {(editable || person.canGiveLogin || person.canResendInvite || person.canChangeEmail || person.canRemove) && (
+        <div className="flex flex-wrap gap-2 @3xl:justify-end">
           {person.canGiveLogin && (
             <GiveLoginDialog person={person} giveLogin={actions.giveLogin} onDone={onDone} focusAfter={heading} />
           )}
@@ -136,7 +167,8 @@ function PersonRow({
               onDone={() => onDone(`Sent ${name} a new invite.`)}
             />
           )}
-          {!person.editable ? null : leader ? (
+          {person.canChangeEmail && <ChangeEmailDialog person={person} changeEmail={actions.changeEmail} onDone={onDone} />}
+          {!editable || team === null ? null : leader ? (
             // Everyone placed here leads it (0006): move them out to make them a member.
             !team.everyoneLeads && (
             <ConfirmButton
@@ -160,7 +192,7 @@ function PersonRow({
               onDone={() => onDone(`${name} is a leader now.`)}
             />
           )}
-          {person.editable && (
+          {editable && team !== null && (
             <ConfirmButton
               label={
                 <>
@@ -175,6 +207,20 @@ function PersonRow({
               run={() => actions.removeFromTeam(team.id, person.id)}
               context="removeFromTeam"
               onDone={() => onDone(`Removed ${name} from ${team.name}.`)}
+              focusAfter={heading}
+            />
+          )}
+          {person.canRemove && (
+            <ConfirmButton
+              label={<>Remove from Module One{who}</>}
+              title={`Remove ${name} from Module One?`}
+              description={removePersonDescription(person, team)}
+              confirmLabel="Remove from Module One"
+              pendingLabel="Removing…"
+              destructive
+              run={() => actions.removePerson(person.id)}
+              context="removePerson"
+              onDone={(removal) => onDone(removedMessage(name, removal))}
               focusAfter={heading}
             />
           )}

@@ -23,13 +23,15 @@ export type DbError = {
   status?: number | null;
 };
 
-// 0003's own 42501 sentences. Any other 42501 is RLS or a missing grant, worded by Postgres.
+// The migrations' own 42501 sentences. Any other 42501 is RLS or a missing grant, worded by Postgres.
 const OWN_PERMISSION_MESSAGES = new Set([
   "Only admins can move teams.",
   "You lead where this is going, so another admin has to move it there.",
   // Migration 0006: only the project owner staffs the organisation node.
   "Only the project owner can place people in the organisation itself.",
   "Only the project owner can make someone a lead of the organisation itself.",
+  // Migration 0009's admin_remove_member.
+  "Only admins can remove people.",
 ]);
 
 // Table check constraints (as opposed to the triggers' sentences) fail with Postgres's wording,
@@ -47,6 +49,8 @@ const CONSTRAINT_MESSAGES: Record<string, string> = {
   teams_division_at_top: "A division can only sit at the top level.",
   teams_team_has_parent: "A team can only sit under a domain.",
   members_role_chk: "That role doesn't exist.",
+  // Migration 0009: a removed person never signs in, sits anywhere or leads anything.
+  members_removed_cleared: "This person was removed from Module One. Reload the page.",
   scoring_activity_order: "A better activity score can't count for less than a worse one.",
   scoring_excellence_order: "A better excellence score can't count for less than a worse one.",
   scoring_morale_order: "A better morale score can't count for less than a worse one.",
@@ -69,7 +73,7 @@ export function logError(context: string, error: unknown): void {
 // The sentence to show for a failed Supabase call:
 // - 23514 (check_violation) and P0002 (0003's "That team doesn't exist."): the database's own
 //   message, or for a table check constraint, the sentence above;
-// - 42501: 0003's own sentences as they are, anything else "You don't have permission to do that.";
+// - 42501: the migrations' own sentences as they are, anything else "You don't have permission to do that.";
 // - 23505 on teams_code_key: "That code is already used.";
 // - anything else (25000, network errors, …): "Something went wrong. Try again.", logged with
 //   code and status under `context`.

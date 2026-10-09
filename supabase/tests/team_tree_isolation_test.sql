@@ -4,7 +4,7 @@
 -- file's transaction is REPEATABLE READ on purpose; team_tree_test.sql covers READ COMMITTED.
 -- Fixture ids: a2… logins, c2… members. Everything is rolled back.
 begin isolation level repeatable read;
-select plan(10);
+select plan(11);
 
 select is(current_setting('transaction_isolation'), 'repeatable read', 'this file runs at REPEATABLE READ');
 
@@ -54,6 +54,10 @@ set local request.jwt.claims to '{"sub": "a2000000-0000-4000-8000-000000000001",
 select is(
   pg_temp.error_of($$select admin_move_team((select id from teams where code = 'IP.2'), (select id from teams where code = 'IP.X'), 0)$$),
   '25000: Change the team tree in a READ COMMITTED transaction.', 'an admin''s move is refused (by the tree trigger, before anything is renumbered)'
+);
+select is(
+  pg_temp.error_of($$select admin_remove_member('c2000000-0000-4000-8000-000000000002')$$),
+  '25000: Change the team tree in a READ COMMITTED transaction.', 'so is an admin''s removal of someone (admin_remove_member checks first)'
 );
 reset role;
 

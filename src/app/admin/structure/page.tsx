@@ -2,10 +2,12 @@ import type { Metadata } from "next";
 import {
   addLead,
   addMember,
+  changeEmail,
   createMember,
   giveLogin,
   removeFromTeam,
   removeLead,
+  removePerson,
   resendInvite,
   setRole,
 } from "@/app/admin/teams/[id]/actions";
@@ -64,7 +66,18 @@ export default async function StructurePage() {
         grants={grants.data as unknown as GrantRow[]}
         adminMemberId={memberId}
         actions={{ moveNode, createNode, updateNode, archiveNode, restoreNode }}
-        teamActions={{ addMember, createMember, giveLogin, resendInvite, removeFromTeam, setRole, addLead, removeLead }}
+        teamActions={{
+          addMember,
+          createMember,
+          giveLogin,
+          resendInvite,
+          removeFromTeam,
+          setRole,
+          addLead,
+          removeLead,
+          changeEmail,
+          removePerson,
+        }}
       />
     </>
   );

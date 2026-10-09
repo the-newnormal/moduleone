@@ -18,13 +18,14 @@ import { type ActionResult, settle } from "@/lib/admin/errors";
 
 // A button that asks first, then runs a server action. The dialog stays open while it runs (it
 // can't be closed meanwhile) and shows the refusal if there is one; on success it closes and calls
-// onDone. Focus then goes back to the button, or to `focusAfter` (a selector) when the success
-// takes the button away (the row it was in is gone).
-export function ConfirmButton({
+// onDone with what the action answered. Focus then goes back to the button, or to `focusAfter` (a
+// selector) when the success takes the button away (the row it was in is gone).
+export function ConfirmButton<T = null>({
   label,
   title,
   description,
   confirmLabel,
+  pendingLabel = "Saving…",
   destructive = false,
   run,
   context,
@@ -35,10 +36,11 @@ export function ConfirmButton({
   title: string;
   description: ReactNode;
   confirmLabel: string;
+  pendingLabel?: string; // the confirm button's text while the action runs
   destructive?: boolean;
-  run: () => Promise<ActionResult>;
+  run: () => Promise<ActionResult<T>>;
   context: string; // the server action's name, for the log if it throws
-  onDone?: () => void;
+  onDone?: (value: T) => void;
   focusAfter?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -54,7 +56,7 @@ export function ConfirmButton({
         if (result.ok) {
           succeeded.current = true;
           setOpen(false);
-          onDone?.();
+          onDone?.(result.value);
         } else {
           setError(result.error);
         }
@@ -97,7 +99,7 @@ export function ConfirmButton({
             disabled={pending}
             onClick={confirm}
           >
-            {pending ? "Saving…" : confirmLabel}
+            {pending ? pendingLabel : confirmLabel}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>

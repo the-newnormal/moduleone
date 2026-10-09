@@ -6,5 +6,14 @@ import type * as TeamPageActions from "@/app/admin/teams/[id]/actions";
 // Type-only: nothing here is bundled.
 export type TeamActions = Pick<
   typeof TeamPageActions,
-  "addMember" | "createMember" | "removeFromTeam" | "setRole" | "addLead" | "removeLead" | "giveLogin" | "resendInvite"
+  | "addMember"
+  | "createMember"
+  | "removeFromTeam"
+  | "setRole"
+  | "addLead"
+  | "removeLead"
+  | "giveLogin"
+  | "resendInvite"
+  | "changeEmail"
+  | "removePerson"
 > & { updateNode: typeof updateNode };

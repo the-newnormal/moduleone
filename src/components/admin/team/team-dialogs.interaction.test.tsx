@@ -4,9 +4,10 @@
 // button that had it goes away.
 import { act } from "react";
 import { describe, expect, it, vi } from "vitest";
+import type { Removal } from "@/app/admin/teams/[id]/actions";
 import type { Candidate, LeadPerson, Person, TeamSummary } from "@/app/admin/teams/[id]/team-view";
 import type { ActionResult } from "@/lib/admin/errors";
-import { button, click, deferred, dialog, press, queryButton, render, settle, text } from "@/test/dom";
+import { button, click, deferred, dialog, labelled, press, queryButton, render, settle, text, type } from "@/test/dom";
 import { AddPeopleDialog } from "./add-people-dialog";
 import { ConfirmButton } from "./confirm-button";
 import { EditTeamDialog } from "./edit-team-dialog";
@@ -41,6 +42,10 @@ const person = (id: string, name: string, changes: Partial<Person> = {}): Person
   canGiveLogin: true,
   ownerGivesLogin: false,
   canResendInvite: false,
+  emailChanged: null,
+  canChangeEmail: false,
+  canRemove: false,
+  ownerKeeps: null,
   otherLeads: [],
   leadsHere: false,
   leadsDomain: null,
@@ -56,6 +61,8 @@ const peopleActions = (changes = {}) => ({
   resendInvite: vi.fn(ok),
   removeFromTeam: vi.fn(ok),
   setRole: vi.fn(ok),
+  changeEmail: vi.fn(async () => ({ ok: true as const, value: { invited: false } })),
+  removePerson: vi.fn(async () => ({ ok: true as const, value: { outcome: "removed" as const, loginKept: false } })),
   ...changes,
 });
 
@@ -106,6 +113,26 @@ describe("ConfirmButton", () => {
     expect(dialog()).toBeNull();
     expect(onDone).toHaveBeenCalledOnce();
     expect(document.activeElement?.id).toBe("heading");
+  });
+
+  it("hands onDone what the action answered", async () => {
+    const onDone = vi.fn();
+    const run = async (): Promise<ActionResult<Removal>> => ({ ok: true, value: { outcome: "deleted", loginKept: true } });
+    await render(
+      <ConfirmButton label="Remove" title="Remove Zed?" description="Sure?" confirmLabel="Yes, remove" run={run} context="test" onDone={onDone} />,
+    );
+    await click(button("Remove"));
+    await click(button("Yes, remove"));
+    expect(onDone).toHaveBeenCalledExactlyOnceWith({ outcome: "deleted", loginKept: true });
+  });
+
+  it("doesn't call onDone when the action refuses", async () => {
+    const onDone = vi.fn();
+    await renderButton(refuse("No."), { onDone });
+    await click(button("Remove"));
+    await click(button("Yes, remove"));
+    expect(text(dialog()!)).toContain("No.");
+    expect(onDone).not.toHaveBeenCalled();
   });
 });
 
@@ -168,6 +195,175 @@ describe("PeopleSection", () => {
     await render(<PeopleSection team={TEAM} people={[leo]} candidates={[]} actions={peopleActions()} />);
     await click(button("Make member (Leo Tan)"));
     expect(text(dialog()!)).toContain("and will no longer lead IP Lab 2.");
+  });
+});
+
+describe("PeopleSection: Remove from Module One", () => {
+  const ADA = person("m-ada", "Ada Ng", { hasLogin: true, canGiveLogin: false, canChangeEmail: true, canRemove: true });
+  const ZED = person("m-zed", "Zed Ong");
+  const status = () => text(document.querySelector('[role="status"]')!);
+
+  it("asks first, saying what stays, then puts focus on the People heading once their row goes", async () => {
+    const actions = peopleActions();
+    const page = await render(<PeopleSection team={TEAM} people={[ADA, ZED]} candidates={[]} actions={actions} />);
+    await click(button("Remove from Module One (Ada Ng)"));
+    // What the dialog is named and described by, as a screen reader reads it.
+    const said = (by: "aria-labelledby" | "aria-describedby") => text(document.getElementById(dialog()!.getAttribute(by)!)!);
+    expect(said("aria-labelledby")).toBe("Remove Ada Ng from Module One?");
+    expect(said("aria-describedby")).toBe(
+      "Ada Ng won't be able to sign in any more. They leave IP Lab 1. Anything they recorded stays, so past weeks on " +
+        "the heat-map don't change. This can't be undone here.",
+    );
+    expect(button("Remove from Module One").getAttribute("data-variant")).toBe("destructive");
+    expect(actions.removePerson).not.toHaveBeenCalled();
+
+    await click(button("Remove from Module One"));
+    // The server action re-renders the page without Ada.
+    await page.rerender(<PeopleSection team={TEAM} people={[ZED]} candidates={[]} actions={actions} />);
+    await frames();
+    expect(actions.removePerson).toHaveBeenCalledExactlyOnceWith("m-ada");
+    expect(dialog()).toBeNull();
+    expect(text(document.activeElement!)).toBe("People (1)");
+    expect(status()).toBe("Removed Ada Ng from Module One. Anything they recorded stays.");
+  });
+
+  it("tells someone without a login they may be deleted completely, without saying they'll stop signing in", async () => {
+    await render(<PeopleSection team={TEAM} people={[{ ...ZED, canRemove: true }]} candidates={[]} actions={peopleActions()} />);
+    await click(button("Remove from Module One (Zed Ong)"));
+    expect(text(dialog()!)).toContain("If they've never had a login and left nothing behind, they're deleted completely.");
+    expect(text(dialog()!)).not.toContain("sign in");
+  });
+
+  it.each([
+    ["kept with what they recorded", { outcome: "removed", loginKept: false }, "Removed Ada Ng from Module One. Anything they recorded stays."],
+    [
+      "deleted, having nothing recorded",
+      { outcome: "deleted", loginKept: false },
+      "Removed Ada Ng from Module One. They had nothing recorded, so they're deleted completely.",
+    ],
+    [
+      "kept, but their login couldn't be fully cleaned up",
+      { outcome: "removed", loginKept: true },
+      "Removed Ada Ng from Module One. Anything they recorded stays. Their login couldn't be fully cleaned up: it opens " +
+        "nothing now, and the project owner can finish in Supabase.",
+    ],
+  ] as const)("says what removing did (%s)", async (_label, removal, message) => {
+    const actions = peopleActions({ removePerson: vi.fn(async (): Promise<ActionResult<Removal>> => ({ ok: true, value: removal })) });
+    await render(<PeopleSection team={TEAM} people={[ADA]} candidates={[]} actions={actions} />);
+    await click(button("Remove from Module One (Ada Ng)"));
+    await click(button("Remove from Module One"));
+    expect(status()).toBe(message);
+  });
+
+  it("says Removing… while it runs, can't be closed meanwhile, and keeps a refusal in the dialog", async () => {
+    const answer = deferred<ActionResult<Removal>>();
+    const actions = peopleActions({ removePerson: vi.fn(() => answer.promise) });
+    await render(<PeopleSection team={TEAM} people={[ADA]} candidates={[]} actions={actions} />);
+    await click(button("Remove from Module One (Ada Ng)"));
+    await click(button("Remove from Module One"));
+    expect(button("Removing…").disabled).toBe(true);
+    expect(button("Cancel").disabled).toBe(true);
+    await press(dialog()!, "Escape");
+    expect(dialog()).not.toBeNull();
+
+    const refusal = "This person holds grants (such as admin), so only the project owner can remove them.";
+    await act(async () => answer.resolve({ ok: false, error: refusal }));
+    expect(text(dialog()!)).toContain(refusal);
+    expect(button("Remove from Module One").disabled).toBe(false);
+    expect(status()).toBe("");
+    // Their row is still there; closing the dialog leaves it be.
+    await press(dialog()!, "Escape");
+    expect(dialog()).toBeNull();
+    expect(button("Remove from Module One (Ada Ng)")).toBeDefined();
+  });
+});
+
+describe("PeopleSection: Change email", () => {
+  const ADA = person("m-ada", "Ada Ng", { hasLogin: true, canGiveLogin: false, canChangeEmail: true, canRemove: true });
+  const status = () => text(document.querySelector('[role="status"]')!);
+  const address = () => labelled<HTMLInputElement>("New email address");
+
+  it("says what's wrong with the address without asking the server", async () => {
+    const actions = peopleActions();
+    await render(<PeopleSection team={TEAM} people={[ADA]} candidates={[]} actions={actions} />);
+    await click(button("Change email (Ada Ng)"));
+    await click(button("Change email"));
+    expect(text(dialog()!)).toContain("Enter an email address.");
+
+    await type(address(), "ada@example");
+    expect(text(dialog()!)).not.toContain("Enter an email address.");
+    await click(button("Change email"));
+    const error = "Enter an email address like name@example.com.";
+    expect(text(dialog()!)).toContain(error);
+    expect(address().getAttribute("aria-invalid")).toBe("true");
+    expect(text(document.getElementById(address().getAttribute("aria-describedby")!)!)).toBe(error);
+    expect(actions.changeEmail).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [false, "Ada Ng signs in with ada.ng@example.com from now on. Module One didn't email them."],
+    [true, "Sent Ada Ng a new invite at ada.ng@example.com. They sign in from the link in it."],
+  ])("sends the address as it will be saved, and says what happened (invited: %s)", async (invited, message) => {
+    const actions = peopleActions({ changeEmail: vi.fn(async () => ({ ok: true as const, value: { invited } })) });
+    await render(<PeopleSection team={TEAM} people={[ADA]} candidates={[]} actions={actions} />);
+    await click(button("Change email (Ada Ng)"));
+    await type(address(), "  Ada.Ng@Example.COM ");
+    await click(button("Change email"));
+    await frames();
+    expect(actions.changeEmail).toHaveBeenCalledExactlyOnceWith("m-ada", "ada.ng@example.com");
+    expect(dialog()).toBeNull();
+    expect(status()).toBe(message);
+    // Change email stays (they still have a login), so focus goes back to it.
+    expect(document.activeElement).toBe(button("Change email (Ada Ng)"));
+  });
+
+  it("says Changing… while it runs, can't be closed meanwhile, and keeps a refusal in the dialog", async () => {
+    const answer = deferred<ActionResult<{ invited: boolean }>>();
+    const actions = peopleActions({ changeEmail: vi.fn(() => answer.promise) });
+    await render(<PeopleSection team={TEAM} people={[ADA]} candidates={[]} actions={actions} />);
+    await click(button("Change email (Ada Ng)"));
+    await type(address(), "ada.ng@example.com");
+    await click(button("Change email"));
+    expect(button("Changing…").disabled).toBe(true);
+    expect(button("Cancel").disabled).toBe(true);
+    await press(dialog()!, "Escape");
+    expect(dialog()).not.toBeNull();
+
+    await act(async () => answer.resolve({ ok: false, error: "That email already has a login." }));
+    expect(text(dialog()!)).toContain("That email already has a login.");
+    expect(button("Change email").disabled).toBe(false);
+    expect(address().value).toBe("ada.ng@example.com");
+    expect(status()).toBe("");
+    await press(dialog()!, "Escape");
+    expect(dialog()).toBeNull();
+  });
+
+  it("drops an earlier refusal when the next address doesn't pass the field check", async () => {
+    const actions = peopleActions({ changeEmail: vi.fn(async () => ({ ok: false as const, error: "That email already has a login." })) });
+    await render(<PeopleSection team={TEAM} people={[ADA]} candidates={[]} actions={actions} />);
+    await click(button("Change email (Ada Ng)"));
+    await type(address(), "taken@example.com");
+    await click(button("Change email"));
+    expect(text(dialog()!)).toContain("That email already has a login.");
+    await type(address(), "ada@example");
+    await click(button("Change email"));
+    expect(text(dialog()!)).toContain("Enter an email address like name@example.com.");
+    expect(text(dialog()!)).not.toContain("That email already has a login.");
+    expect(actions.changeEmail).toHaveBeenCalledOnce();
+  });
+
+  it("starts afresh each time it opens", async () => {
+    await render(<PeopleSection team={TEAM} people={[ADA]} candidates={[]} actions={peopleActions()} />);
+    await click(button("Change email (Ada Ng)"));
+    await type(address(), "ada@example");
+    await click(button("Change email"));
+    expect(text(dialog()!)).toContain("Enter an email address like name@example.com.");
+    await press(dialog()!, "Escape");
+    expect(dialog()).toBeNull();
+
+    await click(button("Change email (Ada Ng)"));
+    expect(address().value).toBe("");
+    expect(text(dialog()!)).not.toContain("Enter an email address like name@example.com.");
   });
 });
 

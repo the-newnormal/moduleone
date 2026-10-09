@@ -12,10 +12,12 @@ import { updateNode } from "@/app/admin/structure/actions";
 import {
   addLead,
   addMember,
+  changeEmail,
   createMember,
   giveLogin,
   removeFromTeam,
   removeLead,
+  removePerson,
   resendInvite,
   setRole,
 } from "./actions";
@@ -36,8 +38,8 @@ export async function generateMetadata({ params }: PageProps<"/admin/teams/[id]"
   return { title: title(team ? team.name : "Team") };
 }
 
-// A division's, domain's or team's page ("clicking into the team name"): who is in it, who leads it, and
-// giving people logins. Read as the signed-in admin, who sees every team, member and lead (RLS).
+// A division's, domain's or team's page ("clicking into the team name"): who is in it, who leads it,
+// their logins, and removing people from Module One. Read as the signed-in admin, who sees every team, member and lead (RLS).
 export default async function TeamPage({ params }: PageProps<"/admin/teams/[id]">) {
   const { id: rawId } = await params;
   const { supabase, memberId } = await requireAdminPage(`/admin/teams/${encodeURIComponent(rawId)}`);
@@ -82,7 +84,7 @@ export default async function TeamPage({ params }: PageProps<"/admin/teams/[id]"
         team={view.team}
         people={view.people}
         candidates={view.candidates}
-        actions={{ addMember, createMember, giveLogin, resendInvite, removeFromTeam, setRole }}
+        actions={{ addMember, createMember, giveLogin, resendInvite, removeFromTeam, setRole, changeEmail, removePerson }}
       />
       <LeadsSection
         team={view.team}

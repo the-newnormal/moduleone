@@ -377,7 +377,7 @@ select throws_ok(
 );
 select throws_ok(
   $$delete from members where id = 'c0000000-0000-4000-8000-0000000000b3'$$,
-  '42501', null, 'admin cannot delete a member'
+  '42501', null, 'admin cannot delete a member directly'
 );
 select throws_ok(
   $$insert into member_grants (member_id, grant_name) values ('c0000000-0000-4000-8000-0000000000e1', 'recordings')$$,
