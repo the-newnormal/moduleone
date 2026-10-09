@@ -76,7 +76,7 @@ function CheckinCard({
             checkinId={checkin.id}
             memberName={checkin.memberName ?? "this team member"}
             hasRecording={checkin.hasRecording}
-            graded={graded}
+            awaitingGrader={checkin.awaitingGrader}
             currentWeek={manage.currentWeek}
           />
         )}

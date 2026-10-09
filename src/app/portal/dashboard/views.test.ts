@@ -243,6 +243,7 @@ describe("a team's week", () => {
       transcript: null,
       recording: null,
       hasRecording: false,
+      awaitingGrader: false,
     });
     vi.mocked(loadTeamWeek).mockResolvedValue({
       teamName: "IP Lab",
@@ -272,6 +273,7 @@ describe("a team's week, for a Master Admin", () => {
     transcript: null,
     recording: null,
     hasRecording,
+    awaitingGrader: !graded,
   });
   const drillIn = async (week: string) =>
     renderToStaticMarkup(
@@ -322,6 +324,7 @@ describe("a team's week, with two teams of the same name under it", () => {
       transcript: null,
       recording: null,
       hasRecording: false,
+      awaitingGrader: false,
     });
     vi.mocked(loadTeamWeek).mockResolvedValue({
       teamName: "IP Lab",

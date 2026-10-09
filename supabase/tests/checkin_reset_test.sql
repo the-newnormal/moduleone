@@ -6,8 +6,10 @@
 --   m2      member, ungraded check-in         m3  member, graded check-in last week, no recording
 --   hq      role hq, no team, no grants       admin  member, admin grant
 --   auditor member, recordings grant          outsider  signed in, but no members row
+--   m4      member, a scored check-in from before 0004 (never submitted through the app), with a
+--           recording
 begin;
-select plan(46);
+select plan(50);
 
 -- ---------- fixtures ----------
 insert into auth.users (id, email) values
@@ -18,7 +20,8 @@ insert into auth.users (id, email) values
   ('d7a00000-0000-4000-8000-000000000005', 'hq@reset.test'),
   ('d7a00000-0000-4000-8000-000000000006', 'admin@reset.test'),
   ('d7a00000-0000-4000-8000-000000000007', 'auditor@reset.test'),
-  ('d7a00000-0000-4000-8000-000000000008', 'outsider@reset.test');
+  ('d7a00000-0000-4000-8000-000000000008', 'outsider@reset.test'),
+  ('d7a00000-0000-4000-8000-000000000009', 'm4@reset.test');
 
 insert into teams (id, name) values ('d7b00000-0000-4000-8000-000000000001', 'Reset team T');
 
@@ -29,7 +32,8 @@ insert into members (id, auth_user_id, name, team_id, role) values
   ('d7c00000-0000-4000-8000-000000000004', 'd7a00000-0000-4000-8000-000000000004', 'm3',      'd7b00000-0000-4000-8000-000000000001', 'member'),
   ('d7c00000-0000-4000-8000-000000000005', 'd7a00000-0000-4000-8000-000000000005', 'hq',      null,                                   'hq'),
   ('d7c00000-0000-4000-8000-000000000006', 'd7a00000-0000-4000-8000-000000000006', 'admin',   null,                                   'member'),
-  ('d7c00000-0000-4000-8000-000000000007', 'd7a00000-0000-4000-8000-000000000007', 'auditor', null,                                   'member');
+  ('d7c00000-0000-4000-8000-000000000007', 'd7a00000-0000-4000-8000-000000000007', 'auditor', null,                                   'member'),
+  ('d7c00000-0000-4000-8000-000000000008', 'd7a00000-0000-4000-8000-000000000009', 'm4',      'd7b00000-0000-4000-8000-000000000001', 'member');
 
 insert into member_grants (member_id, grant_name) values
   ('d7c00000-0000-4000-8000-000000000006', 'admin'),
@@ -60,7 +64,9 @@ insert into checkins (id, member_id, week_start, audio_path, submitted_at, grade
   ('d7d00000-0000-4000-8000-000000000002', 'd7c00000-0000-4000-8000-000000000003', pg_temp.this_week(),
    pg_temp.take('d7c00000-0000-4000-8000-000000000003', pg_temp.this_week(), 'm2.webm'), now(), null, null, null, null, null, null),
   ('d7d00000-0000-4000-8000-000000000003', 'd7c00000-0000-4000-8000-000000000004', pg_temp.this_week() - 7,
-   null, now() - interval '7 days', now() - interval '7 days', 'last week', 3, 3, 3, 'ok');
+   null, now() - interval '7 days', now() - interval '7 days', 'last week', 3, 3, 3, 'ok'),
+  ('d7d00000-0000-4000-8000-000000000004', 'd7c00000-0000-4000-8000-000000000008', pg_temp.this_week() - 14,
+   pg_temp.take('d7c00000-0000-4000-8000-000000000008', pg_temp.this_week() - 14, 'm4.webm'), null, null, 'old', 2, 2, 2, 'scored by hand');
 insert into checkin_mentions (checkin_id, about_member_id, sentiment) values
   ('d7d00000-0000-4000-8000-000000000002', 'd7c00000-0000-4000-8000-000000000002', 1);
 
@@ -112,7 +118,7 @@ select throws_ok($$select hq_reset_checkin('d7d00000-0000-4000-8000-000000000001
   '42501', null, 'signed-out requests cannot call it at all');
 reset role;
 
-select is((select count(*)::int from checkins where id::text like 'd7d%' and audio_path is not null), 2,
+select is((select count(*)::int from checkins where id::text like 'd7d%' and audio_path is not null), 3,
   'the refused calls changed nothing');
 select is((select count(*)::int from checkin_resets), 0, 'and logged nothing');
 
@@ -123,8 +129,8 @@ select pg_temp.as_user('d7a00000-0000-4000-8000-000000000005');
 select throws_ok($$select hq_delete_checkin_recording('d7d00000-0000-4000-8000-000000000002')$$,
   'P0001', 'not_graded', 'an ungraded check-in keeps its recording: the grader needs it');
 select is(
-  hq_delete_checkin_recording('d7d00000-0000-4000-8000-000000000001'),
-  pg_temp.take('d7c00000-0000-4000-8000-000000000002', pg_temp.this_week(), 'm1.webm'),
+  (select audio_paths from hq_delete_checkin_recording('d7d00000-0000-4000-8000-000000000001')),
+  array[pg_temp.take('d7c00000-0000-4000-8000-000000000002', pg_temp.this_week(), 'm1.webm')],
   'deleting a recording hands back its file for the server to remove'
 );
 select is((select audio_path from checkins where id = 'd7d00000-0000-4000-8000-000000000001'), null,
@@ -133,16 +139,21 @@ select is(
   (select array[transcript, activity_score::text, rubric_review] from checkins where id = 'd7d00000-0000-4000-8000-000000000001'),
   array['did things', '4', 'good'], 'its transcript, scores and review stay'
 );
-select is(hq_delete_checkin_recording('d7d00000-0000-4000-8000-000000000001'), null,
+select is((select count(*)::int from hq_delete_checkin_recording('d7d00000-0000-4000-8000-000000000001')), 0,
   'deleting it again hands back nothing');
-select is(hq_delete_checkin_recording('d7d00000-0000-4000-8000-000000000003'), null,
+select is((select count(*)::int from hq_delete_checkin_recording('d7d00000-0000-4000-8000-000000000003')), 0,
   'a check-in without a recording hands back nothing');
+select is(
+  (select audio_paths from hq_delete_checkin_recording('d7d00000-0000-4000-8000-000000000004')),
+  array[pg_temp.take('d7c00000-0000-4000-8000-000000000008', pg_temp.this_week() - 14, 'm4.webm')],
+  'a check-in scored before 0004 (no grader to wait for) can have its recording deleted'
+);
 select throws_ok($$select hq_delete_checkin_recording('d7d00000-0000-4000-8000-0000000000ff')$$,
   'P0001', 'no_checkin', 'an unknown check-in is refused');
 
 -- ---------- hq resets a check-in ----------
 select is(
-  hq_reset_checkin('d7d00000-0000-4000-8000-000000000002'),
+  (select audio_paths from hq_reset_checkin('d7d00000-0000-4000-8000-000000000002')),
   array[pg_temp.take('d7c00000-0000-4000-8000-000000000003', pg_temp.this_week(), 'm2.webm')],
   'resetting a check-in hands back its recording for the server to remove'
 );
@@ -154,7 +165,7 @@ set local role authenticated;
 select pg_temp.as_user('d7a00000-0000-4000-8000-000000000005');
 select throws_ok($$select hq_reset_checkin('d7d00000-0000-4000-8000-000000000002')$$,
   'P0001', 'no_checkin', 'resetting it again is refused');
-select is(hq_reset_checkin('d7d00000-0000-4000-8000-000000000003'), array[]::text[],
+select is((select audio_paths from hq_reset_checkin('d7d00000-0000-4000-8000-000000000003')), array[]::text[],
   'an earlier week''s check-in without a recording resets, handing back no files');
 
 -- ---------- the log ----------
@@ -164,12 +175,18 @@ select is(
   array[
     'recording_deleted:d7c00000-0000-4000-8000-000000000002:true:d7c00000-0000-4000-8000-000000000005',
     'checkin_reset:d7c00000-0000-4000-8000-000000000003:true:d7c00000-0000-4000-8000-000000000005',
-    'checkin_reset:d7c00000-0000-4000-8000-000000000004:false:d7c00000-0000-4000-8000-000000000005'
+    'checkin_reset:d7c00000-0000-4000-8000-000000000004:false:d7c00000-0000-4000-8000-000000000005',
+    'recording_deleted:d7c00000-0000-4000-8000-000000000008:false:d7c00000-0000-4000-8000-000000000005'
   ],
   'each change is logged once: what, whose, which week and by whom (a call that changed nothing is not)'
 );
-select is((select count(*)::int from checkin_resets where team_id = 'd7b00000-0000-4000-8000-000000000001'), 3,
+select is((select count(*)::int from checkin_resets where team_id = 'd7b00000-0000-4000-8000-000000000001'), 4,
   'with the team the check-in was made in');
+select is(
+  (select array_agg(cardinality(audio_paths) order by member_id) from checkin_resets where files_removed_at is null),
+  array[1, 1, 0, 1],
+  'with the files the server is to remove, none stamped removed yet (the server stamps them)'
+);
 select throws_ok($$insert into checkin_resets (member_id, week_start, action) values ('d7c00000-0000-4000-8000-000000000002', pg_temp.this_week(), 'checkin_reset')$$,
   '42501', null, 'even hq cannot write the log through the API');
 select throws_ok($$delete from checkin_resets$$, '42501', null, 'nor delete from it');
@@ -208,7 +225,9 @@ insert into checkin_drafts (member_id, week_start, audio_path, mime_type)
 set local role authenticated;
 select pg_temp.as_user('d7a00000-0000-4000-8000-000000000005');
 select is(
-  hq_reset_checkin((select id from checkins where member_id = 'd7c00000-0000-4000-8000-000000000003' and week_start = pg_temp.this_week())),
+  (select audio_paths from hq_reset_checkin(
+    (select id from checkins where member_id = 'd7c00000-0000-4000-8000-000000000003' and week_start = pg_temp.this_week())
+  )),
   array[pg_temp.take('d7c00000-0000-4000-8000-000000000003', pg_temp.this_week(), 'again.webm'),
         pg_temp.take('d7c00000-0000-4000-8000-000000000003', pg_temp.this_week(), 'stray.webm')],
   'a reset hands back the check-in''s recording and any draft take for that week'
@@ -217,9 +236,19 @@ reset role;
 select is((select count(*)::int from checkin_drafts where member_id = 'd7c00000-0000-4000-8000-000000000003'), 0,
   'and the draft is gone');
 
--- The log keeps its rows (done_by cleared) if the Master Admin's member row is ever deleted.
+-- The server stamps a row once its files are gone; the daily retry only looks at unstamped ones.
+set local role service_role;
+update checkin_resets set files_removed_at = now() where member_id = 'd7c00000-0000-4000-8000-000000000002';
+select is((select count(*)::int from checkin_resets where files_removed_at is null and audio_paths <> '{}'), 3,
+  'the server (service_role) stamps a row whose files it removed');
+reset role;
+
+-- The log keeps its rows if the member, or the Master Admin, is ever deleted.
+delete from members where id = 'd7c00000-0000-4000-8000-000000000003';
+select is((select count(*)::int from checkin_resets where member_id is null), 2,
+  'the log outlives the member whose check-in it was');
 delete from members where id = 'd7c00000-0000-4000-8000-000000000005';
-select is((select count(*)::int from checkin_resets where done_by is null), 4,
+select is((select count(*)::int from checkin_resets where done_by is null), 5,
   'the log outlives the Master Admin''s member row');
 
 select * from finish();

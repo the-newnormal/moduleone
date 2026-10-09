@@ -3,25 +3,25 @@
 import { ConfirmButton } from "@/components/admin/team/confirm-button";
 import { deleteRecording, resetCheckin } from "./actions";
 
-// A Master Admin's controls on a check-in (0007): delete its recording (once it's graded, as the
-// grader needs it until then), or reset the whole check-in. The database refuses anyone else; the
+// A Master Admin's controls on a check-in (0007): delete its recording (unless it's waiting for
+// the grader, which needs it), or reset the whole check-in. The database refuses anyone else; the
 // page only shows these to hq.
 export function CheckinControls({
   checkinId,
   memberName,
   hasRecording,
-  graded,
+  awaitingGrader,
   currentWeek,
 }: {
   checkinId: string;
   memberName: string;
   hasRecording: boolean;
-  graded: boolean;
+  awaitingGrader: boolean;
   currentWeek: boolean;
 }) {
   return (
     <div className="flex flex-wrap gap-2 border-t pt-3">
-      {hasRecording && graded && (
+      {hasRecording && !awaitingGrader && (
         <ConfirmButton
           label={<>Delete recording<span className="sr-only"> of {memberName}</span></>}
           title={`Delete ${memberName}'s recording?`}

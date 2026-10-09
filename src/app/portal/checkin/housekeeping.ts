@@ -143,6 +143,68 @@ export async function deleteExpiredRecordings(): Promise<{ deleted: number } | n
   }
 }
 
+// A Master Admin's delete or reset (0007) whose files Storage didn't delete at the time stays on
+// checkin_resets without files_removed_at. Each daily run retries them, oldest first, then stamps
+// the rows. A file a check-in or draft points at again is never removed (the server names takes
+// with a fresh UUID, so this shouldn't happen; checked anyway). Never throws.
+const RESET_BATCH = 100;
+
+export async function removeResetRecordings(): Promise<{ removed: number } | null> {
+  try {
+    const admin = createServiceRoleClient();
+    const { data, error } = await admin
+      .from("checkin_resets")
+      .select("id, audio_paths")
+      .is("files_removed_at", null)
+      .neq("audio_paths", "{}")
+      .order("done_at", { ascending: true })
+      .limit(RESET_BATCH);
+    if (error) {
+      console.error("removeResetRecordings: reading the log failed", { code: error.code });
+      return null;
+    }
+    const rows = (data ?? []) as { id: string; audio_paths: string[] }[];
+    if (rows.length === 0) return { removed: 0 };
+    const paths = [...new Set(rows.flatMap((row) => row.audio_paths))];
+    const [checkins, drafts] = await Promise.all([
+      admin.from("checkins").select("audio_path").in("audio_path", paths),
+      admin.from("checkin_drafts").select("audio_path").in("audio_path", paths),
+    ]);
+    if (checkins.error || drafts.error) {
+      console.error("removeResetRecordings: checking the files failed", {
+        code: checkins.error?.code ?? drafts.error?.code,
+      });
+      return null;
+    }
+    const inUse = new Set(
+      [...(checkins.data ?? []), ...(drafts.data ?? [])].map((row: { audio_path: string }) => row.audio_path),
+    );
+    const remove = paths.filter((path) => !inUse.has(path));
+    if (remove.length > 0) {
+      const { error: removeError } = await admin.storage.from(BUCKET).remove(remove);
+      if (removeError) {
+        console.error("removeResetRecordings: removing files failed", { code: removeError.name });
+        return null;
+      }
+    }
+    const { error: stampError } = await admin
+      .from("checkin_resets")
+      .update({ files_removed_at: new Date().toISOString() })
+      .in(
+        "id",
+        rows.map((row) => row.id),
+      );
+    if (stampError) {
+      console.error("removeResetRecordings: stamping the log failed", { code: stampError.code });
+      return null;
+    }
+    return { removed: remove.length };
+  } catch (error) {
+    console.error("removeResetRecordings failed", { code: error instanceof Error ? error.name : "unknown" });
+    return null;
+  }
+}
+
 // How many submitted check-ins one sweep picks up. They are processed side by side, and each
 // attempt stays within the function's 300 seconds (see process.ts). Never-tried check-ins come
 // first, then the ones tried longest ago: a check-in that just failed (or is running) goes to the
