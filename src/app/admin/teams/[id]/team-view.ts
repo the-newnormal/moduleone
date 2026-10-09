@@ -3,7 +3,7 @@
 // render the result. Nothing here leaves the server that the page doesn't need: in particular a
 // member's auth_user_id becomes a yes/no.
 
-import { formatDate } from "@/lib/admin/format";
+import { formatDate, formatDateTime } from "@/lib/admin/format";
 import { asRole, isEditableMember, type Role, roleLabel } from "@/lib/admin/roles";
 import { breadcrumb, KIND_LABELS, type TeamRow, typeLabel } from "@/lib/admin/tree";
 import type { DivisionType, DomainType, TeamKind } from "@/lib/admin/validate";
@@ -29,6 +29,34 @@ export type LeadRow = { team_id: string; member_id: string };
 
 // member_grants rows (admins read them all); only who holds one matters here.
 export type GrantRow = { member_id: string };
+
+// What admin_login_states (0010) says about each linked login; never an email address. invited_at
+// only while the login is unused (Supabase restamps it with every invite it sends).
+export type LoginRow = {
+  member_id: string;
+  state: "invited" | "ready" | "active";
+  invited_at: string | null;
+  last_sign_in_at: string | null;
+};
+
+// Those rows, and when the server read them (so an invite's age doesn't depend on whose clock
+// renders the page). Null when they couldn't be read.
+export type LoginStates = { rows: readonly LoginRow[]; readAt: string } | null;
+
+// How long an invite link works: Supabase's email OTP expiry (Authentication → Emails), an hour by
+// default, as the README and the login page say.
+export const INVITE_LINK_MS = 60 * 60 * 1000;
+
+// Whether someone can sign in, and whether they have, with dates already formatted.
+// "invited": a login nobody has used; expired when its last invite's link no longer works.
+// "ready": a login set up ready to use that nobody has signed in with (they sign in at the login
+// page). "unknown": they have a login, but the page couldn't read its state.
+export type LoginStatus =
+  | { state: "none" }
+  | { state: "invited"; sentAt: string | null; expired: boolean } // sentAt: "3 Oct 2026, 3:04 pm"
+  | { state: "ready" }
+  | { state: "active"; lastSignedInOn: string | null } // "3 Oct 2026"
+  | { state: "unknown" };
 
 export type TeamSummary = {
   id: string;
@@ -63,13 +91,16 @@ export type Person = {
   // and for everyone on the organisation's page (only the project owner changes who sits there).
   editable: boolean;
   hasLogin: boolean;
+  login: LoginStatus; // "none" exactly when hasLogin is false
   loginGiven: string | null; // "Login given by Hana Lim on 9 Oct 2026", only while they have a login
   // Give login is offered: not a Master Admin or the admin themselves, no login, and no grants (a
   // new login would get them, so the project owner gives those; giveLogin refuses them too). Also
   // on the organisation's page: admins give whoever the owner placed there a login (owner's call).
   canGiveLogin: boolean;
   ownerGivesLogin: boolean; // as canGiveLogin, but holds grants
-  canResendInvite: boolean; // not a Master Admin or the admin, with a login given in Module One
+  // Not a Master Admin or the admin, with a login given in Module One that hasn't been used (or
+  // whose state couldn't be read: the server checks again either way).
+  canResendInvite: boolean;
   emailChanged: string | null; // "Sign-in email changed by Hana Lim on 9 Oct 2026", while they have a login
   // Change email and Remove from Module One: not a Master Admin or the admin, and not someone the
   // project owner keeps (below). Change email needs a login.
@@ -129,6 +160,60 @@ const byName = <T extends { id: string; name: string }>(a: T, b: T) =>
 // unreadable; null when nobody recorded giving it (logins made in the Supabase dashboard).
 export function loginGivenText(giverName: string | null, givenAt: string | null): string | null {
   return byWhom("Login given", giverName, givenAt);
+}
+
+// What a person's row says about their login: a tag of a few words, the tag's tone, and more
+// detail when there is some.
+export type LoginStatusText = {
+  label: string;
+  tone: "outline" | "neutral" | "warning" | "success";
+  detail: string | null;
+};
+
+export function loginStatusText(status: LoginStatus): LoginStatusText {
+  switch (status.state) {
+    case "none":
+      return { label: "No login yet", tone: "outline", detail: null };
+    case "invited":
+      return {
+        label: status.expired ? "Invite expired" : "Invite not used",
+        tone: "warning",
+        detail: status.sentAt && `Invite sent ${status.sentAt}`,
+      };
+    case "ready":
+      return { label: "Never signed in", tone: "neutral", detail: "Their login is ready: they sign in at the login page" };
+    case "active":
+      return {
+        label: "Active",
+        tone: "success",
+        detail: status.lastSignedInOn && `Last signed in ${status.lastSignedInOn}`,
+      };
+    case "unknown":
+      return { label: "Has a login", tone: "neutral", detail: null };
+  }
+}
+
+type LoginsRead = { byMember: Map<string, LoginRow>; readAt: number } | null;
+
+// One member's login status. A linked login with no row (deleted meanwhile), or when the rows
+// couldn't be read, reads as unknown.
+function loginStatusOf(m: MemberRow, logins: LoginsRead): LoginStatus {
+  if (m.auth_user_id === null) return { state: "none" };
+  const row = logins?.byMember.get(m.id);
+  if (!logins || !row) return { state: "unknown" };
+  switch (row.state) {
+    case "invited": {
+      const sent = row.invited_at === null ? NaN : Date.parse(row.invited_at);
+      const expired = Number.isFinite(sent) && Number.isFinite(logins.readAt) && logins.readAt - sent >= INVITE_LINK_MS;
+      return { state: "invited", sentAt: formatDateTime(row.invited_at), expired };
+    }
+    case "ready":
+      return { state: "ready" };
+    case "active":
+      return { state: "active", lastSignedInOn: formatDate(row.last_sign_in_at) };
+    default:
+      return { state: "unknown" };
+  }
 }
 
 // "Sign-in email changed by Hana Lim on 9 Oct 2026", the same way.
@@ -220,6 +305,7 @@ export function buildTeamView({
   members,
   leads,
   grants = [],
+  logins = null,
 }: {
   teamId: string;
   adminMemberId: string;
@@ -227,6 +313,7 @@ export function buildTeamView({
   members: readonly MemberRow[];
   leads: readonly LeadRow[];
   grants?: readonly GrantRow[];
+  logins?: LoginStates; // admin_login_states; null when it couldn't be read
 }): TeamView | null {
   const row = teams.find((t) => t.id === teamId);
   if (!row) return null;
@@ -258,7 +345,7 @@ export function buildTeamView({
     crumbs.unshift({ key: "unplaced", label: "Unplaced", href: null });
   }
 
-  const everyone = peopleContext({ adminMemberId, teams, members, leads, grants });
+  const everyone = peopleContext({ adminMemberId, teams, members, leads, grants, logins });
   const leadIds = new Set(leads.filter((l) => l.team_id === teamId).map((l) => l.member_id));
 
   // A node is also led by whoever leads a node above it (its domain, its division): leaders placed
@@ -367,6 +454,7 @@ type PeopleContext = {
   leadsOf: Map<string, string[]>; // the names of the nodes each person has a lead row for
   organisationId: string | undefined;
   leadsOrganisation: Set<string>; // lead rows on the organisation node
+  logins: LoginsRead; // each linked login's state by member; null if unread
 };
 
 function peopleContext({
@@ -375,12 +463,14 @@ function peopleContext({
   members,
   leads,
   grants,
+  logins,
 }: {
   adminMemberId: string;
   teams: readonly TeamRow[];
   members: readonly MemberRow[];
   leads: readonly LeadRow[];
   grants: readonly GrantRow[];
+  logins: LoginStates;
 }): PeopleContext {
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
   const leadsOf = new Map<string, string[]>();
@@ -398,6 +488,10 @@ function peopleContext({
     leadsOf,
     organisationId,
     leadsOrganisation: new Set(leads.filter((l) => l.team_id === organisationId).map((l) => l.member_id)),
+    logins:
+      logins === null
+        ? null
+        : { byMember: new Map(logins.rows.map((l) => [l.member_id, l])), readAt: Date.parse(logins.readAt) },
   };
 }
 
@@ -407,10 +501,11 @@ function personOf(
   context: PeopleContext,
   here: { ownerOnly: boolean; leaderTitle: string | null; leadsHere: boolean; leadsDomain: string | null },
 ): Person {
-  const { adminMemberId, memberById, holdsGrants, leadsOf, organisationId, leadsOrganisation } = context;
+  const { adminMemberId, memberById, holdsGrants, leadsOf, organisationId, leadsOrganisation, logins } = context;
   const role = asRole(m.role);
   const loginsHere = isEditableMember({ id: m.id, role }, adminMemberId);
   const hasLogin = m.auth_user_id !== null;
+  const login = loginStatusOf(m, logins);
   const nameOf = (id: string | null) => (id ? (memberById.get(id)?.name ?? null) : null);
   const ownerKeeps = !loginsHere
     ? null
@@ -429,11 +524,14 @@ function personOf(
     isSelf: m.id === adminMemberId,
     editable: !here.ownerOnly && loginsHere,
     hasLogin,
+    login,
     // A login deleted in the Supabase dashboard leaves login_given_* behind; don't show it.
     loginGiven: hasLogin ? loginGivenText(nameOf(m.login_given_by), m.login_given_at) : null,
     canGiveLogin: loginsHere && !hasLogin && !holdsGrants.has(m.id),
     ownerGivesLogin: loginsHere && !hasLogin && holdsGrants.has(m.id),
-    canResendInvite: loginsHere && hasLogin && m.login_given_at !== null,
+    // Once a login is used, resendInvite refuses it (it signs in at the login page instead).
+    canResendInvite:
+      loginsHere && hasLogin && m.login_given_at !== null && (login.state === "invited" || login.state === "unknown"),
     emailChanged:
       hasLogin && changedSinceGiven(m)
         ? emailChangedText(nameOf(m.login_email_changed_by), m.login_email_changed_at)
@@ -466,14 +564,16 @@ export function buildNoTeamPeople({
   members,
   leads,
   grants = [],
+  logins = null,
 }: {
   adminMemberId: string;
   teams: readonly TeamRow[];
   members: readonly MemberRow[];
   leads: readonly LeadRow[];
   grants?: readonly GrantRow[];
+  logins?: LoginStates;
 }): Person[] {
-  const context = peopleContext({ adminMemberId, teams, members, leads, grants });
+  const context = peopleContext({ adminMemberId, teams, members, leads, grants, logins });
   return context.current
     .filter((m) => m.team_id === null)
     .map((m) => ({
