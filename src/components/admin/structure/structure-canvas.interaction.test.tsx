@@ -53,7 +53,7 @@ const ROWS: StructureRow[] = [
 ];
 
 const MEMBERS: MemberRow[] = [
-  { id: "m-ana", name: "Ana Lee", role: "member", team_id: "ip1", auth_user_id: null, login_given_by: null, login_given_at: null },
+  { id: "m-ana", name: "Ana Lee", role: "member", team_id: "ip1", auth_user_id: null, login_given_by: null, login_given_at: null, login_email_changed_by: null, login_email_changed_at: null, removed_at: null },
 ];
 
 const ok = async (): Promise<ActionResult> => ({ ok: true, value: null });
@@ -76,6 +76,8 @@ const TEAM_ACTIONS = {
   setRole: vi.fn(ok),
   addLead: vi.fn(ok),
   removeLead: vi.fn(ok),
+  changeEmail: vi.fn(async () => ({ ok: true as const, value: { invited: false } })),
+  removePerson: vi.fn(async () => ({ ok: true as const, value: { outcome: "removed" as const, loginKept: false } })),
 };
 
 const canvas = (structure: StructureActions = actions()) =>

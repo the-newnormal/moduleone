@@ -48,6 +48,9 @@ const member = (id: string, name: string, role: string, team_id: string | null, 
   auth_user_id: null,
   login_given_by: null,
   login_given_at: null,
+  login_email_changed_by: null,
+  login_email_changed_at: null,
+  removed_at: null,
   ...extra,
 });
 

@@ -46,6 +46,8 @@ const TEAM_ACTIONS = {
   setRole: fail,
   addLead: fail,
   removeLead: fail,
+  changeEmail: fail,
+  removePerson: fail,
 };
 const member = (id: string, name: string, role: string, team_id: string | null): MemberRow => ({
   id,
@@ -55,6 +57,9 @@ const member = (id: string, name: string, role: string, team_id: string | null):
   auth_user_id: null,
   login_given_by: null,
   login_given_at: null,
+  login_email_changed_by: null,
+  login_email_changed_at: null,
+  removed_at: null,
 });
 
 const render = (rows = ROWS) =>

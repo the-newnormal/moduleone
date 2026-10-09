@@ -25,17 +25,7 @@ export function NodePanel({
 }) {
   const headingId = useId();
   const { team, crumbs } = view;
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      // A dialog, menu or list open above the panel handles its own Escape (Radix prevents its
-      // default when it closes one).
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      if (!document.querySelector("[role=dialog], [role=alertdialog]")) onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useCloseOnEscape(onClose);
 
   return (
     <aside
@@ -81,6 +71,8 @@ export function NodePanel({
           resendInvite: actions.resendInvite,
           removeFromTeam: actions.removeFromTeam,
           setRole: actions.setRole,
+          changeEmail: actions.changeEmail,
+          removePerson: actions.removePerson,
         }}
       />
       <LeadsSection
@@ -93,4 +85,17 @@ export function NodePanel({
       />
     </aside>
   );
+}
+
+// Escape closes a side panel, unless a dialog, menu or list is open above it: those handle their
+// own Escape (Radix prevents its default when it closes one).
+export function useCloseOnEscape(onClose: () => void) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (!document.querySelector("[role=dialog], [role=alertdialog]")) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 }

@@ -429,7 +429,7 @@ describe("removeLead", () => {
 // ---------- giveLogin ----------
 
 const memberRow = (changes: Record<string, unknown> = {}) => ({
-  data: { id: PERSON, role: "member", auth_user_id: null, ...changes },
+  data: { id: PERSON, role: "member", auth_user_id: null, removed_at: null, ...changes },
   error: null,
 });
 
@@ -532,7 +532,7 @@ describe("giveLogin", () => {
 
     // 3. the member and their grants, read as the admin (RLS applies)
     expect(userQueries).toEqual([
-      { table: "members", calls: [["select", "id, role, auth_user_id"], ["eq", "id", PERSON], ["maybeSingle"]] },
+      { table: "members", calls: [["select", "id, role, auth_user_id, removed_at"], ["eq", "id", PERSON], ["maybeSingle"]] },
       { table: "member_grants", calls: [["select", "grant_name"], ["eq", "member_id", PERSON], ["limit", 1]] },
     ]);
     // 4. nothing from an earlier login, then the invite, coming back to the site's callback
@@ -867,7 +867,7 @@ describe("giveLogin", () => {
 describe("resendInvite", () => {
   const LOGIN = "b0000000-0000-4000-8000-000000000002";
   const invited = (changes: Record<string, unknown> = {}) => ({
-    data: { id: PERSON, role: "member", auth_user_id: LOGIN, login_given_at: "2026-10-09T04:30:00Z", ...changes },
+    data: { id: PERSON, role: "member", auth_user_id: LOGIN, login_given_at: "2026-10-09T04:30:00Z", removed_at: null, ...changes },
     error: null,
   });
   const authUser = (changes: Record<string, unknown> = {}) => ({
@@ -892,7 +892,7 @@ describe("resendInvite", () => {
     expect(userQueries).toEqual([
       {
         table: "members",
-        calls: [["select", "id, role, auth_user_id, login_given_at"], ["eq", "id", PERSON], ["maybeSingle"]],
+        calls: [["select", "id, role, auth_user_id, login_given_at, removed_at"], ["eq", "id", PERSON], ["maybeSingle"]],
       },
     ]);
     expect(getUserById).toHaveBeenCalledExactlyOnceWith(LOGIN);

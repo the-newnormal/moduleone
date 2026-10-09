@@ -43,9 +43,9 @@ export const personNodeId = (memberId: string) => `person:${memberId}`;
 // Someone on the canvas.
 export type CanvasPerson = { id: string; name: string; role: string; teamId: string | null; editable: boolean };
 
-// The people the chart shows (no team, or in an active node) and whether this admin may move them:
-// not Master Admins or themselves (RLS refuses those), nor whoever sits in the organisation (the
-// project owner's to change).
+// The people the chart shows (no team, or in an active node; never anyone removed from Module One)
+// and whether this admin may move them: not Master Admins or themselves (RLS refuses those), nor
+// whoever sits in the organisation (the project owner's to change).
 export function canvasPeopleOf(
   members: readonly MemberRow[],
   rows: readonly StructureRow[],
@@ -54,7 +54,7 @@ export function canvasPeopleOf(
   const shown = new Set(rows.filter((r) => r.archived_at === null).map((r) => r.id));
   const organisation = rows.find((r) => r.kind === "organisation")?.id;
   return members
-    .filter((m) => m.team_id === null || shown.has(m.team_id))
+    .filter((m) => m.removed_at === null && (m.team_id === null || shown.has(m.team_id)))
     .map((m) => ({
       id: m.id,
       name: m.name,

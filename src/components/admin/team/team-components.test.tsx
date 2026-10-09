@@ -20,6 +20,8 @@ const actions = {
   addLead: vi.fn(ok),
   removeLead: vi.fn(ok),
   updateNode: vi.fn(ok),
+  changeEmail: vi.fn(async () => ({ ok: true as const, value: { invited: false } })),
+  removePerson: vi.fn(async () => ({ ok: true as const, value: { outcome: "removed" as const, loginKept: false } })),
 };
 
 const TEAM: TeamSummary = {
@@ -73,6 +75,10 @@ const person = (id: string, name: string, changes: Partial<Person> = {}): Person
   canGiveLogin: false,
   ownerGivesLogin: false,
   canResendInvite: false,
+  emailChanged: null,
+  canChangeEmail: false,
+  canRemove: false,
+  ownerKeeps: null,
   otherLeads: [],
   leadsHere: false,
   leadsDomain: null,

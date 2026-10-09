@@ -32,9 +32,32 @@ export const MISSING_SITE_URL =
 
 // resendInvite
 export const NO_LOGIN_YET = "This person has no login yet. Use Give login instead.";
-export const NOT_GIVEN_HERE = "This login wasn't given in Module One, so the project owner looks after it.";
+export const NOT_GIVEN_HERE = "This login wasn't given in Module One, so its invite can't be re-sent from here.";
 export const INVITE_USED =
   "This person has already used their invite, so there's nothing to resend. They sign in at the login page.";
+
+// Every action on a person removed from Module One (migration 0007): the page no longer lists them.
+export const PERSON_REMOVED = "This person was removed from Module One. Reload the page.";
+
+// removePerson. (The database words its own refusals: Master Admins, yourself, grants, the
+// organisation.)
+export const REMOVE_NEEDS_SERVICE_KEY =
+  "People with a login can't be removed from this server yet (SUPABASE_SERVICE_ROLE_KEY is not set).";
+
+// changeEmail
+export const EMAIL_NEEDS_SERVICE_KEY =
+  "Sign-in emails can't be changed from this server yet (SUPABASE_SERVICE_ROLE_KEY is not set).";
+export const EMAIL_NEEDS_SITE_URL =
+  "This person hasn't used their invite yet, and invites can't be sent from this server yet (NEXT_PUBLIC_SITE_URL is not set).";
+export const EMAIL_NOT_YOURSELF = "You can't change your own sign-in email here.";
+export const EMAIL_MASTER_ADMIN = "Master Admins' sign-in emails are changed by the project owner.";
+export const EMAIL_HOLDS_GRANTS =
+  "This person holds grants (such as admin), so only the project owner can change their sign-in email.";
+export const EMAIL_ORGANISATION =
+  "This person sits in or leads the organisation, so only the project owner can change their sign-in email.";
+// The new address already has a login (theirs, or anyone's: the page never says which).
+export const EMAIL_IN_USE = "That email already has a login.";
+export const EMAIL_RACE = "This person changed while you were changing their email. Reload the page and try again.";
 
 // Every change to who sits in or leads the organisation node (migration 0006)
 export const ORGANISATION_OWNER_ONLY = "Only the project owner decides who sits in the organisation and who leads it.";
