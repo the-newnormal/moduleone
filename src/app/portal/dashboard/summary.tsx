@@ -5,8 +5,8 @@ import { BANDS } from "./band";
 
 const ORDER = ["green", "yellow", "red"] as const;
 
-// The header's tally: how many domain and team boxes are each colour in one week
-// (src/lib/dashboard/summary.ts), so the whole chart reads at a glance.
+// The header's tally: how many teams are each colour in one week (src/lib/dashboard/summary.ts), so
+// the whole chart reads at a glance.
 export function BandSummary({
   counts,
   week,
@@ -22,7 +22,7 @@ export function BandSummary({
   return (
     <section aria-labelledby="band-summary" className="grid gap-2 rounded-xl border bg-card px-4 py-3 text-sm">
       <h2 id="band-summary" className="font-sans text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-        {role === "hq" ? "Domains and teams" : "Domains and teams you lead"}, {when}
+        {role === "hq" ? "Teams" : "Teams you lead"}, {when}
       </h2>
       <ul className="flex flex-wrap gap-x-5 gap-y-1">
         {ORDER.map((band) => {

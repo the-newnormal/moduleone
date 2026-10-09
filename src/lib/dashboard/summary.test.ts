@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HealthConfig } from "@/lib/health/health";
 import { buildOrg, type CheckinRow, coverage } from "./org";
-import { domainTeamCounts } from "./summary";
+import { teamCounts } from "./summary";
 import type { TeamNode } from "./tree";
 
 const RULES: HealthConfig = {
@@ -51,25 +51,36 @@ const TEAMS = [
 const CHECKINS = [
   checkin("org", THIS_WEEK, RED), // the organisation's and Gather's own: not domains or teams
   checkin("ga", THIS_WEEK, RED),
+  checkin("ip", THIS_WEEK, RED), // IP Lab's own: IP Lab has teams, so only they count
   checkin("ip1", THIS_WEEK, GREEN),
-  checkin("ip2", THIS_WEEK, YELLOW), // IP Lab: (17.6 + 9) / 2 = 13.3, green
+  checkin("ip2", THIS_WEEK, YELLOW),
   checkin("bq", THIS_WEEK, RED),
   checkin("dn", LAST_WEEK, GREEN), // nothing this week
   checkin("at", THIS_WEEK, YELLOW),
 ];
 
 const counts = (covers: (id: string) => boolean, checkins = CHECKINS) =>
-  domainTeamCounts(buildOrg({ teams: TEAMS, checkins, weeks: WEEKS, config: RULES, covers }));
+  teamCounts(buildOrg({ teams: TEAMS, checkins, weeks: WEEKS, config: RULES, covers }));
 
-describe("domainTeamCounts", () => {
-  it("counts every domain and team box by its colour in the last week, the organisation and divisions aside", () => {
-    // IP Lab and IP Lab 1 green, IP Lab 2 and Atlas yellow, Barbeques red, Dinners nothing graded.
-    expect(counts(coverage("hq", []))).toEqual({ green: 2, yellow: 2, red: 1, ungraded: 1 });
+describe("teamCounts", () => {
+  it("counts each team and each domain with no teams under it by its colour in the last week", () => {
+    // IP Lab 1 green; IP Lab 2 and Atlas yellow; Barbeques red; Dinners nothing graded. IP Lab has
+    // teams, so it counts through them; the organisation and Gather don't count.
+    expect(counts(coverage("hq", []))).toEqual({ green: 1, yellow: 2, red: 1, ungraded: 1 });
+  });
+
+  it("counts a domain whose teams are all hidden as a team of its own", () => {
+    // IP Lab 1 and 2 archived with no check-ins in range: off the chart, so IP Lab stands alone.
+    const teams = TEAMS.map((t) => (t.parent_id === "ip" ? { ...t, archived_at: "2026-09-01T00:00:00Z" } : t));
+    const checkins = CHECKINS.filter((c) => c.team_id !== "ip1" && c.team_id !== "ip2");
+    const org = buildOrg({ teams, checkins, weeks: WEEKS, config: RULES, covers: coverage("hq", []) });
+    // IP Lab and Barbeques red, Atlas yellow, Dinners nothing graded.
+    expect(teamCounts(org)).toEqual({ green: 0, yellow: 1, red: 2, ungraded: 1 });
   });
 
   it("counts a week waiting for the grader as ungraded", () => {
     const waiting = [...CHECKINS, checkin("dn", THIS_WEEK, null)];
-    expect(counts(coverage("hq", []), waiting)).toEqual({ green: 2, yellow: 2, red: 1, ungraded: 1 });
+    expect(counts(coverage("hq", []), waiting)).toEqual({ green: 1, yellow: 2, red: 1, ungraded: 1 });
   });
 
   it("counts only the boxes a leader leads, not the domain above them or their own check-ins elsewhere", () => {
@@ -79,6 +90,6 @@ describe("domainTeamCounts", () => {
   });
 
   it("is all zeros with nothing to show", () => {
-    expect(domainTeamCounts({ roots: [], loose: [] })).toEqual({ green: 0, yellow: 0, red: 0, ungraded: 0 });
+    expect(teamCounts({ roots: [], loose: [] })).toEqual({ green: 0, yellow: 0, red: 0, ungraded: 0 });
   });
 });
