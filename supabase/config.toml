@@ -253,10 +253,13 @@ otp_expiry = 3600
 subject = "Your Module One sign-in link"
 content_path = "./supabase/templates/magic-link.html"
 
-# Uncomment to customize email template
-# [auth.email.template.invite]
-# subject = "You have been invited"
-# content_path = "./supabase/templates/invite.html"
+# Admins give people a login from a team's page (giveLogin), which sends this invite. Like the
+# magic link it uses token_hash, so it works on any device; the default template's link goes through
+# the implicit flow, which /auth/callback doesn't handle (mirror this in the hosted project's
+# Auth → Email Templates → Invite user).
+[auth.email.template.invite]
+subject = "Your Module One login"
+content_path = "./supabase/templates/invite.html"
 
 # Uncomment to customize notification email template
 # [auth.email.notification.password_changed]
