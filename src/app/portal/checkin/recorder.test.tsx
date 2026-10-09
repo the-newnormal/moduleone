@@ -219,7 +219,7 @@ describe("the camera mirror", () => {
     const page = await render(<Recorder />);
     await click(button("Show my camera"));
     expect(button("Start recording").disabled).toBe(true);
-    expect(text(page.container)).toContain("Answer your browser's question about the camera");
+    expect(text(page.container)).toContain("If your browser asks about the camera, answer it to go on");
     await click(button("Waiting for your camera…")); // asking again does nothing
     await act(async () => allow(cameraStream(fakeTrack())));
     expect(button("Start recording").disabled).toBe(false);
@@ -237,6 +237,7 @@ describe("the camera mirror", () => {
     await click(button("Show my camera"));
     await settle();
     expect(text(page.container)).toContain("Your camera isn't available");
+    expect(text(document.querySelector("[aria-live]") ?? undefined)).toContain("Your camera isn't available");
     await record();
     expect(FakeRecorder.last?.state).toBe("recording");
     expect(video()).toBeNull();
@@ -280,7 +281,10 @@ describe("the camera mirror", () => {
     const { Recorder } = await load();
     await render(<Recorder />);
     await record();
-    await click(button("Hide my camera"));
+    const hide = button("Hide my camera");
+    hide.focus();
+    await click(hide);
+    expect(document.activeElement).toBe(button("Next question")); // focus stays in the take
     expect(lens.stop).toHaveBeenCalled();
     expect(video()).toBeNull();
     expect(FakeRecorder.last?.state).toBe("recording");
@@ -299,6 +303,39 @@ describe("the camera mirror", () => {
     expect(lens.stop).toHaveBeenCalled();
     expect(video()).toBeNull();
     expect(currentSave()).not.toBeNull(); // and Sign out waits for the take
+    vi.unstubAllGlobals();
+  });
+
+  it("stays hidden for the next recorder in the tab (Delete and record again)", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    const { cameraAsks } = devices(async () => cameraStream(fakeTrack()), "granted");
+    const { Recorder } = await load();
+    const page = await render(<Recorder />);
+    await record(); // on by itself: allowed here before
+    await click(button("Hide my camera"));
+    await finish();
+    await act(async () => FakeRecorder.last?.onstop?.());
+    await page.rerender(<></>); // the draft, then Delete and record again: a new recorder
+    await page.rerender(<Recorder />);
+    await record();
+    expect(cameraAsks()).toBe(1);
+    expect(video()).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps Start waiting in a new recorder while an earlier camera question is still open", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    let allow: (stream: unknown) => void = () => {};
+    devices(() => new Promise((resolve) => (allow = resolve)));
+    const { Recorder } = await load();
+    const page = await render(<Recorder />);
+    await click(button("Show my camera"));
+    await page.rerender(<></>); // left by a link; the browser's question stays open
+    await page.rerender(<Recorder />);
+    expect(button("Start recording").disabled).toBe(true);
+    expect(text(page.container)).toContain("If your browser asks about the camera");
+    await act(async () => allow(cameraStream(fakeTrack())));
+    expect(button("Start recording").disabled).toBe(false);
     vi.unstubAllGlobals();
   });
 

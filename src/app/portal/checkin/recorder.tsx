@@ -24,6 +24,8 @@ const UNSUPPORTED = "This browser can't record audio here. Use an up-to-date Chr
 const SUPERSEDED =
   "You'd already saved a newer recording, on another device or tab, so this one wasn't kept. Your draft is the newer one.";
 const AWAY = "Your phone may have paused the recording while you were away. Listen back before you submit.";
+const CAMERA_ASKING = "If your browser asks about the camera, answer it to go on. On a computer, it's by the address bar.";
+const CAMERA_UNAVAILABLE = "Your camera isn't available, so you won't see yourself. You can still record.";
 
 type State =
   | { step: "idle"; problem: string | null }
@@ -43,6 +45,26 @@ type Media = { stream: MediaStream; recorder: MediaRecorder; timer: number; save
 // The camera while it's on. asked counts requests and is bumped whenever the camera is turned off,
 // so a camera the browser grants only after that is let go.
 type CameraState = { stream: MediaStream | null; asked: number };
+
+// The member's camera choice in this tab: true once they showed it, false once they hid it. Kept
+// outside the recorder, as "Delete and record again" brings a new one that should still honour it.
+let wantsCamera: boolean | null = null;
+
+// The browser's camera question while it's open. Leaving by a link within the app keeps it open,
+// and Chrome asks nothing else (the microphone included) until it's answered, so a recorder that
+// mounts meanwhile waits for it too.
+let cameraQuestion: Promise<void> | null = null;
+
+function holdCameraQuestion(request: Promise<unknown>) {
+  const question = request.then(
+    () => {},
+    () => {},
+  );
+  cameraQuestion = question;
+  void question.then(() => {
+    if (cameraQuestion === question) cameraQuestion = null;
+  });
+}
 
 function pickMimeType(): string | null {
   if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) return null;
@@ -165,9 +187,19 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
   // "asking": the browser's camera question is open. Start waits for the answer: Chrome won't ask
   // this page anything else meanwhile, so the microphone's question would never come.
   // "unavailable": blocked, missing or busy, so the member records without seeing themselves.
-  const [cameraNote, setCameraNote] = useState<"asking" | "unavailable" | null>(null);
-  // The member's choice: true once they showed the camera, false once they hid it.
-  const wantsCamera = useRef<boolean | null>(null);
+  const [cameraNote, setCameraNote] = useState<"asking" | "unavailable" | null>(() =>
+    cameraQuestion ? "asking" : null,
+  );
+  // A question an earlier recorder in this tab left open: wait for its answer too.
+  useEffect(() => {
+    const question = cameraQuestion;
+    if (!question) return;
+    let mounted = true;
+    void question.then(() => mounted && setCameraNote((note) => (note === "asking" ? null : note)));
+    return () => {
+      mounted = false;
+    };
+  }, []);
   // Bumped by every start and by leaving the page, so a microphone that is granted only after the
   // member has moved on (or started again) is let go instead of recording in the background.
   const startCount = useRef(0);
@@ -310,7 +342,9 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
     if (ask) setCameraNote("asking");
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: CAMERA });
+      const request = navigator.mediaDevices.getUserMedia({ video: CAMERA });
+      if (ask) holdCameraQuestion(request);
+      stream = await request;
     } catch {
       if (attempt === camera.current.asked) setCameraNote(ask ? "unavailable" : null);
       return;
@@ -331,7 +365,7 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
 
   function toggleCamera() {
     if (cameraNote === "asking") return;
-    wantsCamera.current = !mirror;
+    wantsCamera = !mirror;
     if (mirror) turnCameraOff();
     else void turnCameraOn(true);
   }
@@ -432,7 +466,7 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
     }
     setState({ step: "recording", question: 0 });
     // A camera the member hasn't turned on comes on now only if the browser won't ask about it.
-    if (!camera.current.stream && wantsCamera.current !== false) {
+    if (!camera.current.stream && wantsCamera !== false) {
       const asked = camera.current.asked;
       void cameraAllowed().then((allowed) => {
         if (allowed && camera.current.asked === asked && media.current === live) void turnCameraOn(false);
@@ -458,17 +492,23 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
   }
 
   const announcement =
-    state.step === "starting"
-      ? "Waiting for your microphone…"
-      : state.step === "recording"
-        ? elapsedMs >= WARN_MS
-          ? "One minute left. The recording stops at 10 minutes."
-          : `Recording. Question ${state.question + 1} of ${QUESTIONS.length}: ${QUESTIONS[state.question].text}`
-        : state.step === "saving"
-          ? "Saving your recording…"
-          : state.step === "saved"
-            ? "Saved."
-            : "";
+    state.step === "idle"
+      ? cameraNote === "unavailable"
+        ? CAMERA_UNAVAILABLE
+        : cameraNote === "asking"
+          ? CAMERA_ASKING
+          : ""
+      : state.step === "starting"
+        ? "Waiting for your microphone…"
+        : state.step === "recording"
+          ? elapsedMs >= WARN_MS
+            ? "One minute left. The recording stops at 10 minutes."
+            : `Recording. Question ${state.question + 1} of ${QUESTIONS.length}: ${QUESTIONS[state.question].text}`
+          : state.step === "saving"
+            ? "Saving your recording…"
+            : state.step === "saved"
+              ? "Saved."
+              : "";
   if (heldOnly && state.step !== "saving" && state.step !== "failed" && state.step !== "superseded") return null;
   // Kept on screen until the take is saved (or can't be). In the live region it is a node of its
   // own, so it is announced when it appears and not again with every later step.
@@ -514,17 +554,8 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
               {cameraNote === "asking" ? "Waiting for your camera…" : mirror ? "Hide my camera" : "Show my camera"}
             </Button>
           </div>
-          {cameraNote === "asking" && (
-            <p className="text-sm text-muted-foreground">
-              Answer your browser&apos;s question about the camera to go on. On a computer, it&apos;s by the
-              address bar.
-            </p>
-          )}
-          {cameraNote === "unavailable" && (
-            <p className="text-sm text-muted-foreground">
-              Your camera isn&apos;t available, so you won&apos;t see yourself. You can still record.
-            </p>
-          )}
+          {cameraNote === "asking" && <p className="text-sm text-muted-foreground">{CAMERA_ASKING}</p>}
+          {cameraNote === "unavailable" && <p className="text-sm text-muted-foreground">{CAMERA_UNAVAILABLE}</p>}
         </>
       )}
 
@@ -560,7 +591,14 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
             </Button>
             {/* Hide only: showing it here would ask the browser mid-answer. */}
             {mirror && (
-              <Button type="button" variant="outline" onClick={toggleCamera}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  primary.current?.focus(); // this button goes with the camera; carry on from the main one
+                  toggleCamera();
+                }}
+              >
                 <CameraOff aria-hidden="true" />
                 Hide my camera
               </Button>
