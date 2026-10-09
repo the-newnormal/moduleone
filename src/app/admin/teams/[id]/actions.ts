@@ -1,6 +1,6 @@
 "use server";
 
-import { type ActionResult, fail, GENERIC_ERROR, logError, toUserMessage } from "@/lib/admin/errors";
+import { type ActionResult, fail, GENERIC_ERROR, logError, NO_PERMISSION, toUserMessage } from "@/lib/admin/errors";
 import { revalidateTeamTree } from "@/lib/admin/revalidate";
 import { requireAdmin } from "@/lib/admin/session";
 import { asRecord, isAssignableRole, isParentId, isUuid, parseEmail, parseName } from "@/lib/admin/validate";
@@ -405,11 +405,12 @@ export async function giveLogin(memberId: string, email: string): Promise<Action
     if (linkError.code === "23505" && (linkError.message ?? "").includes("auth_user_id")) {
       return fail(EMAIL_TAKEN);
     }
-    // 0006 refuses it (42501) if the project owner put them in or over the organisation since step 3.
-    const refused = linkError.code === "42501";
-    if (!refused) logError("giveLogin link", linkError);
+    // 0006 refuses it with its own sentence (42501) if the project owner put them in or over the
+    // organisation since step 3. Anything else is unexpected.
+    const sentence = linkError.code === "42501" ? toUserMessage(linkError, "giveLogin link") : NO_PERMISSION;
+    if (sentence === NO_PERMISSION) logError("giveLogin link", linkError);
     await discardLogin(service, authUserId, createdHere);
-    return fail(refused ? toUserMessage(linkError, "giveLogin link") : GENERIC_ERROR);
+    return fail(sentence === NO_PERMISSION ? GENERIC_ERROR : sentence);
   }
   if (!linked || linked.length === 0) {
     await discardLogin(service, authUserId, createdHere);

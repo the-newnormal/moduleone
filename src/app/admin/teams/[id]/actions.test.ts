@@ -540,6 +540,14 @@ describe("the organisation node", () => {
       await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: sentence });
       expect(deleteUser).toHaveBeenCalledExactlyOnceWith(NEW_LOGIN);
       expect(revalidatePath).not.toHaveBeenCalled();
+      expect(console.error).not.toHaveBeenCalled();
+    });
+
+    it("logs any other refusal of the link, and says 'something went wrong'", async () => {
+      loginAllowed(dbError("42501", "permission denied for table members"), rows());
+      await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
+      expect(deleteUser).toHaveBeenCalledExactlyOnceWith(NEW_LOGIN);
+      expect(console.error).toHaveBeenCalledExactlyOnceWith("giveLogin link failed", { code: "42501", status: undefined });
     });
   });
 
