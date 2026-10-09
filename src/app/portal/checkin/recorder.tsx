@@ -1,6 +1,6 @@
 "use client";
 
-import { LoaderCircle, Mic } from "lucide-react";
+import { Camera, CameraOff, LoaderCircle, Mic } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
@@ -32,19 +32,17 @@ type State =
   | { step: "saving" }
   | SaveOutcome;
 
-// The member's camera, shown mirrored while they record so they can see themselves talk. Only a
-// preview: it never reaches the recorder, so the take stays audio-only. Small and front-facing.
+// The member's camera, shown mirrored so they can see themselves talk. Only a preview: it never
+// reaches the recorder, so the take stays audio-only. Small and front-facing.
 const CAMERA: MediaTrackConstraints = { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } };
 
 // What is live while recording: the microphone stream, the recorder, the clock, and what becomes
-// of the take once the recorder stops (null: nothing to save). camera: the preview, once allowed.
-type Media = {
-  stream: MediaStream;
-  recorder: MediaRecorder;
-  timer: number;
-  saved: Promise<SaveOutcome | null>;
-  camera: MediaStream | null;
-};
+// of the take once the recorder stops (null: nothing to save).
+type Media = { stream: MediaStream; recorder: MediaRecorder; timer: number; saved: Promise<SaveOutcome | null> };
+
+// The camera while it's on. asked counts requests and is bumped whenever the camera is turned off,
+// so a camera the browser grants only after that is let go.
+type CameraState = { stream: MediaStream | null; asked: number };
 
 function pickMimeType(): string | null {
   if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) return null;
@@ -80,7 +78,7 @@ function upload(ready: ReadyToUpload, body: Blob) {
     .uploadToSignedUrl(ready.path, ready.token, body, { contentType: ready.contentType });
 }
 
-// Stops the clock, the recorder, the microphone and the camera. Detaches the recorder's handlers first, so a
+// Stops the clock, the recorder and the microphone. Detaches the recorder's handlers first, so a
 // recording stopped this way (after an error, say) is dropped rather than uploaded.
 function release(media: RefObject<Media | null>) {
   const live = media.current;
@@ -92,31 +90,30 @@ function release(media: RefObject<Media | null>) {
   live.recorder.onerror = null;
   if (live.recorder.state !== "inactive") live.recorder.stop();
   live.stream.getTracks().forEach((track) => track.stop());
-  live.camera?.getTracks().forEach((track) => track.stop());
 }
 
-// Asked for only once the recording is under way, and on its own, so a camera that is blocked,
-// missing or busy (or a prompt left unanswered) never holds up or stops the check-in: the member
-// records as before, without the preview. Null when there is nothing to show.
-async function openCamera(media: RefObject<Media | null>, live: Media): Promise<MediaStream | null> {
-  let camera: MediaStream;
+// Turns the camera off. One the browser is still asking about is let go once it's allowed.
+function closeCamera(camera: RefObject<CameraState>) {
+  camera.current.asked += 1;
+  camera.current.stream?.getTracks().forEach((track) => track.stop());
+  camera.current.stream = null;
+}
+
+// Whether the browser lets this site use the camera without asking: allowed here before (Chrome
+// remembers it; Safari only for the page). False when it can't say, as in Firefox.
+async function cameraAllowed(): Promise<boolean> {
   try {
-    camera = await navigator.mediaDevices.getUserMedia({ video: CAMERA });
+    return (await navigator.permissions.query({ name: "camera" })).state === "granted";
   } catch {
-    return null;
+    return false;
   }
-  // The recording ended (or was finished) while the browser asked: let the camera go.
-  if (media.current !== live || live.recorder.state === "inactive") {
-    camera.getTracks().forEach((track) => track.stop());
-    return null;
-  }
-  live.camera = camera; // for release to stop with the microphone
-  return camera;
 }
 
 // The camera preview: muted and inline, as iPhone Safari needs to play it in the page rather than
-// fullscreen; mirrored, as people expect to see themselves.
-function CameraMirror({ stream }: { stream: MediaStream }) {
+// fullscreen; mirrored, as people expect to see themselves. Its height is capped and its width
+// follows the picture (portrait on an upright phone, nothing cut off), so the question and the
+// buttons fit on screen with it; it's brought into view when it appears and when recording starts.
+function CameraMirror({ stream, recording }: { stream: MediaStream; recording: boolean }) {
   const video = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     const element = video.current;
@@ -126,6 +123,9 @@ function CameraMirror({ stream }: { stream: MediaStream }) {
       element.srcObject = null;
     };
   }, [stream]);
+  useEffect(() => {
+    video.current?.scrollIntoView({ block: "nearest" });
+  }, [recording]);
   return (
     <video
       ref={video}
@@ -133,7 +133,7 @@ function CameraMirror({ stream }: { stream: MediaStream }) {
       muted
       playsInline
       aria-hidden="true"
-      className="aspect-[4/3] w-full max-w-sm -scale-x-100 rounded-lg bg-muted object-cover"
+      className="h-[min(30svh,18rem)] w-auto max-w-full -scale-x-100 justify-self-start rounded-lg bg-muted object-cover [aspect-ratio:auto_4/3]"
     />
   );
 }
@@ -158,9 +158,16 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
   // The page was hidden, or the microphone muted, while recording, so the take may have a gap.
   const [away, setAway] = useState(false);
   const media = useRef<Media | null>(null);
-  // The camera preview, if the member allowed the camera: shown only while recording, and cleared
-  // by the next start (release stops the camera itself when the recording ends).
-  const [camera, setCamera] = useState<MediaStream | null>(null);
+  // The camera, on only when the member chose it before starting, or by itself at Start where the
+  // browser won't ask (a question then would pop up mid-answer). Off once the recording ends.
+  const camera = useRef<CameraState>({ stream: null, asked: 0 });
+  const [mirror, setMirror] = useState<MediaStream | null>(null);
+  // "asking": the browser's camera question is open. Start waits for the answer: Chrome won't ask
+  // this page anything else meanwhile, so the microphone's question would never come.
+  // "unavailable": blocked, missing or busy, so the member records without seeing themselves.
+  const [cameraNote, setCameraNote] = useState<"asking" | "unavailable" | null>(null);
+  // The member's choice: true once they showed the camera, false once they hid it.
+  const wantsCamera = useRef<boolean | null>(null);
   // Bumped by every start and by leaving the page, so a microphone that is granted only after the
   // member has moved on (or started again) is let go instead of recording in the background.
   const startCount = useRef(0);
@@ -180,6 +187,7 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
   useEffect(
     () => () => {
       startCount.current += 1;
+      closeCamera(camera);
       // Still set while recording, and after Finish until onstop has collected the take.
       const live = media.current;
       if (live) {
@@ -287,6 +295,45 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
     return outcome;
   }
 
+  function turnCameraOff() {
+    closeCamera(camera);
+    setMirror(null);
+    setCameraNote(null);
+  }
+
+  // ask: the member pressed Show my camera, so the browser may ask them. Otherwise it's Start
+  // turning on a camera the browser allows without asking.
+  async function turnCameraOn(ask: boolean) {
+    const attempt = ++camera.current.asked;
+    if (ask) setCameraNote("asking");
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: CAMERA });
+    } catch {
+      if (attempt === camera.current.asked) setCameraNote(ask ? "unavailable" : null);
+      return;
+    }
+    // Turned off (or the page left) while the browser asked: let it go.
+    if (attempt !== camera.current.asked) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    camera.current.stream = stream;
+    setMirror(stream);
+    setCameraNote(null);
+    // A camera that goes away by itself (unplugged, taken by another app) takes the mirror with it.
+    stream.getTracks().forEach((track) =>
+      track.addEventListener("ended", () => camera.current.stream === stream && turnCameraOff(), { once: true }),
+    );
+  }
+
+  function toggleCamera() {
+    if (cameraNote === "asking") return;
+    wantsCamera.current = !mirror;
+    if (mirror) turnCameraOff();
+    else void turnCameraOn(true);
+  }
+
   // Finish, or the ten-minute limit.
   function finish() {
     const live = media.current;
@@ -336,12 +383,14 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
     });
     recorder.onerror = () => {
       release(media);
+      turnCameraOff();
       settle(null);
       setState({ step: "idle", problem: "The recording stopped unexpectedly. Try again." });
     };
     recorder.onstop = () => {
       const durationMs = Date.now() - startedAt;
       release(media);
+      turnCameraOff(); // the take is over, and so is the mirror
       // The type the recorder actually used, or the one asked for; never empty.
       const type = recorder.mimeType && extensionFor(recorder.mimeType) ? recorder.mimeType : mimeType;
       const blob = new Blob(chunks, { type });
@@ -366,11 +415,10 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
       setElapsedMs(ms);
       if (ms >= MAX_MS) finish();
     }, 250);
-    const live: Media = { stream, recorder, timer, saved, camera: null };
+    const live: Media = { stream, recorder, timer, saved };
     media.current = live;
     setElapsedMs(0);
     setAway(false);
-    setCamera(null);
     try {
       recorder.start(1000); // a chunk a second, so a crash loses little
     } catch {
@@ -380,7 +428,13 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
       return setState({ step: "idle", problem: "Couldn't start the microphone. Try again." });
     }
     setState({ step: "recording", question: 0 });
-    void openCamera(media, live).then((stream) => stream && setCamera(stream));
+    // A camera the member hasn't turned on comes on now only if the browser won't ask about it.
+    if (!camera.current.stream && wantsCamera.current !== false) {
+      const asked = camera.current.asked;
+      void cameraAllowed().then((allowed) => {
+        if (allowed && camera.current.asked === asked && media.current === live) void turnCameraOn(false);
+      });
+    }
   }
 
   function nextQuestion() {
@@ -434,8 +488,8 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
             submit.
           </p>
           <p className="text-sm text-muted-foreground">
-            Your camera shows you to yourself while you talk, if you allow it. Only your voice is recorded;
-            the picture isn&apos;t saved.
+            Want to see yourself while you talk? Show your camera before you start. Only your voice is
+            recorded; the picture isn&apos;t saved.
           </p>
           <ol className="grid list-decimal gap-1 pl-5 text-sm">
             {QUESTIONS.map((q) => (
@@ -447,10 +501,27 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
               {state.problem}
             </p>
           )}
-          <Button ref={primary} type="button" onClick={start} disabled={refreshing} className="justify-self-start">
-            <Mic aria-hidden="true" />
-            Start recording
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button ref={primary} type="button" onClick={start} disabled={refreshing || cameraNote === "asking"}>
+              <Mic aria-hidden="true" />
+              Start recording
+            </Button>
+            <Button type="button" variant="outline" onClick={toggleCamera} aria-disabled={cameraNote === "asking"}>
+              {mirror ? <CameraOff aria-hidden="true" /> : <Camera aria-hidden="true" />}
+              {cameraNote === "asking" ? "Waiting for your camera…" : mirror ? "Hide my camera" : "Show my camera"}
+            </Button>
+          </div>
+          {cameraNote === "asking" && (
+            <p className="text-sm text-muted-foreground">
+              Answer your browser&apos;s question about the camera to go on. On a computer, it&apos;s by the
+              address bar.
+            </p>
+          )}
+          {cameraNote === "unavailable" && (
+            <p className="text-sm text-muted-foreground">
+              Your camera isn&apos;t available, so you won&apos;t see yourself. You can still record.
+            </p>
+          )}
         </>
       )}
 
@@ -474,21 +545,24 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
               </span>
             </span>
           </div>
-          {camera && <CameraMirror stream={camera} />}
           <h3 className="text-2xl leading-snug">{QUESTIONS[state.question].text}</h3>
           {elapsedMs >= WARN_MS && (
             <p className="rounded-md bg-muted px-3 py-2 text-sm">
               One minute left. The recording stops at 10 minutes.
             </p>
           )}
-          <Button
-            ref={primary}
-            type="button"
-            onClick={state.question < QUESTIONS.length - 1 ? nextQuestion : finish}
-            className="justify-self-start"
-          >
-            {state.question < QUESTIONS.length - 1 ? "Next question" : "Finish"}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button ref={primary} type="button" onClick={state.question < QUESTIONS.length - 1 ? nextQuestion : finish}>
+              {state.question < QUESTIONS.length - 1 ? "Next question" : "Finish"}
+            </Button>
+            {/* Hide only: showing it here would ask the browser mid-answer. */}
+            {mirror && (
+              <Button type="button" variant="outline" onClick={toggleCamera}>
+                <CameraOff aria-hidden="true" />
+                Hide my camera
+              </Button>
+            )}
+          </div>
         </>
       )}
 
@@ -525,6 +599,10 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
             {heldOnly ? "OK" : "Show my draft"}
           </Button>
         </>
+      )}
+
+      {mirror && (state.step === "idle" || state.step === "starting" || state.step === "recording") && (
+        <CameraMirror stream={mirror} recording={state.step === "recording"} />
       )}
 
       {state.step === "failed" && state.updated && (
