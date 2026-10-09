@@ -30,7 +30,7 @@ export function CheckinTile({ week, thisWeek }: { week: MyWeek; thisWeek: string
           </Link>
         </div>
       ) : (
-        <SaveWatch>
+        <SaveWatch notStarted={week.thisWeek.state === "record"}>
           {week.thisWeek.state === "record" ? (
             <State
               tag={<Tag tone="outline">Not started</Tag>}

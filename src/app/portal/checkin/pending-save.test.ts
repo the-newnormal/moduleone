@@ -147,6 +147,29 @@ describe("heldOutcome", () => {
   });
 });
 
+describe("takeSavedSignal", () => {
+  it("says once that a save landed, and nothing for one that failed or wasn't kept", async () => {
+    const { trackSave, takeSavedSignal } = await load();
+    expect(takeSavedSignal()).toBe(false);
+    await trackSave(Promise.resolve(failed));
+    await trackSave(Promise.resolve<SaveOutcome>({ step: "superseded" }));
+    expect(takeSavedSignal()).toBe(false);
+    await trackSave(Promise.resolve(saved));
+    expect(takeSavedSignal()).toBe(true);
+    expect(takeSavedSignal()).toBe(false);
+  });
+
+  it("counts an older save that landed after a newer one replaced it", async () => {
+    const { trackSave, takeSavedSignal } = await load();
+    const older = deferred<SaveOutcome>();
+    void trackSave(older.promise);
+    void trackSave(deferred<SaveOutcome>().promise);
+    older.resolve(saved);
+    await older.promise;
+    expect(takeSavedSignal()).toBe(true);
+  });
+});
+
 describe("pendingSave", () => {
   it("is null when nothing is saving", async () => {
     const { pendingSave } = await load();

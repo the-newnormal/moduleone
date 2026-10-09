@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, Suspense, use, useEffect, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { currentSave, forgetDeletedTake, releaseSave, trackSave } from "@/app/portal/checkin/pending-save";
+import { currentSave, forgetDeletedTake, releaseSave, takeSavedSignal, trackSave } from "@/app/portal/checkin/pending-save";
 import type { SaveOutcome, Take } from "@/app/portal/checkin/take";
 import { deferred, render, text } from "@/test/dom";
 import { SaveWatch } from "./save-watch";
@@ -66,10 +66,23 @@ beforeEach(() => {
   router.refresh.mockReset();
 });
 
-// The save module lives as long as the tab; let go of whatever a test left held.
+// The save module lives as long as the tab; let go of whatever a test left held or signalled.
 afterEach(() => {
   releaseSave();
+  takeSavedSignal();
 });
+
+// The tile as rendered for a check-in not yet started, which a save that just landed may predate.
+const notStartedTile = (
+  <SaveWatch notStarted>
+    <p>Record this week&apos;s check-in</p>
+  </SaveWatch>
+);
+// Lets a transition's work run.
+const flush = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 
 describe("SaveWatch", () => {
   it("shows the tile as it is when nothing is saving", async () => {
@@ -209,6 +222,46 @@ describe("SaveWatch", () => {
     expect(status()).toBeNull();
     expect(text(alert()!)).toBe("Your last recording hasn't been saved yet.");
     expect(router.refresh).not.toHaveBeenCalled();
+  });
+
+  // The member left the recorder while it was saving; the portal was fetched before the draft was
+  // saved, and the save finished before the portal appeared, so nothing is held by the time it mounts.
+  it("refreshes, once and quietly, a not-started tile that a save landed just before", async () => {
+    await trackSave(Promise.resolve<SaveOutcome>({ step: "saved" }));
+    expect(currentSave()).toBeNull();
+    await render(notStartedTile);
+    await flush();
+    expect(router.refresh).toHaveBeenCalledOnce();
+    expect(status()).toBeNull(); // it has saved: no "Saving…"
+    expect(text()).toBe("Record this week's check-in");
+
+    // Coming back to the portal later doesn't refresh again for the same save.
+    await render(notStartedTile);
+    await flush();
+    expect(router.refresh).toHaveBeenCalledOnce();
+  });
+
+  it("doesn't refresh a tile that already shows the draft, and uses up the signal", async () => {
+    await trackSave(Promise.resolve<SaveOutcome>({ step: "saved" }));
+    await render(tile); // rendered with the draft, so not "not started"
+    await flush();
+    expect(router.refresh).not.toHaveBeenCalled();
+    expect(takeSavedSignal()).toBe(false);
+  });
+
+  it("stops saying it's saving when the save throws, and shows the page as it is", async () => {
+    let reject: (error: unknown) => void = () => {};
+    const save = new Promise<SaveOutcome>((_, r) => {
+      reject = r;
+    });
+    void trackSave(save).catch(() => {});
+    await render(tile);
+    expect(text(status()!)).toContain("Saving your recording");
+    await act(async () => {
+      reject(new Error("network"));
+    });
+    await flush();
+    expect(router.refresh).toHaveBeenCalledOnce();
   });
 
   it("doesn't refresh a page the member has already left", async () => {

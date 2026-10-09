@@ -5,23 +5,33 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { currentSave, heldOutcome, pendingSave, wasDeleted } from "../checkin/pending-save";
+import { currentSave, heldOutcome, pendingSave, takeSavedSignal, wasDeleted } from "../checkin/pending-save";
 import type { SaveOutcome } from "../checkin/take";
 
 // Coming back here from the recorder can beat the take's upload: the page was rendered before the
 // draft was saved, so it would read "Not started". While this tab still holds a save, say so
 // instead, then show the page as it is once the save settles. It only watches the save: the
 // recorder and Sign out are the ones that take it over or release it.
-export function SaveWatch({ children }: { children: ReactNode }) {
+// `notStarted`: the tile says this week's check-in isn't started, so a save that landed just before
+// the page appeared may not be in it.
+export function SaveWatch({ notStarted = false, children }: { notStarted?: boolean; children: ReactNode }) {
   const router = useRouter();
   const [held, setHeld] = useState<"saving" | "failed" | null>(null);
   const [refreshing, startRefresh] = useTransition();
+  // A refresh for a save that has already landed: nothing to say meanwhile.
+  const [, startQuietRefresh] = useTransition();
 
   useEffect(() => {
     // Read after mounting, not while rendering: leaving the recorder starts its save in an effect
     // cleanup, which React runs in this same commit, after this page rendered but before this.
     const save = currentSave();
-    if (!save) return;
+    const landed = takeSavedSignal();
+    if (!save) {
+      // The save finished before this page appeared, perhaps after the server had read this week's
+      // check-in: show the page again, with the draft.
+      if (landed && notStarted) startQuietRefresh(() => router.refresh());
+      return;
+    }
     // A save that ended before this page mounted isn't saving: a failed take still needs saving, and
     // the news that a take wasn't kept waits for the recorder to tell it, with nothing to refresh.
     const ended = heldOutcome();
@@ -29,19 +39,27 @@ export function SaveWatch({ children }: { children: ReactNode }) {
     setHeld(ended === undefined ? "saving" : atRisk(ended) ? "failed" : null);
     if (ended !== undefined) return;
     let mounted = true;
-    void pendingSave().then((outcome) => {
-      if (!mounted) return;
-      if (atRisk(outcome)) return setHeld("failed");
-      // Keep saying "Saving…" until the page that knows about the draft has arrived.
+    // Keep saying "Saving…" until the page that knows how the save went has arrived.
+    const showPage = () =>
       startRefresh(() => {
         setHeld(null);
         router.refresh();
       });
-    });
+    void pendingSave().then(
+      (outcome) => {
+        if (!mounted) return;
+        if (atRisk(outcome)) return setHeld("failed");
+        showPage();
+      },
+      // A save that threw holds nothing to try again: show the page as it is.
+      () => {
+        if (mounted) showPage();
+      },
+    );
     return () => {
       mounted = false;
     };
-  }, [router]);
+  }, [router, notStarted]);
 
   if (held === "saving" || refreshing) {
     return (
