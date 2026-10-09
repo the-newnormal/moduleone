@@ -32,9 +32,19 @@ type State =
   | { step: "saving" }
   | SaveOutcome;
 
+// The member's camera, shown mirrored while they record so they can see themselves talk. Only a
+// preview: it never reaches the recorder, so the take stays audio-only. Small and front-facing.
+const CAMERA: MediaTrackConstraints = { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } };
+
 // What is live while recording: the microphone stream, the recorder, the clock, and what becomes
-// of the take once the recorder stops (null: nothing to save).
-type Media = { stream: MediaStream; recorder: MediaRecorder; timer: number; saved: Promise<SaveOutcome | null> };
+// of the take once the recorder stops (null: nothing to save). camera: the preview, once allowed.
+type Media = {
+  stream: MediaStream;
+  recorder: MediaRecorder;
+  timer: number;
+  saved: Promise<SaveOutcome | null>;
+  camera: MediaStream | null;
+};
 
 function pickMimeType(): string | null {
   if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) return null;
@@ -70,7 +80,7 @@ function upload(ready: ReadyToUpload, body: Blob) {
     .uploadToSignedUrl(ready.path, ready.token, body, { contentType: ready.contentType });
 }
 
-// Stops the clock, the recorder and the microphone. Detaches the recorder's handlers first, so a
+// Stops the clock, the recorder, the microphone and the camera. Detaches the recorder's handlers first, so a
 // recording stopped this way (after an error, say) is dropped rather than uploaded.
 function release(media: RefObject<Media | null>) {
   const live = media.current;
@@ -82,6 +92,50 @@ function release(media: RefObject<Media | null>) {
   live.recorder.onerror = null;
   if (live.recorder.state !== "inactive") live.recorder.stop();
   live.stream.getTracks().forEach((track) => track.stop());
+  live.camera?.getTracks().forEach((track) => track.stop());
+}
+
+// Asked for only once the recording is under way, and on its own, so a camera that is blocked,
+// missing or busy (or a prompt left unanswered) never holds up or stops the check-in: the member
+// records as before, without the preview. Null when there is nothing to show.
+async function openCamera(media: RefObject<Media | null>, live: Media): Promise<MediaStream | null> {
+  let camera: MediaStream;
+  try {
+    camera = await navigator.mediaDevices.getUserMedia({ video: CAMERA });
+  } catch {
+    return null;
+  }
+  // The recording ended (or was finished) while the browser asked: let the camera go.
+  if (media.current !== live || live.recorder.state === "inactive") {
+    camera.getTracks().forEach((track) => track.stop());
+    return null;
+  }
+  live.camera = camera; // for release to stop with the microphone
+  return camera;
+}
+
+// The camera preview: muted and inline, as iPhone Safari needs to play it in the page rather than
+// fullscreen; mirrored, as people expect to see themselves.
+function CameraMirror({ stream }: { stream: MediaStream }) {
+  const video = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const element = video.current;
+    if (!element) return;
+    element.srcObject = stream;
+    return () => {
+      element.srcObject = null;
+    };
+  }, [stream]);
+  return (
+    <video
+      ref={video}
+      autoPlay
+      muted
+      playsInline
+      aria-hidden="true"
+      className="aspect-[4/3] w-full max-w-sm -scale-x-100 rounded-lg bg-muted object-cover"
+    />
+  );
 }
 
 // Stops a live recording with its save registered first, so Sign out and a return to the page wait
@@ -104,6 +158,9 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
   // The page was hidden, or the microphone muted, while recording, so the take may have a gap.
   const [away, setAway] = useState(false);
   const media = useRef<Media | null>(null);
+  // The camera preview, if the member allowed the camera: shown only while recording, and cleared
+  // by the next start (release stops the camera itself when the recording ends).
+  const [camera, setCamera] = useState<MediaStream | null>(null);
   // Bumped by every start and by leaving the page, so a microphone that is granted only after the
   // member has moved on (or started again) is let go instead of recording in the background.
   const startCount = useRef(0);
@@ -309,9 +366,11 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
       setElapsedMs(ms);
       if (ms >= MAX_MS) finish();
     }, 250);
-    media.current = { stream, recorder, timer, saved };
+    const live: Media = { stream, recorder, timer, saved, camera: null };
+    media.current = live;
     setElapsedMs(0);
     setAway(false);
+    setCamera(null);
     try {
       recorder.start(1000); // a chunk a second, so a crash loses little
     } catch {
@@ -321,6 +380,7 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
       return setState({ step: "idle", problem: "Couldn't start the microphone. Try again." });
     }
     setState({ step: "recording", question: 0 });
+    void openCamera(media, live).then((stream) => stream && setCamera(stream));
   }
 
   function nextQuestion() {
@@ -373,6 +433,10 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
             minute each is plenty; the recording stops at 10 minutes. You can listen back before you
             submit.
           </p>
+          <p className="text-sm text-muted-foreground">
+            Your camera shows you to yourself while you talk, if you allow it. Only your voice is recorded;
+            the picture isn&apos;t saved.
+          </p>
           <ol className="grid list-decimal gap-1 pl-5 text-sm">
             {QUESTIONS.map((q) => (
               <li key={q.id}>{q.text}</li>
@@ -410,6 +474,7 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
               </span>
             </span>
           </div>
+          {camera && <CameraMirror stream={camera} />}
           <h3 className="text-2xl leading-snug">{QUESTIONS[state.question].text}</h3>
           {elapsedMs >= WARN_MS && (
             <p className="rounded-md bg-muted px-3 py-2 text-sm">
