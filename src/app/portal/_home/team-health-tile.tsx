@@ -68,7 +68,7 @@ export function TeamHealthTile({ health }: { health: Exclude<TeamHealthGlance, {
         <div className="grid gap-1">
           <div
             aria-hidden
-            className="hidden grid-cols-[minmax(0,1fr)_9rem_9rem] gap-3 border-b px-2 pb-2 text-xs leading-4 font-medium tracking-[0.02em] text-muted-foreground sm:grid"
+            className="hidden grid-cols-[minmax(0,1fr)_10rem_10rem] gap-3 border-b px-2 pb-2 text-xs leading-4 font-medium tracking-[0.02em] text-muted-foreground sm:grid"
           >
             <span>Team</span>
             <span>Last week · {formatWeek(lastWeek)}</span>
@@ -117,7 +117,7 @@ function GlanceRow({
   const cellFor = (week: string): HeatmapCell => node.cells.find((c) => c.week === week) ?? { week, health: null, pending: 0 };
   return (
     <li
-      className={`grid grid-cols-2 items-center gap-x-3 gap-y-1 border-b py-2 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_9rem_9rem] ${
+      className={`grid grid-cols-2 items-center gap-x-3 gap-y-1 border-b py-2 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_10rem_10rem] ${
         indent ? "pr-2 pl-5" : "px-2"
       }`}
     >
@@ -155,7 +155,7 @@ function GlanceCell({
       <span aria-hidden className="text-xs leading-4 text-muted-foreground sm:hidden">
         {label}
       </span>
-      <span aria-hidden className="flex flex-wrap items-center gap-1.5 text-sm">
+      <span aria-hidden className="flex flex-wrap items-center gap-1.5 text-sm sm:flex-nowrap">
         {cell.health ? (
           <>
             <BandBadge band={cell.health.band} score={formatScore(cell.health.score, config)} />
