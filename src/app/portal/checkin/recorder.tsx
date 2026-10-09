@@ -84,6 +84,14 @@ function release(media: RefObject<Media | null>) {
   live.stream.getTracks().forEach((track) => track.stop());
 }
 
+// Stops a live recording with its save registered first, so Sign out and a return to the page wait
+// for the take from the moment it stops, not only once the stop event has collected it.
+function stopAndTrack(live: Media) {
+  window.clearInterval(live.timer);
+  void trackSave(live.saved);
+  live.recorder.stop(); // onstop collects the take and saves it
+}
+
 // heldOnly: shown under a draft (see saved-take.tsx) only for a take this tab still holds, saving or
 // failed, or the news that it wasn't kept; it can't start a recording, and shows nothing otherwise.
 export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
@@ -194,10 +202,8 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
     return holdRecording(() => {
       const live = media.current;
       if (!live || live.recorder.state === "inactive") return;
-      window.clearInterval(live.timer);
-      void trackSave(live.saved); // registered now, before onstop runs, so Sign out waits for it
       setState({ step: "saving" });
-      live.recorder.stop(); // onstop collects the take and saves it
+      stopAndTrack(live);
     });
   }, [recording]);
 
@@ -224,12 +230,12 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
     return outcome;
   }
 
+  // Finish, or the ten-minute limit.
   function finish() {
     const live = media.current;
     if (!live || live.recorder.state === "inactive") return;
-    window.clearInterval(live.timer);
     setState({ step: "saving" });
-    live.recorder.stop(); // onstop collects the take
+    stopAndTrack(live);
   }
 
   async function start() {

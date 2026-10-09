@@ -31,6 +31,47 @@ async function load() {
   return { ...saves, Recorder };
 }
 
+// A MediaRecorder whose stop event comes only when the test fires it, as a real one's comes later.
+class FakeRecorder {
+  static isTypeSupported = () => true;
+  static last: FakeRecorder | null = null;
+  state: "inactive" | "recording" = "inactive";
+  mimeType = "audio/webm;codecs=opus";
+  ondataavailable: ((event: { data: Blob }) => void) | null = null;
+  onstop: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  constructor() {
+    FakeRecorder.last = this;
+  }
+  start() {
+    this.state = "recording";
+  }
+  stop() {
+    this.state = "inactive";
+  }
+}
+
+describe("a recording stopped by Finish", () => {
+  it("has its save registered at once, before the stop event, so Sign out waits for it", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    const track = { stop: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn() };
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: { getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }) },
+      configurable: true,
+    });
+    const { Recorder, currentSave } = await load();
+    await render(<Recorder />);
+    await click(button("Start recording"));
+    await settle();
+    await click(button("Next question"));
+    await click(button("Next question"));
+    await click(button("Finish"));
+    expect(FakeRecorder.last?.state).toBe("inactive"); // stopped; its stop event hasn't come yet
+    expect(currentSave()).not.toBeNull();
+    vi.unstubAllGlobals();
+  });
+});
+
 describe("a failed take the recorder shows", () => {
   it("is held for Sign out once the recorder has taken the save over, until it's discarded", async () => {
     const { Recorder, trackSave, currentSave, failedTakeShown } = await load();
