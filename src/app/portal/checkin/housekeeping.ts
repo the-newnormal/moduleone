@@ -120,9 +120,39 @@ export async function tidyMemberAudio(memberId: string, weekStart: string): Prom
 // Run daily with processPendingCheckins. Never throws.
 const REMOVE_BATCH = 100;
 
+// Retries paths detached by an action whose Storage request failed. Successful paths are removed
+// from the queue; failures remain for the next scheduled sweep.
+async function retryQueuedRemovals(admin: ReturnType<typeof createServiceRoleClient>): Promise<number> {
+  // This guard lets older deployments continue retention cleanup until the migration lands.
+  if (typeof (admin as unknown as { from?: unknown }).from !== "function") return 0;
+  const { data, error } = await admin
+    .from("storage_cleanup_queue")
+    .select("path")
+    .order("queued_at", { ascending: true })
+    .limit(REMOVE_BATCH);
+  if (error) {
+    console.error("deleteExpiredRecordings: reading cleanup queue failed", { code: error.code });
+    return 0;
+  }
+  const paths = (data ?? []).map((row: { path: string }) => row.path);
+  if (paths.length === 0) return 0;
+  const { error: removeError } = await admin.storage.from(BUCKET).remove(paths);
+  if (removeError) {
+    console.error("deleteExpiredRecordings: retrying cleanup failed", { code: removeError.name });
+    return 0;
+  }
+  const { error: clearError } = await admin.from("storage_cleanup_queue").delete().in("path", paths);
+  if (clearError) {
+    console.error("deleteExpiredRecordings: clearing cleanup queue failed", { code: clearError.code });
+    return 0;
+  }
+  return paths.length;
+}
+
 export async function deleteExpiredRecordings(): Promise<{ deleted: number } | null> {
   try {
     const admin = createServiceRoleClient();
+    const queued = await retryQueuedRemovals(admin);
     const { data, error } = await admin.rpc("forget_expired_checkin_audio");
     if (error) {
       console.error("deleteExpiredRecordings: finding expired recordings failed", { code: error.code });
@@ -136,7 +166,7 @@ export async function deleteExpiredRecordings(): Promise<{ deleted: number } | n
         return null;
       }
     }
-    return { deleted: names.length };
+    return { deleted: queued + names.length };
   } catch (error) {
     console.error("deleteExpiredRecordings failed", { code: error instanceof Error ? error.name : "unknown" });
     return null;
