@@ -118,7 +118,7 @@ describe("parseName", () => {
     expect(parseName(v)).toEqual({ ok: false, error: "Enter a name." });
   });
 
-  it.each(["Line\nbreak", "Tab\there", "Nul\u0000", "Zero​width", "Bidi‮override"])(
+  it.each(["Line\nbreak", "Line\u2028separator", "Paragraph\u2029separator", "Tab\there", "Nul\u0000", "Zero​width", "Bidi‮override"])(
     "refuses control and hidden characters: %j",
     (v) => {
       expect(parseName(v).ok).toBe(false);
@@ -189,10 +189,12 @@ describe("parseLeaderTitle", () => {
   it("allows up to 60 characters on one line, like 0006's teams_leader_title_format", () => {
     expect(parseLeaderTitle("t".repeat(60)).ok).toBe(true);
     expect(parseLeaderTitle("t".repeat(61))).toEqual({ ok: false, error: "Titles can be at most 60 characters." });
-    expect(parseLeaderTitle("Vice\nPresident")).toEqual({
-      ok: false,
-      error: "Titles can't contain line breaks or hidden characters.",
-    });
+    for (const broken of ["Vice\nPresident", "Vice\u2028President", "Vice\u2029President"]) {
+      expect(parseLeaderTitle(broken)).toEqual({
+        ok: false,
+        error: "Titles can't contain line breaks or hidden characters.",
+      });
+    }
     expect(parseLeaderTitle(3)).toEqual({ ok: false, error: "Titles must be text." });
   });
 });

@@ -75,9 +75,10 @@ export function isIndex(value: unknown): value is number {
 // Lengths count code points, as Postgres char_length does (an emoji is one character, not two).
 const length = (s: string) => [...s].length;
 
-// Control characters (newlines, tabs, NUL, …) and invisible format characters (zero-width
-// spaces, direction overrides) don't belong in a one-line name or code.
-const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}]/u;
+// Control characters (newlines, tabs, NUL, …), Unicode's line and paragraph separators (U+2028,
+// U+2029) and invisible format characters (zero-width spaces, direction overrides) don't belong
+// in a one-line name, title or code.
+const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 // In a note, line breaks and tabs are fine; other control and format characters aren't.
 const CONTROL_OR_FORMAT_EXCEPT_BREAKS = /[^\P{Cc}\n\t]|\p{Cf}/u;
 
