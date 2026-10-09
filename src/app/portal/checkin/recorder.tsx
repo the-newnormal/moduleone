@@ -184,22 +184,21 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
   // browser won't ask (a question then would pop up mid-answer). Off once the recording ends.
   const camera = useRef<CameraState>({ stream: null, asked: 0 });
   const [mirror, setMirror] = useState<MediaStream | null>(null);
+  // A question an earlier recorder in this tab left open: wait for its answer too. Read once, so the
+  // note and the wait agree even if it's answered in between.
+  const [openQuestion] = useState(() => cameraQuestion);
   // "asking": the browser's camera question is open. Start waits for the answer: Chrome won't ask
   // this page anything else meanwhile, so the microphone's question would never come.
   // "unavailable": blocked, missing or busy, so the member records without seeing themselves.
-  const [cameraNote, setCameraNote] = useState<"asking" | "unavailable" | null>(() =>
-    cameraQuestion ? "asking" : null,
-  );
-  // A question an earlier recorder in this tab left open: wait for its answer too.
+  const [cameraNote, setCameraNote] = useState<"asking" | "unavailable" | null>(openQuestion ? "asking" : null);
   useEffect(() => {
-    const question = cameraQuestion;
-    if (!question) return;
+    if (!openQuestion) return;
     let mounted = true;
-    void question.then(() => mounted && setCameraNote((note) => (note === "asking" ? null : note)));
+    void openQuestion.then(() => mounted && setCameraNote((note) => (note === "asking" ? null : note)));
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [openQuestion]);
   // Bumped by every start and by leaving the page, so a microphone that is granted only after the
   // member has moved on (or started again) is let go instead of recording in the background.
   const startCount = useRef(0);
