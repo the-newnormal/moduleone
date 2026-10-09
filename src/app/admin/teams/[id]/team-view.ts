@@ -4,7 +4,7 @@
 // member's auth_user_id becomes a yes/no.
 
 import { formatDate } from "@/lib/admin/format";
-import { isEditableMember, type Role, roleLabel } from "@/lib/admin/roles";
+import { asRole, isEditableMember, type Role, roleLabel } from "@/lib/admin/roles";
 import { breadcrumb, KIND_LABELS, type TeamRow, typeLabel } from "@/lib/admin/tree";
 import type { DivisionType, DomainType, TeamKind } from "@/lib/admin/validate";
 
@@ -109,11 +109,6 @@ export type TeamView = {
   inheritedLeads: InheritedLead[]; // who else leads it through a node above it (not removable here)
   leadOptions: LeadPerson[]; // leaders who could be added as a lead (none who lead it already)
 };
-
-const ROLES: readonly Role[] = ["member", "leader", "hq"];
-// An unexpected role (the database allows only these three) is treated like a Master Admin: shown,
-// never editable.
-const asRole = (role: string): Role => (ROLES.includes(role as Role) ? (role as Role) : "hq");
 
 const byName = <T extends { id: string; name: string }>(a: T, b: T) =>
   a.name.localeCompare(b.name, "en") || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);

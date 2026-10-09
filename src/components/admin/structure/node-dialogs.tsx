@@ -160,7 +160,7 @@ export function MoveDialog({
           <DialogHeader>
             <DialogTitle>Move {row.name}</DialogTitle>
             <DialogDescription>
-              Choose where the {kind} goes. Dragging it by its handle does the same.
+              Choose where the {kind} goes. Dragging its box onto the chart does the same.
             </DialogDescription>
           </DialogHeader>
 
