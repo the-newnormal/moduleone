@@ -8,12 +8,17 @@ import { formatWeek } from "@/lib/dashboard/weeks";
 import { formatScore, type HealthConfig } from "@/lib/health/health";
 import type { TeamHealthGlance } from "@/lib/portal/team-health";
 import { BANDS, BandBadge, barClass, thresholdItems } from "../dashboard/band";
-import { cellWord, describeCell, hidesRed, plural } from "../dashboard/describe";
+import { cellWord, describeCell, plural } from "../dashboard/describe";
 import { HeatmapTooltip } from "../dashboard/heatmap-tooltip";
 import { Bars, drillIn } from "../dashboard/org-chart";
 import { Tile } from "./tile";
 
 type Ok = Extract<TeamHealthGlance, { status: "ok" }>;
+
+// A green or yellow mean with a red check-in in it. Kept here rather than imported, so the portal
+// doesn't depend on how the heat-map pages mark it.
+const someoneRed = (cell: HeatmapCell) =>
+  cell.health !== null && cell.health.band !== "red" && cell.health.bands.red > 0;
 
 // Leaders' and hq's numbers for the week: check-ins so far, last week's, and how many are still
 // waiting for the grader. Counts only, from the teams the viewer covers.
@@ -169,7 +174,7 @@ function ThisWeek({ node, config }: { node: OrgNode; config: HealthConfig }) {
       {cell.health ? (
         <>
           <BandBadge band={cell.health.band} score={formatScore(cell.health.score, config)} />
-          {hidesRed(cell) && <OctagonAlert aria-hidden className="size-3 text-status-critical" strokeWidth={2.5} />}
+          {someoneRed(cell) && <OctagonAlert aria-hidden className="size-3 text-status-critical" strokeWidth={2.5} />}
           {cell.pending > 0 && <Clock aria-hidden className="size-3 text-muted-foreground" />}
         </>
       ) : cell.pending > 0 ? (
