@@ -5,6 +5,8 @@
 // US$ per minute of audio, by `<provider>:<model>` as transcript_model records it. A local server
 // costs nothing per call. A model missing here shows as "not priced" rather than as free.
 export const TRANSCRIPTION_USD_PER_MINUTE: Record<string, number> = {
+  // The default (src/lib/stt/config.ts).
+  "openai:gpt-transcribe": 0.0045,
   "openai:gpt-4o-transcribe": 0.006,
   "openai:gpt-4o-mini-transcribe": 0.003,
   "openai:whisper-1": 0.006,

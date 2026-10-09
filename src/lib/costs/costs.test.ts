@@ -30,11 +30,13 @@ const grading = (overrides: Partial<CostRow> = {}): CostRow => ({
 describe("rowCostUsd", () => {
   it("prices transcription by the minute", () => {
     expect(rowCostUsd(transcription())).toBeCloseTo(0.06);
+    // The default model.
+    expect(rowCostUsd(transcription({ model: "openai:gpt-transcribe" }))).toBeCloseTo(0.045);
   });
 
   it("counts a local server as free and an unknown model as not priced", () => {
     expect(rowCostUsd(transcription({ model: "local:parakeet" }))).toBe(0);
-    expect(rowCostUsd(transcription({ model: "openai:gpt-transcribe" }))).toBeNull();
+    expect(rowCostUsd(transcription({ model: "openai:gpt-unknown" }))).toBeNull();
     expect(rowCostUsd(grading({ model: "claude-unknown" }))).toBeNull();
   });
 
@@ -67,8 +69,8 @@ describe("monthlyCosts", () => {
   });
 
   it("names models it can't price and leaves them out of the dollars", () => {
-    const [month] = monthlyCosts([transcription({ model: "openai:gpt-transcribe" }), grading()]);
-    expect(month.unpriced).toEqual(["openai:gpt-transcribe"]);
+    const [month] = monthlyCosts([transcription({ model: "openai:gpt-unknown" }), grading()]);
+    expect(month.unpriced).toEqual(["openai:gpt-unknown"]);
     expect(month.transcriptionUsd).toBe(0);
     expect(month.audioMinutes).toBeCloseTo(10);
   });
