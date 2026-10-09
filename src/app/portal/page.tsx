@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { logError } from "@/lib/admin/errors";
+import { loadRole } from "@/lib/dashboard/load";
 import { createClient } from "@/lib/supabase/server";
-import { signOut } from "./actions";
+import { SignOutButton } from "./sign-out-button";
 
 export const metadata: Metadata = { title: "Portal · Module One" };
 
@@ -15,6 +15,10 @@ export default async function PortalPage() {
   // never renders without a verified user.
   const { data } = await supabase.auth.getClaims();
   if (!data?.claims) redirect("/login?next=/portal");
+  // Team health shows grades, which members never see; it is for leaders and hq. If the role can't
+  // be read, the card is left out rather than the portal failing.
+  const role = await loadRole(supabase).catch(() => null);
+  const seesTeamHealth = role === "leader" || role === "hq";
 
   // The admin pages check the grant again themselves; this only decides whether to show the link.
   const admin = await supabase.rpc("app_has_grant", { requested: "admin" });
@@ -30,11 +34,7 @@ export default async function PortalPage() {
             Signed in as <span className="font-medium text-foreground">{data.claims.email}</span>
           </p>
         </div>
-        <form action={signOut}>
-          <Button type="submit" variant="outline" size="sm">
-            Sign out
-          </Button>
-        </form>
+        <SignOutButton />
       </header>
 
       <Card>
@@ -43,23 +43,28 @@ export default async function PortalPage() {
             <h2 className="text-2xl">Weekly check-in</h2>
           </CardTitle>
           <CardDescription>
-            Five minutes, three questions. The recorder arrives in the next release.
+            Five minutes, three questions.{" "}
+            <Link href="/portal/checkin" className="font-medium text-primary underline-offset-4 hover:underline">
+              Record this week&apos;s check-in
+            </Link>
           </CardDescription>
         </CardHeader>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            <h2 className="text-2xl">
-              <Link href="/portal/dashboard" className="hover:underline">
-                Team health
-              </Link>
-            </h2>
-          </CardTitle>
-          <CardDescription>The red, yellow and green heat-map of check-ins, week by week.</CardDescription>
-        </CardHeader>
-      </Card>
+      {seesTeamHealth && (
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              <h2 className="text-2xl">
+                <Link href="/portal/dashboard" className="hover:underline">
+                  Team health
+                </Link>
+              </h2>
+            </CardTitle>
+            <CardDescription>The red, yellow and green heat-map of check-ins, week by week.</CardDescription>
+          </CardHeader>
+        </Card>
+      )}
 
       {isAdmin && (
         <Card>

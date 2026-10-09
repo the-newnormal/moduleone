@@ -79,11 +79,10 @@ export default async function TeamWeekPage({
     loadTeamWeek(supabase, teamId === "none" ? null : teamId, week),
     loadRole(supabase),
   ]);
+  // Members never see their grade or the leaders-only review (see ../../page.tsx).
+  if (role === "member") redirect("/portal/checkin");
   const { checkins } = teamWeek;
-  const team = teamId === "none" ? "No team" : (teamWeek.teamName ?? "Earlier team");
-  // A member only ever sees their own check-in here, as on the grid: no team-wide summary.
-  const own = role === "member";
-  const teamName = own ? `You · ${team}` : team;
+  const teamName = teamId === "none" ? "No team" : (teamWeek.teamName ?? "Earlier team");
   const cell = teamWeekHealth(checkins, config);
   const waiting = checkins.length - (cell?.graded ?? 0);
 
@@ -103,7 +102,7 @@ export default async function TeamWeekPage({
         )}
         <h1 className="text-4xl">{teamName}</h1>
         <p className="text-muted-foreground">Week of {formatWeek(week, true)}</p>
-        {cell && !own && (
+        {cell && (
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <BandBadge band={cell.band} score={formatScore(cell.score, config)} />
             <span className="text-muted-foreground">
