@@ -64,7 +64,7 @@ const EMAIL = "mei.wong@example.com";
 
 type Result = { data: unknown; error: unknown };
 type Query = { table: string; calls: [string, ...unknown[]][] };
-const METHODS = ["select", "insert", "update", "delete", "eq", "neq", "is", "limit", "maybeSingle"];
+const METHODS = ["select", "insert", "update", "delete", "eq", "neq", "is", "in", "or", "limit", "maybeSingle"];
 
 function fakeFrom(queued: Record<string, Result[]>, log: Query[]) {
   return vi.fn((table: string) => {
@@ -120,8 +120,16 @@ const dbError = (code: string, message: string) => ({
   error: { code, message, details: "Failing row contains (mei.wong@example.com)", hint: null },
 });
 
+// The people and lead actions first look for the organisation node (migration 0006): none, unless a
+// test says otherwise.
+const ORG_LOOKUP = { table: "teams", calls: [["select", "id"], ["eq", "kind", "organisation"], ["limit", 1]] };
+const noOrganisation = () => ({ data: [], error: null });
+const organisationIs = (id: string) => ({ data: [{ id }], error: null });
+// What an action wrote, leaving out that lookup.
+const writes = () => userQueries.filter((q) => q.table !== "teams");
+
 beforeEach(() => {
-  userQueue = {};
+  userQueue = { teams: Array.from({ length: 4 }, noOrganisation) };
   userQueries = [];
   serviceQueue = {};
   serviceQueries = [];
@@ -210,7 +218,7 @@ describe("addMember", () => {
   it("moves someone with no team into this one, only if they still have no team", async () => {
     userQueue.members = [rows(PERSON)];
     await expect(addMember(TEAM, PERSON, null)).resolves.toEqual({ ok: true, value: null });
-    expect(userQueries).toEqual([
+    expect(writes()).toEqual([
       {
         table: "members",
         calls: [
@@ -227,7 +235,7 @@ describe("addMember", () => {
   it("moves someone from another team, only if they're still there", async () => {
     userQueue.members = [rows(PERSON)];
     await addMember(TEAM, PERSON, OTHER_TEAM);
-    expect(userQueries[0].calls).toEqual([
+    expect(writes()[0].calls).toEqual([
       ["update", { team_id: TEAM }],
       ["eq", "id", PERSON],
       ["eq", "team_id", OTHER_TEAM],
@@ -270,7 +278,7 @@ describe("createMember", () => {
   it("adds a new person to this team with the trimmed name and the role", async () => {
     userQueue.members = [rows(PERSON)];
     await expect(createMember(TEAM, { name: "  Ana Lee ", role: "leader" })).resolves.toEqual({ ok: true, value: null });
-    expect(userQueries).toEqual([
+    expect(writes()).toEqual([
       { table: "members", calls: [["insert", { name: "Ana Lee", team_id: TEAM, role: "leader" }], ["select", "id"]] },
     ]);
     expectRevalidated();
@@ -279,7 +287,7 @@ describe("createMember", () => {
   it("never writes anything but the name, team and role", async () => {
     userQueue.members = [rows(PERSON)];
     await createMember(TEAM, { name: "Ana", role: "member", auth_user_id: NEW_LOGIN, login_given_by: ADMIN } as never);
-    expect(userQueries[0].calls[0]).toEqual(["insert", { name: "Ana", team_id: TEAM, role: "member" }]);
+    expect(writes()[0].calls[0]).toEqual(["insert", { name: "Ana", team_id: TEAM, role: "member" }]);
   });
 
   it.each([
@@ -305,7 +313,7 @@ describe("removeFromTeam", () => {
   it("sets team_id to null, only if they're still in this team", async () => {
     userQueue.members = [rows(PERSON)];
     await expect(removeFromTeam(TEAM, PERSON)).resolves.toEqual({ ok: true, value: null });
-    expect(userQueries).toEqual([
+    expect(writes()).toEqual([
       {
         table: "members",
         calls: [["update", { team_id: null }], ["eq", "id", PERSON], ["eq", "team_id", TEAM], ["select", "id"]],
@@ -339,7 +347,7 @@ describe("setRole", () => {
   it.each(["member", "leader"])("sets the role to %s", async (role) => {
     userQueue.members = [rows(PERSON)];
     await expect(setRole(PERSON, role)).resolves.toEqual({ ok: true, value: null });
-    expect(userQueries).toEqual([
+    expect(writes()).toEqual([
       { table: "members", calls: [["update", { role }], ["eq", "id", PERSON], ["select", "id"]] },
     ]);
     expectRevalidated();
@@ -365,7 +373,7 @@ describe("addLead", () => {
   it("adds a team_leads row", async () => {
     userQueue.team_leads = [{ data: null, error: null }];
     await expect(addLead(TEAM, PERSON)).resolves.toEqual({ ok: true, value: null });
-    expect(userQueries).toEqual([{ table: "team_leads", calls: [["insert", { team_id: TEAM, member_id: PERSON }]] }]);
+    expect(userQueries).toEqual([ORG_LOOKUP, { table: "team_leads", calls: [["insert", { team_id: TEAM, member_id: PERSON }]] }]);
     expectRevalidated();
   });
 
@@ -400,7 +408,7 @@ describe("removeLead", () => {
   it("deletes that team_leads row", async () => {
     userQueue.team_leads = [{ data: null, error: null }];
     await expect(removeLead(TEAM, PERSON)).resolves.toEqual({ ok: true, value: null });
-    expect(userQueries).toEqual([
+    expect(writes()).toEqual([
       { table: "team_leads", calls: [["delete"], ["eq", "team_id", TEAM], ["eq", "member_id", PERSON]] },
     ]);
     expectRevalidated();
@@ -447,6 +455,63 @@ const HISTORY_QUERIES: Query[] = [
   { table: "checkins", calls: [["select", "id"], ["eq", "member_id", PERSON], ["limit", 1]] },
   { table: "member_profiles", calls: [["select", "member_id"], ["eq", "member_id", PERSON], ["limit", 1]] },
 ];
+
+// Only the project owner decides who sits in the organisation node or leads it (migration 0006):
+// every action that would change either refuses, whatever a client sends, and writes nothing.
+describe("the organisation node", () => {
+  const ORG = TEAM;
+  const OTHER = "a0000000-0000-4000-8000-0000000000ff";
+  const REFUSED = { ok: false, error: "Only the project owner decides who sits in the organisation and who leads it." };
+
+  it.each([
+    ["putting someone in it", () => addMember(ORG, PERSON, null)],
+    ["moving someone out of it", () => addMember(OTHER, PERSON, ORG)],
+    ["adding someone new to it", () => createMember(ORG, { name: "Ana", role: "member" })],
+    ["taking someone out of it", () => removeFromTeam(ORG, PERSON)],
+    ["adding a lead of it", () => addLead(ORG, PERSON)],
+    ["removing a lead of it", () => removeLead(ORG, PERSON)],
+  ])("refuses %s, writing nothing", async (_label, run) => {
+    userQueue.teams = [organisationIs(ORG)];
+    await expect(run()).resolves.toEqual(REFUSED);
+    expect(writes()).toEqual([]);
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("refuses it whatever the letter case of the ids (Postgres reads uuids case-blind)", async () => {
+    for (const run of [() => addLead(ORG.toUpperCase(), PERSON), () => removeFromTeam(ORG.toUpperCase(), PERSON), () => addMember(OTHER, PERSON, ORG.toUpperCase())]) {
+      userQueue.teams = [organisationIs(ORG)];
+      await expect(run()).resolves.toEqual(REFUSED);
+    }
+    expect(writes()).toEqual([]);
+  });
+
+  it("refuses changing the role of someone who sits in it", async () => {
+    userQueue.teams = [organisationIs(ORG)];
+    userQueue.members = [{ data: { team_id: ORG }, error: null }];
+    await expect(setRole(PERSON, "member")).resolves.toEqual(REFUSED);
+    expect(writes()).toEqual([{ table: "members", calls: [["select", "team_id"], ["eq", "id", PERSON], ["maybeSingle"]] }]);
+  });
+
+  it("still changes the role of someone elsewhere once there is one, unless they sit in it by then", async () => {
+    userQueue.teams = [organisationIs(OTHER)];
+    userQueue.members = [{ data: { team_id: TEAM }, error: null }, rows(PERSON)];
+    await expect(setRole(PERSON, "leader")).resolves.toEqual({ ok: true, value: null });
+    expect(writes()[1].calls).toEqual([
+      ["update", { role: "leader" }],
+      ["eq", "id", PERSON],
+      ["or", `team_id.is.null,team_id.neq.${OTHER}`],
+      ["select", "id"],
+    ]);
+  });
+
+  it("changes nothing if they're moved into it between the read and the write", async () => {
+    userQueue.teams = [organisationIs(ORG)];
+    userQueue.members = [{ data: { team_id: null }, error: null }, rows()];
+    await expect(setRole(PERSON, "member")).resolves.toEqual({ ok: false, error: PERSON_CHANGED });
+    expect(writes()[1].calls).toContainEqual(["or", `team_id.is.null,team_id.neq.${ORG}`]);
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+});
 
 describe("giveLogin", () => {
   beforeEach(() => {

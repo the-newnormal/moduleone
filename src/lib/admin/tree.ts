@@ -1,10 +1,13 @@
 // The team tree as the admin pages see it (migration 0003): divisions at the top, domains under a
 // division or at the top ("unplaced"), teams under a domain. Archived nodes stay in the table
-// (never deleted) but are left out of the tree and listed on their own.
+// (never deleted) but are left out of the tree and listed on their own. Since migration 0006 one
+// organisation node sits at the top and holds every division; until then divisions sit at the top
+// themselves. Code here takes either: a division's parent is the organisation node if there is
+// one, else the top level.
 //
 // Positions follow admin_move_team: siblings are ordered by (sort_order, name, id), and a move's
 // index counts the ACTIVE (non-archived) siblings at the destination, other than the node being
-// moved. The top level holds divisions and unplaced domains together, so an index there counts
+// moved. The top level can hold divisions and unplaced domains together, so an index there counts
 // both, even though the page shows them in separate sections. dropToMove and moveOptions do that
 // translation; don't count positions in the page.
 
@@ -32,6 +35,7 @@ export const TEAM_COLUMNS =
 // ---------- labels ----------
 
 export const KIND_LABELS: Record<TeamKind, string> = {
+  organisation: "Organisation",
   division: "Division",
   domain: "Domain",
   team: "Team",
@@ -86,6 +90,7 @@ export type DomainNode<T extends TeamRow = TeamRow> = { row: T; teams: T[] };
 export type DivisionNode<T extends TeamRow = TeamRow> = { row: T; domains: DomainNode<T>[] };
 
 export type TeamTree<T extends TeamRow = TeamRow> = {
+  organisation: T | null; // the node above every division (migration 0006), or null before it
   divisions: DivisionNode<T>[]; // active divisions in order, each with its active domains and their active teams
   unplaced: DomainNode<T>[]; // active domains at the top level, with their active teams
   archived: T[]; // every archived node, parents before their children
@@ -109,7 +114,9 @@ export function buildTree<T extends TeamRow>(rows: readonly T[]): TeamTree<T> {
   });
 
   const top = activeChildren(rows, null);
-  const divisions = top
+  const organisation = top.find((r) => r.kind === "organisation") ?? null;
+  if (organisation) place(organisation);
+  const divisions = activeChildren(rows, organisation?.id ?? null)
     .filter((r) => r.kind === "division")
     .map((row) => ({
       row: place(row),
@@ -124,7 +131,7 @@ export function buildTree<T extends TeamRow>(rows: readonly T[]): TeamTree<T> {
   const archived = rows.filter((r) => r.archived_at !== null).sort(byPath);
   const stray = rows.filter((r) => r.archived_at === null && !placed.has(r.id)).sort(byPath);
 
-  return { divisions, unplaced, archived, stray };
+  return { organisation, divisions, unplaced, archived, stray };
 }
 
 // The node and the ancestors above it, top first. Stops at a missing parent and never loops.
@@ -166,10 +173,12 @@ export function breadcrumb<T extends Pick<TeamRow, "id" | "parent_id">>(
 
 // ---------- moving ----------
 
-// What may hold each kind: a division sits at the top level (null); a domain at the top level
-// (unplaced) or in a division; a team in a domain.
+// What may hold each kind: the organisation node never moves; a division sits in it, or at the top
+// level (null) before there is one; a domain at the top level (unplaced) or in a division; a team
+// in a domain.
 const PARENT_KINDS: Record<TeamKind, readonly (TeamKind | null)[]> = {
-  division: [null],
+  organisation: [],
+  division: [null, "organisation"],
   domain: [null, "division"],
   team: ["domain"],
 };
@@ -266,7 +275,8 @@ export type MoveOption = {
 // Every active parent the node may move to, in tree order (the top level last for a domain, as
 // "Unplaced"), each with the positions it offers among the siblings shown with the node: other
 // divisions for a division, other unplaced domains for an unplaced domain (their indexes count the
-// whole top level, as admin_move_team does). Empty for an unknown or archived node.
+// whole top level, as admin_move_team does). Empty for an unknown or archived node, and for the
+// organisation node, which never moves.
 export function moveOptions(rows: readonly TeamRow[], nodeId: string): MoveOption[] {
   const node = rows.find((r) => r.id === nodeId);
   if (!node || node.archived_at !== null) return [];
@@ -295,7 +305,10 @@ export function moveOptions(rows: readonly TeamRow[], nodeId: string): MoveOptio
     return { parentId, label, current, positions };
   };
 
-  if (node.kind === "division") return [option(null, "Top level")];
+  if (node.kind === "organisation") return [];
+  if (node.kind === "division") {
+    return [option(tree.organisation?.id ?? null, tree.organisation?.name ?? "Top level")];
+  }
   if (node.kind === "domain") {
     return [
       ...tree.divisions.map((d) => option(d.row.id, d.row.name)),

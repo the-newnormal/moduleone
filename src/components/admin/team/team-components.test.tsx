@@ -33,6 +33,7 @@ const TEAM: TeamSummary = {
   typeLabel: null,
   note: null,
   archived: false,
+  everyoneLeads: false,
 };
 const DOMAIN: TeamSummary = {
   ...TEAM,
@@ -123,6 +124,18 @@ describe("PeopleSection", () => {
     expect(text(html)).not.toMatch(/\bhq\b/);
   });
 
+  it("offers no Add people on the organisation node, and says only the project owner places people there (since 0006)", () => {
+    const html = render({ ...TEAM, kind: "organisation", kindLabel: "Organisation" }, []);
+    expect(text(html)).not.toContain("Add people");
+    expect(text(html)).toContain("Only the project owner places people in the organisation");
+  });
+
+  it("offers no Make member where everyone leads (a division once 0006 is live)", () => {
+    const html = render({ ...DIVISION, everyoneLeads: true });
+    expect(row(html, "Leo Tan")).not.toContain("Make member");
+    expect(row(render(DIVISION), "Leo Tan")).toContain("Make member (Leo Tan)");
+  });
+
   it("says who gave a login and when", () => {
     expect(row(render(), "Mei Wong")).toContain("Login given by Hana Lim on 9 Oct 2026");
   });
@@ -199,6 +212,14 @@ describe("AddPeoplePanel", () => {
     expect(text(html)).not.toContain("Master Admin");
     expect(text(html)).toContain("New people have no login until you give them one.");
   });
+
+  it("offers no role where everyone leads, and says they'll be a leader (a division once 0006 is live)", () => {
+    const html = renderToStaticMarkup(
+      <AddPeoplePanel team={{ ...DIVISION, everyoneLeads: true }} candidates={CANDIDATES} actions={actions} onDone={() => {}} />,
+    );
+    expect(count(html, /type="radio"/g)).toBe(0);
+    expect(text(html)).toContain("Everyone placed in a division leads it, so they'll be a leader.");
+  });
 });
 
 describe("GiveLoginForm", () => {
@@ -271,6 +292,17 @@ describe("LeadsSection", () => {
     expect(text(render())).toContain("Leads see the check-ins made in this team.");
     expect(text(render(DOMAIN))).toContain("Leads see the check-ins made in this domain and in its sub-teams.");
     expect(text(render(DIVISION))).toContain("Leads see the check-ins made in this division and in everything in it.");
+    expect(text(render({ ...DIVISION, kind: "organisation", kindLabel: "Organisation" }))).toContain(
+      "Whoever sits in the organisation leads it: they see the check-ins made in it and in every division in it. Only the project owner places people here.",
+    );
+  });
+
+  it("offers no Add lead or Remove as lead on the organisation node, and says who placed its leaders (since 0006)", () => {
+    const html = render({ ...DIVISION, kind: "organisation", kindLabel: "Organisation" }, [{ id: "m-eli", name: "Eli Chao", domain: null }]);
+    expect(text(html)).not.toContain("Add lead");
+    expect(text(html)).not.toContain("Remove as lead");
+    expect(row(html, "Eli Chao")).toBe("Eli Chao Placed here by the project owner");
+    expect(row(html, "Ana Lee")).toBe("Ana Lee Leader in IP Lab 2");
   });
 
   it("speaks of a division as a division", () => {

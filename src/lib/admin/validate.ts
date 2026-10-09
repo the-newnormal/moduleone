@@ -19,8 +19,13 @@ export function asRecord(value: unknown): Record<string, unknown> {
 
 // ---------- enums (the database's check constraints) ----------
 
-export const TEAM_KINDS = ["division", "domain", "team"] as const;
+export const TEAM_KINDS = ["organisation", "division", "domain", "team"] as const;
 export type TeamKind = (typeof TEAM_KINDS)[number];
+
+// The kinds an admin adds. The organisation node (above every division, migration 0006) is made
+// once by the migration, never from the app.
+export const CREATABLE_KINDS = ["division", "domain", "team"] as const;
+export type CreatableKind = (typeof CREATABLE_KINDS)[number];
 
 export const DOMAIN_TYPES = ["development", "ip", "lab"] as const;
 export type DomainType = (typeof DOMAIN_TYPES)[number];
@@ -39,6 +44,7 @@ const isOneOf =
     typeof value === "string" && (values as readonly string[]).includes(value);
 
 export const isTeamKind = isOneOf(TEAM_KINDS);
+export const isCreatableKind = isOneOf(CREATABLE_KINDS);
 export const isDomainType = isOneOf(DOMAIN_TYPES);
 export const isDivisionType = isOneOf(DIVISION_TYPES);
 export const isAssignableRole = isOneOf(ASSIGNABLE_ROLES);

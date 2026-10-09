@@ -21,6 +21,7 @@ import {
   NOT_GIVEN_HERE,
   NOT_IN_TEAM,
   NOT_YOURSELF,
+  ORGANISATION_OWNER_ONLY,
   PERSON_CHANGED,
   PERSON_GONE,
   PICK_ROLE,
@@ -38,6 +39,21 @@ import {
 
 const OK: ActionResult = { ok: true, value: null };
 
+type Supabase = Extract<Awaited<ReturnType<typeof requireAdmin>>, { ok: true }>["value"]["supabase"];
+
+// The organisation node (migration 0006): its id, or null before there is one, and whether a team id
+// a client sent is it (in any letter case, as Postgres reads uuids). Whoever sits in it or leads it
+// sees every division's check-ins, so only the project owner decides either: the pages offer none
+// of it, and these actions refuse it too, whatever a client sends.
+type Organisation = { id: string | null; is: (teamId: string | null) => boolean };
+
+async function organisation(supabase: Supabase, context: string): Promise<ActionResult<Organisation>> {
+  const { data, error } = await supabase.from("teams").select("id").eq("kind", "organisation").limit(1);
+  if (error) return fail(toUserMessage(error, context));
+  const id = (data as { id: string }[] | null)?.[0]?.id.toLowerCase() ?? null;
+  return { ok: true, value: { id, is: (teamId) => id !== null && teamId?.toLowerCase() === id } };
+}
+
 // Put an existing member in this team. fromTeamId is the team the page showed them in (null: no
 // team); if they've moved since, nothing changes, so nobody is moved without the admin seeing
 // where from.
@@ -51,6 +67,9 @@ export async function addMember(
 
   if (!isUuid(teamId) || !isUuid(memberId) || !isParentId(fromTeamId)) return fail(BAD_REQUEST);
   if (fromTeamId === teamId) return fail(ALREADY_IN_TEAM);
+  const org = await organisation(admin.value.supabase, "addMember");
+  if (!org.ok) return org;
+  if (org.value.is(teamId) || org.value.is(fromTeamId)) return fail(ORGANISATION_OWNER_ONLY);
 
   const move = admin.value.supabase.from("members").update({ team_id: teamId }).eq("id", memberId);
   const { data, error } = await (fromTeamId === null
@@ -76,6 +95,9 @@ export async function createMember(teamId: string, person: NewPerson): Promise<A
   const name = parseName(input.name);
   if (!name.ok) return name;
   if (!isAssignableRole(input.role)) return fail(PICK_ROLE);
+  const org = await organisation(admin.value.supabase, "createMember");
+  if (!org.ok) return org;
+  if (org.value.is(teamId)) return fail(ORGANISATION_OWNER_ONLY);
 
   const { data, error } = await admin.value.supabase
     .from("members")
@@ -98,6 +120,9 @@ export async function removeFromTeam(teamId: string, memberId: string): Promise<
   if (!admin.ok) return admin;
 
   if (!isUuid(teamId) || !isUuid(memberId)) return fail(BAD_REQUEST);
+  const org = await organisation(admin.value.supabase, "removeFromTeam");
+  if (!org.ok) return org;
+  if (org.value.is(teamId)) return fail(ORGANISATION_OWNER_ONLY);
 
   const { data, error } = await admin.value.supabase
     .from("members")
@@ -120,12 +145,19 @@ export async function setRole(memberId: string, role: string): Promise<ActionRes
 
   if (!isUuid(memberId)) return fail(BAD_REQUEST);
   if (!isAssignableRole(role)) return fail(PICK_ROLE);
+  const org = await organisation(admin.value.supabase, "setRole");
+  if (!org.ok) return org;
+  if (org.value.id !== null) {
+    const sits = await admin.value.supabase.from("members").select("team_id").eq("id", memberId).maybeSingle();
+    if (sits.error) return fail(toUserMessage(sits.error, "setRole"));
+    if (org.value.is((sits.data as { team_id: string | null } | null)?.team_id ?? null)) return fail(ORGANISATION_OWNER_ONLY);
+  }
 
-  const { data, error } = await admin.value.supabase
-    .from("members")
-    .update({ role })
-    .eq("id", memberId)
-    .select("id");
+  // The same rule in the write itself: someone moved into the organisation since the read above
+  // matches no row, so nothing changes.
+  let update = admin.value.supabase.from("members").update({ role }).eq("id", memberId);
+  if (org.value.id !== null) update = update.or(`team_id.is.null,team_id.neq.${org.value.id}`);
+  const { data, error } = await update.select("id");
   if (error) return fail(toUserMessage(error, "setRole"));
   if (!data || data.length === 0) return fail(PERSON_CHANGED);
 
@@ -140,6 +172,10 @@ export async function addLead(teamId: string, memberId: string): Promise<ActionR
   if (!admin.ok) return admin;
 
   if (!isUuid(teamId) || !isUuid(memberId)) return fail(BAD_REQUEST);
+
+  const org = await organisation(admin.value.supabase, "addLead");
+  if (!org.ok) return org;
+  if (org.value.is(teamId)) return fail(ORGANISATION_OWNER_ONLY);
 
   const { error } = await admin.value.supabase
     .from("team_leads")
@@ -159,6 +195,9 @@ export async function removeLead(teamId: string, memberId: string): Promise<Acti
   if (!admin.ok) return admin;
 
   if (!isUuid(teamId) || !isUuid(memberId)) return fail(BAD_REQUEST);
+  const org = await organisation(admin.value.supabase, "removeLead");
+  if (!org.ok) return org;
+  if (org.value.is(teamId)) return fail(ORGANISATION_OWNER_ONLY);
 
   const { error } = await admin.value.supabase
     .from("team_leads")

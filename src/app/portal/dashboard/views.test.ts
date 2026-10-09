@@ -62,10 +62,14 @@ const checkin = (team_id: string, week_start: string, scores: [number, number, n
   morale_score: scores[2],
 });
 
-function heatmapData(role: "hq" | "leader", ledTeams: string[] = []) {
+function heatmapData(
+  role: "hq" | "leader",
+  ledTeams: string[] = [],
+  { teams = TEAMS, checkins = [] }: { teams?: TeamNode[]; checkins?: CheckinRow[] } = {},
+) {
   vi.mocked(loadHeatmapData).mockResolvedValue({
-    teams: TEAMS,
-    checkins: [checkin("ip1", THIS_WEEK, [4, 4, 3]), checkin("ip1", "2026-09-28", [2, 2, 3])],
+    teams,
+    checkins: [checkin("ip1", THIS_WEEK, [4, 4, 3]), checkin("ip1", "2026-09-28", [2, 2, 3]), ...checkins],
     config: CONFIG,
     role,
     ledTeams,
@@ -284,6 +288,35 @@ describe("the trend grid", () => {
     expect(html).not.toContain("/portal/dashboard/ip/");
     expect(html).not.toContain("/portal/dashboard/ga/");
     expect(html).toContain("No colour: you lead only some of the teams under it");
+  });
+});
+
+// Since migration 0006 one organisation node holds every division, and people can sit in it.
+describe("with an organisation node", () => {
+  const ORG = { teams: [node("tn", "The New Normal", "organisation", null), { ...TEAMS[0], parent_id: "tn" }, ...TEAMS.slice(1)], checkins: [checkin("tn", THIS_WEEK, [2, 2, 3])] };
+
+  it("puts the organisation's own box, rolled up over everything, above the division cards for hq", async () => {
+    heatmapData("hq", [], ORG);
+    const html = await page({});
+    // Its own check-in (4) and IP Lab 1's (16): a mean of 10.0, yellow.
+    expect(html).toContain(`aria-label="The New Normal · week of 5 Oct 2026. Yellow · mean score 10.0.`);
+    expect(html).toContain(`aria-label="Gather · week of 5 Oct 2026. Green · mean score 16.0.`);
+    expect(html.indexOf('href="/portal/dashboard/tn/')).toBeLessThan(html.indexOf('href="/portal/dashboard/ga/'));
+  });
+
+  it("leaves it out for a leader who doesn't cover it", async () => {
+    // RLS gives a leader none of the organisation's own check-ins.
+    heatmapData("leader", ["ip1"], { teams: ORG.teams });
+    const html = await page({});
+    expect(html).not.toContain("The New Normal");
+    expect(html).toContain(`href="/portal/dashboard/ip1/${THIS_WEEK}"`);
+    expect(html).toMatch(/<h2 class="flex min-h-9[^"]*">Gather<\/h2>/);
+  });
+
+  it("heads the trend grid with its own row, then a group per division", async () => {
+    heatmapData("hq", [], ORG);
+    const html = await renderToStaticMarkup(await TrendPage({ searchParams: Promise.resolve({ weeks: "4" }) } as never));
+    expect(html).toMatch(/<th scope="rowgroup" class="sticky[^"]*">The New Normal<\/th>[\s\S]*<th scope="rowgroup" class="sticky[^"]*">Gather<\/th>/);
   });
 });
 

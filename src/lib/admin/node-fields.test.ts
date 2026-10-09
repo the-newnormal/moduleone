@@ -31,6 +31,7 @@ describe("parseNodeFields", () => {
     ["domain", "strategy", "Pick one of the domain types, or none."],
     ["division", "lab", "Pick one of the division types, or none."],
     ["team", "lab", "Teams don't have a type."],
+    ["organisation", "strategy", "The organisation doesn't have a type."],
     ["domain", 3, "Pick one of the domain types, or none."],
   ] as const)("refuses a %s with type %o", (kind, type, error) => {
     expect(parseNodeFields(kind, { name: "X", type })).toEqual({ ok: false, errors: { type: error }, error });

@@ -49,6 +49,9 @@ export type NodeFormTarget =
 
 function formTitle(target: NodeFormTarget): { title: string; description: string } {
   if (target.mode === "edit") {
+    if (target.row.kind === "organisation") {
+      return { title: `Edit ${target.row.name}`, description: "It stays above every division." };
+    }
     const kind = KIND_LABELS[target.row.kind].toLowerCase();
     return {
       title: `Edit ${target.row.name}`,

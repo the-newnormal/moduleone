@@ -66,7 +66,11 @@ export function EditTeamForm({
       saved={saved}
       editing
       title={`Edit ${team.name}`}
-      description={`It stays a ${team.kindLabel.toLowerCase()}. To move it, use the Structure page.`}
+      description={
+        team.kind === "organisation"
+          ? "It stays above every division."
+          : `It stays a ${team.kindLabel.toLowerCase()}. To move it, use the Structure page.`
+      }
       context="updateNode"
       save={(form) => updateNode({ ...form, id: team.id })}
       onSaved={(_, name) => onSaved(name)}

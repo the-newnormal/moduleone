@@ -27,6 +27,9 @@ export type DbError = {
 const OWN_PERMISSION_MESSAGES = new Set([
   "Only admins can move teams.",
   "You lead where this is going, so another admin has to move it there.",
+  // Migration 0006: only the project owner staffs the organisation node.
+  "Only the project owner can place people in the organisation itself.",
+  "Only the project owner can make someone a lead of the organisation itself.",
 ]);
 
 // Table check constraints (as opposed to the triggers' sentences) fail with Postgres's wording,
