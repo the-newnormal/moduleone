@@ -1,4 +1,4 @@
--- Removing people from Module One, and whether a sign-in email is taken (migration 0007).
+-- Removing people from Module One, and whether a sign-in email is taken (migration 0009).
 -- Run: supabase test db. Builds its own fixtures inside the transaction and rolls back.
 --
 -- Fixtures (ids b7… teams, c7… members, a7… logins, d7… check-ins):
@@ -20,7 +20,7 @@
 --   in their recordings folder), giver, remover, changer (see witness and gone), and settings (made
 --   the last scoring settings change).
 begin;
-select plan(79);
+select plan(82);
 
 -- 'SQLSTATE: message' for a statement that fails, so a test can check both; 'no error' otherwise.
 create function pg_temp.error_of(sql text) returns text language plpgsql as $$
@@ -518,6 +518,36 @@ select is(
   'someone whose sign-in email an admin changed had a login, so they are kept even once it is gone'
 );
 reset role;
+
+-- ---------- a Master Admin's check-in reset (0007) ----------
+-- Whose check-in was reset, and who reset it, are both in checkin_resets: deleting either person
+-- would blank that, so both are kept.
+insert into members (id, auth_user_id, name, team_id, role) values
+  ('c7000000-0000-4000-8000-000000000040', null, 'RP was reset', 'b7000000-0000-4000-8000-000000000003', 'member'),
+  ('c7000000-0000-4000-8000-000000000041', null, 'RP reset someone', 'b7000000-0000-4000-8000-000000000003', 'member');
+insert into checkin_resets (member_id, week_start, team_id, action, done_by) values
+  ('c7000000-0000-4000-8000-000000000040', '2026-10-05', 'b7000000-0000-4000-8000-000000000003', 'checkin_reset', null),
+  (null, '2026-10-05', 'b7000000-0000-4000-8000-000000000003', 'recording_deleted', 'c7000000-0000-4000-8000-000000000041');
+set local role authenticated;
+set local request.jwt.claims to '{"sub": "a7000000-0000-4000-8000-000000000001", "role": "authenticated"}';
+select is(
+  admin_remove_member('c7000000-0000-4000-8000-000000000040') ->> 'outcome', 'removed',
+  'someone whose check-in a Master Admin reset is kept'
+);
+select is(
+  admin_remove_member('c7000000-0000-4000-8000-000000000041') ->> 'outcome', 'removed',
+  'so is whoever did a reset'
+);
+reset role;
+
+-- ---------- check-ins and removals don't overlap ----------
+-- The check-in trigger reads the member FOR SHARE, which conflicts with the removal's FOR UPDATE:
+-- whichever comes first finishes before the other goes on (a second session can't be driven
+-- from here, so this checks the lock is taken).
+select ok(
+  pg_get_functiondef('public.checkins_set_team()'::regprocedure) ~* 'from public\.members m where m\.id = new\.member_id\s+for share',
+  'the check-in trigger locks the member row while it checks for a removal'
+);
 
 select * from finish();
 rollback;

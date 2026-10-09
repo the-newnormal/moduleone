@@ -1,4 +1,4 @@
--- 0007: removing people from Module One, and recording who changed someone's sign-in email.
+-- 0009: removing people from Module One, and recording who changed someone's sign-in email.
 --
 -- Removing someone (admin_remove_member, which the team page's removePerson calls): they can't
 -- sign in any more, they leave their team and everything they lead, and the admin pages stop
@@ -50,8 +50,10 @@ create policy members_admin_update on members for update to authenticated
 
 -- ---------- check-ins: never for someone removed ----------
 -- As in 0002, plus: a check-in for a removed person is refused, whether or not it names a team.
--- (The check-in server code looks the member up first; one that read the row just before the
--- removal either lands in their old team, if it's written first, or is refused here.)
+-- The member row is read FOR SHARE, which a removal's FOR UPDATE waits for and vice versa: a
+-- check-in that gets there first commits in their team before the removal goes on (and is history
+-- it keeps), and one that comes second waits, then sees the removal and is refused. So no check-in
+-- commits after its member was removed.
 create or replace function checkins_set_team() returns trigger
   language plpgsql set search_path = '' as $$
 declare
@@ -59,7 +61,8 @@ declare
   member_removed timestamptz;
 begin
   select m.team_id, m.removed_at into member_team, member_removed
-  from public.members m where m.id = new.member_id;
+  from public.members m where m.id = new.member_id
+  for share;
   if member_removed is not null then
     raise exception using errcode = 'check_violation', message = 'That person was removed from Module One.';
   end if;
@@ -148,6 +151,8 @@ begin
       where o.login_given_by = m_id or o.removed_by = m_id or o.login_email_changed_by = m_id
     )
     or exists (select 1 from public.scoring_settings s where s.updated_by = m_id)
+    -- 0007: a Master Admin's delete or reset, of their check-in or done by them.
+    or exists (select 1 from public.checkin_resets r where r.member_id = m_id or r.done_by = m_id)
     or exists (
       select 1 from storage.objects o
       where o.bucket_id = 'checkin-audio' and (storage.foldername(o.name))[1] = m_id::text

@@ -36,7 +36,7 @@ export const NOT_GIVEN_HERE = "This login wasn't given in Module One, so its inv
 export const INVITE_USED =
   "This person has already used their invite, so there's nothing to resend. They sign in at the login page.";
 
-// Every action on a person removed from Module One (migration 0007): the page no longer lists them.
+// Every action on a person removed from Module One (migration 0009): the page no longer lists them.
 export const PERSON_REMOVED = "This person was removed from Module One. Reload the page.";
 
 // removePerson. (The database words its own refusals: Master Admins, yourself, grants, the

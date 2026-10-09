@@ -43,9 +43,9 @@ import {
 // The team page's writes about people: who is in the team, their role, who else leads it, their
 // login, and removing them from Module One. (Its Edit uses updateNode from the Structure page's
 // actions.) Each one checks the admin grant first (requireAdmin), then its input, and writes with
-// the signed-in admin's own client, so RLS decides (0002/0003/0007: admins edit members other than
+// the signed-in admin's own client, so RLS decides (0002/0003/0009: admins edit members other than
 // hq rows, themselves and removed people, and team_leads for anyone but themselves); removePerson
-// calls admin_remove_member (0007), which checks everything itself. giveLogin, resendInvite,
+// calls admin_remove_member (0009), which checks everything itself. giveLogin, resendInvite,
 // changeEmail and removePerson's last step are the only code here that uses the service-role
 // client (see below), each after checking as the admin first. Messages: the database's own
 // sentences as they are, everything else through toUserMessage. Every change revalidates the pages
@@ -572,26 +572,7 @@ function asRemoval(data: unknown): { outcome: Removal["outcome"]; loginId: strin
 // same login, so another member may have been given it meanwhile): then it's theirs. Clears
 // removed_login_id once the login is dealt with. False if it's still there.
 async function closeLogin(service: ServiceClient, memberId: string, loginId: string): Promise<boolean> {
-  const linked = await service.from("members").select("id").eq("auth_user_id", loginId).limit(1);
-  if (linked.error) {
-    logError("removePerson login check", linked.error);
-    return false;
-  }
-  if ((linked.data ?? []).length === 0) {
-    const { error } = await service.auth.admin.deleteUser(loginId, true);
-    // 404: deleted already (in the dashboard, or by an earlier try).
-    if (error && error.status !== 404) {
-      logError("removePerson login", error);
-      return false;
-    }
-    // A row given this login between the check and the delete now holds a dead one: unlink it, so
-    // it reads "No login yet" and can be given a login again.
-    const given = await service
-      .from("members")
-      .update({ auth_user_id: null, login_given_by: null, login_given_at: null })
-      .eq("auth_user_id", loginId);
-    if (given.error) logError("removePerson relink check", given.error);
-  }
+  if ((await softDeleteLogin(service, loginId, "removePerson", "login")) === "failed") return false;
   const cleared = await service
     .from("members")
     .update({ removed_login_id: null })
@@ -608,7 +589,7 @@ async function closeLogin(service: ServiceClient, memberId: string, loginId: str
 //   1. the caller is a signed-in admin; 2. the id is a uuid;
 //   3. as the admin (RLS): if the person has a login, or one still to delete, the service-role
 //      client must be available, or nothing changes;
-//   4. as the admin: admin_remove_member (0007) refuses Master Admins, the caller, grant holders
+//   4. as the admin: admin_remove_member (0009) refuses Master Admins, the caller, grant holders
 //      and the organisation's people in its own words, then marks the row removed and unlinks its
 //      login (or deletes the row), and returns the login it unlinked;
 //   5. service role: delete that login (closeLogin);
@@ -850,8 +831,17 @@ async function moveUsedLogin(
       .eq("login_email_changed_at", changedAt);
     if (error) logError("changeEmail unrecord", error);
   };
-  const restore = async (): Promise<boolean> => {
+  // Put the old address back. Not when the login has another address than the one set here by
+  // now (another admin changed it since, and that change stands): then there's nothing of this
+  // change left to undo. `current`: the login as just read, if it was.
+  const restore = async (current?: { email?: string } | null): Promise<boolean> => {
     if (!oldEmail) return false;
+    if (current === undefined) {
+      const now = await service.auth.admin.getUserById(loginId);
+      if (now.error) logError("changeEmail recheck", now.error);
+      current = now.error ? null : now.data.user;
+    }
+    if (current && (current.email ?? "").toLowerCase() !== email) return true;
     const { error } = await service.auth.admin.updateUserById(loginId, { email: oldEmail, email_confirm: true });
     if (error) logError("changeEmail restore", error);
     return !error;
@@ -882,7 +872,7 @@ async function moveUsedLogin(
       return fail(EMAIL_RACE);
     }
     if (now.error) logError("changeEmail recheck", now.error);
-    if (!(await restore())) return fail(EMAIL_NOT_RESTORED);
+    if (!(await restore(now.error ? null : now.data.user))) return fail(EMAIL_NOT_RESTORED);
     await unrecord();
     return fail(EMAIL_RACE);
   }
@@ -994,13 +984,37 @@ async function replaceUnusedLogin(
 // invite link stops working. If deleting it fails, it opens nothing (no member row), but its
 // address stays taken.
 async function deleteUnusedLogin(service: ServiceClient, loginId: string) {
+  await softDeleteLogin(service, loginId, "changeEmail", "old login");
+}
+
+// Soft-delete a login that no member row uses: every session ends and the address is freed, but
+// the auth.users row stays, so any privacy-notice acceptances it gave stay with what was recorded.
+// "linked": a row uses it, so it stays. A row given it between the check and the delete (giveLogin
+// re-sends a pending invite to the same login, and links what comes back) would be left holding a
+// dead login: unlink it, so it reads "No login yet" and can be given a login again. Logs as
+// "<context> <noun> check" / "<context> <noun>" / "<context> relink check".
+async function softDeleteLogin(
+  service: ServiceClient,
+  loginId: string,
+  context: string,
+  noun: string,
+): Promise<"deleted" | "linked" | "failed"> {
   const linked = await service.from("members").select("id").eq("auth_user_id", loginId).limit(1);
   if (linked.error) {
-    logError("changeEmail old login check", linked.error);
-    return;
+    logError(`${context} ${noun} check`, linked.error);
+    return "failed";
   }
-  if ((linked.data ?? []).length > 0) return;
-  // Soft, as closeLogin does: should they have signed in with it after all, what they accepted stays.
+  if ((linked.data ?? []).length > 0) return "linked";
   const { error } = await service.auth.admin.deleteUser(loginId, true);
-  if (error && error.status !== 404) logError("changeEmail old login", error);
+  // 404: deleted already (in the dashboard, or by an earlier try).
+  if (error && error.status !== 404) {
+    logError(`${context} ${noun}`, error);
+    return "failed";
+  }
+  const given = await service
+    .from("members")
+    .update({ auth_user_id: null, login_given_by: null, login_given_at: null })
+    .eq("auth_user_id", loginId);
+  if (given.error) logError(`${context} relink check`, given.error);
+  return "deleted";
 }

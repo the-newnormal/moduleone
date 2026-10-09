@@ -30,7 +30,7 @@ const OWN_PERMISSION_MESSAGES = new Set([
   // Migration 0006: only the project owner staffs the organisation node.
   "Only the project owner can place people in the organisation itself.",
   "Only the project owner can make someone a lead of the organisation itself.",
-  // Migration 0007's admin_remove_member.
+  // Migration 0009's admin_remove_member.
   "Only admins can remove people.",
 ]);
 
@@ -49,7 +49,7 @@ const CONSTRAINT_MESSAGES: Record<string, string> = {
   teams_division_at_top: "A division can only sit at the top level.",
   teams_team_has_parent: "A team can only sit under a domain.",
   members_role_chk: "That role doesn't exist.",
-  // Migration 0007: a removed person never signs in, sits anywhere or leads anything.
+  // Migration 0009: a removed person never signs in, sits anywhere or leads anything.
   members_removed_cleared: "This person was removed from Module One. Reload the page.",
   scoring_activity_order: "A better activity score can't count for less than a worse one.",
   scoring_excellence_order: "A better excellence score can't count for less than a worse one.",

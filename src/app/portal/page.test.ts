@@ -16,6 +16,7 @@ import { tidyMemberAudio } from "./checkin/housekeeping";
 import { BANDS } from "./dashboard/band";
 import { cellWord, describeCell } from "./dashboard/describe";
 import PortalPage from "./page";
+import PortalLayout from "./layout";
 
 // The portal's dashboard as each viewer gets it. Members never see a grade: the page may ask only
 // whether and when they checked in, and only leaders and hq get the heat-map. It's a page to look
@@ -27,6 +28,8 @@ vi.mock("next/navigation", () => ({
   }),
   // SaveWatch and Sign out hold a router; rendering them needs only the hook.
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+  // The app bar marks the page it's on.
+  usePathname: () => "/portal",
 }));
 vi.mock("next/server", async (importOriginal) => ({
   ...(await importOriginal<typeof import("next/server")>()),
@@ -315,8 +318,9 @@ function viewer(role: Role | null, { admin = false }: { admin?: boolean } = {}) 
   adminGrant = { data: admin, error: null };
 }
 
+// The portal as the viewer gets it: the page under its layout's app bar.
 async function render() {
-  const html = renderToStaticMarkup(await PortalPage());
+  const html = renderToStaticMarkup(await PortalLayout({ children: await PortalPage(), params: Promise.resolve({}) } as never));
   document.body.innerHTML = html;
   return html;
 }
@@ -631,8 +635,12 @@ describe("no side effects", () => {
     expect(after).not.toHaveBeenCalled();
     expect(processCheckin).not.toHaveBeenCalled();
     expect(tidyMemberAudio).not.toHaveBeenCalled();
-    expect(createClient).toHaveBeenCalledTimes(1);
-    expect(rpc.mock.calls).toEqual([["app_has_grant", { requested: "admin" }]]);
+    // The layout's app bar and the page each ask for the admin grant here; in a real request they
+    // share one answer (viewerAccess is cached per request).
+    expect(rpc.mock.calls).toEqual([
+      ["app_has_grant", { requested: "admin" }],
+      ["app_has_grant", { requested: "admin" }],
+    ]);
     expect(new Set(queries.map((q) => q.table))).toEqual(new Set(["members", "checkins", "checkin_drafts"]));
   });
 });
@@ -649,7 +657,13 @@ describe("the portal's imports", () => {
     (readdirSync(join(ROOT, dir), { recursive: true }) as string[])
       .filter((file) => /\.tsx?$/.test(file) && !/\.test\.tsx?$/.test(file))
       .map((file) => posix.join(dir, file.split(sep).join("/")));
-  const SCANNED = ["src/app/portal/page.tsx", ...sourcesIn("src/app/portal/_home"), ...sourcesIn("src/lib/portal")];
+  const SCANNED = [
+    "src/app/portal/page.tsx",
+    "src/app/portal/layout.tsx",
+    ...sourcesIn("src/app/portal/_home"),
+    ...sourcesIn("src/app/_shell"),
+    ...sourcesIn("src/lib/portal"),
+  ];
 
   // Every import and re-export statement (static or dynamic) in a file: its specifier, resolved to
   // a repo path without extension when it's one of ours, and whether it's type-only.
@@ -728,7 +742,9 @@ describe("the portal's imports", () => {
       }
     };
     walk("src/app/portal/page.tsx");
+    walk("src/app/portal/layout.tsx");
     // It walked past the portal's own files, into what they use.
+    expect(seen).toContain("src/app/_shell/app-bar.tsx");
     expect(seen).toContain("src/app/portal/sign-out-button.tsx");
     expect(seen).toContain("src/lib/dashboard/load.ts");
     expect(found).toEqual([]);

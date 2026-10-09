@@ -89,7 +89,7 @@ const ORG_TEAMS: TeamRow[] = [
   ...TEAMS.map((t) => (t.id === "div-gather" ? { ...t, parent_id: "org" } : t)),
 ];
 
-// Removed from Module One (0007). The database also clears the row's login, team and role; rows
+// Removed from Module One (0009). The database also clears the row's login, team and role; rows
 // that keep one here check that the page doesn't rely on it.
 const REMOVED = { removed_at: "2026-10-09T03:00:00Z" };
 

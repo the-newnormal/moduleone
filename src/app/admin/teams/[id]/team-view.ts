@@ -22,7 +22,7 @@ export type MemberRow = {
   login_given_at: string | null;
   login_email_changed_by: string | null;
   login_email_changed_at: string | null;
-  removed_at: string | null; // removed from Module One (0007): shown nowhere, offered for nothing
+  removed_at: string | null; // removed from Module One (0009): shown nowhere, offered for nothing
 };
 
 export type LeadRow = { team_id: string; member_id: string };

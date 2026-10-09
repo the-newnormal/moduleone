@@ -245,7 +245,7 @@ describe("canvasPeopleOf", () => {
     expect(canvasPeopleOf([member("gone", "member", "old"), member("amy", "member", "ip1")], rows, "x").map((p) => p.id)).toEqual(["amy"]);
   });
 
-  // Removed from Module One (0007). The database also takes their team; one who keeps it here
+  // Removed from Module One (0009). The database also takes their team; one who keeps it here
   // checks that the chart doesn't rely on that.
   const removed = (m: MemberRow): MemberRow => ({ ...m, removed_at: "2026-10-09T03:00:00Z" });
 

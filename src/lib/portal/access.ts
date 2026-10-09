@@ -1,7 +1,9 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { cache } from "react";
 import { logError } from "@/lib/admin/errors";
 import { loadRole, type Role } from "@/lib/dashboard/load";
+import { createClient } from "@/lib/supabase/server";
 
 // What the portal offers the signed-in viewer. Decided once per request, on the server, and read by
 // both the nav and the tiles, so the two never disagree. A check that fails hides what it guards:
@@ -36,9 +38,14 @@ export async function loadPortalAccess(supabase: SupabaseClient): Promise<Portal
   return { role, seesTeamHealth: role === "leader" || role === "hq", isAdmin };
 }
 
+// The signed-in viewer's access, once per request: the app bar's nav (in the portal and admin
+// layouts) and the portal's tiles share the answer. It means something only for a signed-in viewer,
+// so what it guards checks that too (the portal layout before calling it; the admin layout beside it).
+export const viewerAccess = cache(async (): Promise<PortalAccess> => loadPortalAccess(await createClient()));
+
 export type NavItem = { id: "portal" | "checkin" | "team-health" | "admin"; href: string; label: string };
 
-// The portal's nav: everyone gets the portal and their check-in (the check-in page explains a login
+// The app bar's nav: everyone gets the portal and their check-in (the check-in page explains a login
 // that isn't linked to anyone yet); Team health and Admin only for those who may open them.
 export function portalNav({ seesTeamHealth, isAdmin }: Pick<PortalAccess, "seesTeamHealth" | "isAdmin">): NavItem[] {
   return [

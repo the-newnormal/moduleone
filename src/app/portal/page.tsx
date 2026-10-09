@@ -4,7 +4,7 @@ import { logError } from "@/lib/admin/errors";
 import { currentWeekStart } from "@/lib/checkin/week";
 import { loadScoringConfig } from "@/lib/dashboard/load";
 import { weeksEndingAt } from "@/lib/dashboard/weeks";
-import { loadPortalAccess, portalNav } from "@/lib/portal/access";
+import { viewerAccess } from "@/lib/portal/access";
 import { loadMyWeek, STRIP_WEEKS, weekStrip } from "@/lib/portal/my-week";
 import { loadTeamHealthGlance } from "@/lib/portal/team-health";
 import { createClient } from "@/lib/supabase/server";
@@ -34,7 +34,8 @@ export default async function PortalPage() {
 
   const thisWeek = currentWeekStart(new Date());
   const stripWeeks = weeksEndingAt(thisWeek, STRIP_WEEKS);
-  const accessLoad = loadPortalAccess(supabase);
+  // Shared with the layout's app bar: one role and grant check per request.
+  const accessLoad = viewerAccess();
   // None of these reject: each loader logs its own failure and says so in what it returns.
   const [access, mine, health, scoring] = await Promise.all([
     accessLoad,
@@ -61,7 +62,7 @@ export default async function PortalPage() {
 
   return (
     <main className="mx-auto grid w-full max-w-[1120px] grid-cols-[minmax(0,1fr)] gap-10 px-4 py-6 sm:gap-12 sm:px-8 sm:py-8">
-      <PortalHeader name={name} email={data.claims.email} thisWeek={thisWeek} nav={portalNav(access)} />
+      <PortalHeader name={name} email={data.claims.email} thisWeek={thisWeek} />
 
       <div className={`grid items-start gap-6 ${side ? "lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:gap-8" : ""}`}>
         <div className="grid min-w-0 gap-6">

@@ -1,9 +1,13 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { deleteExpiredRecordings, processPendingCheckins } from "@/app/portal/checkin/housekeeping";
+import { deleteExpiredRecordings, processPendingCheckins, removeResetRecordings } from "@/app/portal/checkin/housekeeping";
 import { GET } from "./route";
 
-vi.mock("@/app/portal/checkin/housekeeping", () => ({ processPendingCheckins: vi.fn(), deleteExpiredRecordings: vi.fn() }));
+vi.mock("@/app/portal/checkin/housekeeping", () => ({
+  processPendingCheckins: vi.fn(),
+  deleteExpiredRecordings: vi.fn(),
+  removeResetRecordings: vi.fn(),
+}));
 
 const SECRET = "cron-secret-for-tests";
 const call = (authorization?: string) =>
@@ -17,6 +21,7 @@ beforeEach(() => {
   vi.stubEnv("CRON_SECRET", SECRET);
   vi.mocked(processPendingCheckins).mockReset().mockResolvedValue({ due: 2, graded: 1 });
   vi.mocked(deleteExpiredRecordings).mockReset().mockResolvedValue({ deleted: 3 });
+  vi.mocked(removeResetRecordings).mockReset().mockResolvedValue({ removed: 1 });
 });
 
 afterEach(() => {
@@ -27,7 +32,17 @@ describe("GET /api/cron/process-checkins", () => {
   it("processes the check-ins that are due and deletes expired recordings when Vercel Cron calls with the secret", async () => {
     const response = await call(`Bearer ${SECRET}`);
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true, due: 2, graded: 1, deleted: 3 });
+    expect(await response.json()).toEqual({ ok: true, due: 2, graded: 1, deleted: 3, resetFilesRemoved: 1 });
+    expect(processPendingCheckins).toHaveBeenCalledOnce();
+    expect(deleteExpiredRecordings).toHaveBeenCalledOnce();
+    expect(removeResetRecordings).toHaveBeenCalledOnce();
+  });
+
+  it("reports a failed retry of a Master Admin's file deletes, and still does the rest", async () => {
+    vi.mocked(removeResetRecordings).mockResolvedValue(null);
+    const response = await call(`Bearer ${SECRET}`);
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ ok: false, due: 2, graded: 1, deleted: 3 });
     expect(processPendingCheckins).toHaveBeenCalledOnce();
     expect(deleteExpiredRecordings).toHaveBeenCalledOnce();
   });

@@ -15,6 +15,18 @@ export type Grade = {
   review: string;
   // The model that actually produced the grade (after any refusal fallback).
   model: string;
+  // Every billed model attempt in the call, for the cost log: one, or more when a refusal fallback
+  // took over (the declined attempt is billed too). Output includes thinking.
+  attempts: GradeAttempt[];
+};
+
+export type GradeAttempt = { model: string; usage: GradeUsage };
+
+export type GradeUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
 };
 
 export type GradingFailure = "empty_transcript" | "refusal" | "invalid_output" | "api";
