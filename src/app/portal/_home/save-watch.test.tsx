@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, Suspense, use, useEffect, useState } from "react";
+import { act, Suspense, use, useEffect, useLayoutEffect, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { currentSave, forgetDeletedTake, releaseSave, takeSavedSignal, trackSave } from "@/app/portal/checkin/pending-save";
 import type { SaveOutcome, Take } from "@/app/portal/checkin/take";
@@ -84,6 +84,33 @@ const flush = () =>
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
+// router.refresh() in Next.js updates the router in the transition it's called in, and that
+// transition waits for the server's new page. This page's refresh swaps in a tile that suspends
+// until `arrived` resolves, as the new page would. Called outside a transition, the swap would be
+// urgent: the boundary would fall back to "Loading…" and the old tile would go at once. The refresh
+// is wired up in a layout effect, so it is in place before SaveWatch's own effect can call it.
+function refreshingPage({ notStarted = false } = {}) {
+  const arrived = deferred<void>();
+  function RefreshedTile() {
+    use(arrived.promise);
+    return <p>Your draft is saved</p>;
+  }
+  function Page() {
+    const [refreshed, setRefreshed] = useState(false);
+    useLayoutEffect(() => {
+      router.refresh.mockImplementation(() => setRefreshed(true));
+    }, []);
+    return (
+      <Suspense fallback={<p>Loading…</p>}>
+        <SaveWatch notStarted={notStarted}>
+          {refreshed ? <RefreshedTile /> : <p>Record this week&apos;s check-in</p>}
+        </SaveWatch>
+      </Suspense>
+    );
+  }
+  return { page: <Page />, arrived };
+}
+
 describe("SaveWatch", () => {
   it("shows the tile as it is when nothing is saving", async () => {
     await render(tile);
@@ -137,32 +164,10 @@ describe("SaveWatch", () => {
     expect(text()).toBe("Record this week's check-in");
   });
 
-  // router.refresh() in Next.js updates the router in the transition it's called in, and that
-  // transition waits for the server's new page. Here the refresh swaps in a tile that suspends until
-  // `arrived` resolves, as the new page would. Called outside a transition, the swap would be urgent:
-  // the boundary would fall back to "Loading…" and the old tile would go at once.
   it("keeps saying it's saving until the refreshed page has arrived", async () => {
-    const arrived = deferred<void>();
-    function RefreshedTile() {
-      use(arrived.promise);
-      return <p>Your draft is saved</p>;
-    }
-    const page = { refresh: () => {} };
-    function Page() {
-      const [refreshed, setRefreshed] = useState(false);
-      useEffect(() => {
-        page.refresh = () => setRefreshed(true);
-      }, []);
-      return (
-        <Suspense fallback={<p>Loading…</p>}>
-          <SaveWatch>{refreshed ? <RefreshedTile /> : <p>Record this week&apos;s check-in</p>}</SaveWatch>
-        </Suspense>
-      );
-    }
-    router.refresh.mockImplementation(() => page.refresh());
-
+    const { page, arrived } = refreshingPage();
     const save = saving();
-    await render(<Page />);
+    await render(page);
     await settleWith(save, { step: "saved" });
     expect(router.refresh).toHaveBeenCalledOnce();
     // The refresh is under way: still saying so, never the fallback, never the stale tile.
@@ -229,11 +234,20 @@ describe("SaveWatch", () => {
   it("refreshes, once and quietly, a not-started tile that a save landed just before", async () => {
     await trackSave(Promise.resolve<SaveOutcome>({ step: "saved" }));
     expect(currentSave()).toBeNull();
-    await render(notStartedTile);
+    const { page, arrived } = refreshingPage({ notStarted: true });
+    await render(page);
     await flush();
     expect(router.refresh).toHaveBeenCalledOnce();
-    expect(status()).toBeNull(); // it has saved: no "Saving…"
+    // The refresh is under way: it has saved, so no "Saving…", and the tile stays until the new one comes.
+    expect(status()).toBeNull();
     expect(text()).toBe("Record this week's check-in");
+
+    await act(async () => {
+      arrived.resolve();
+    });
+    expect(router.refresh).toHaveBeenCalledOnce();
+    expect(status()).toBeNull();
+    expect(text()).toBe("Your draft is saved");
 
     // Coming back to the portal later doesn't refresh again for the same save.
     await render(notStartedTile);
@@ -262,6 +276,8 @@ describe("SaveWatch", () => {
     });
     await flush();
     expect(router.refresh).toHaveBeenCalledOnce();
+    expect(status()).toBeNull();
+    expect(text()).toBe("Record this week's check-in");
   });
 
   it("doesn't refresh a page the member has already left", async () => {
