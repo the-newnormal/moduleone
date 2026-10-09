@@ -58,6 +58,12 @@ export const EMAIL_ORGANISATION =
 // The new address already has a login (theirs, or anyone's: the page never says which).
 export const EMAIL_IN_USE = "That email already has a login.";
 export const EMAIL_RACE = "This person changed while you were changing their email. Reload the page and try again.";
+// parseEmail's own sentence, for an address it lets through and Supabase Auth refuses.
+export const EMAIL_FORMAT = "Enter an email address like name@example.com.";
+// The address was changed, then found not allowed (see the other sentences), and putting the old one
+// back failed.
+export const EMAIL_NOT_RESTORED =
+  "This person can't have their sign-in email changed here any more, and their old address couldn't be put back. Ask the project owner to fix it in Supabase.";
 
 // Every change to who sits in or leads the organisation node (migration 0006)
 export const ORGANISATION_OWNER_ONLY = "Only the project owner decides who sits in the organisation and who leads it.";

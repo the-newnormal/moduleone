@@ -10,11 +10,13 @@ import {
   ALREADY_IN_TEAM,
   BAD_REQUEST,
   EARLIER_LOGIN,
+  EMAIL_FORMAT,
   EMAIL_HOLDS_GRANTS,
   EMAIL_IN_USE,
   EMAIL_MASTER_ADMIN,
   EMAIL_NEEDS_SERVICE_KEY,
   EMAIL_NEEDS_SITE_URL,
+  EMAIL_NOT_RESTORED,
   EMAIL_NOT_YOURSELF,
   EMAIL_ORGANISATION,
   EMAIL_RACE,
@@ -256,6 +258,8 @@ function serviceClient(context: string, missing?: string): ActionResult<ServiceC
 function inviteFailure(context: string, error: { code?: string; status?: number }, taken: string): string {
   const { code, status } = error;
   if (code === "email_address_not_authorized") return NO_EMAIL_SENDER;
+  // An address parseEmail lets through but Auth's stricter check doesn't (a non-ASCII local part).
+  if (code === "validation_failed") return EMAIL_FORMAT;
   if (code === "email_exists" || status === 422) return taken;
   if (code === "over_email_send_rate_limit" || status === 429) return TOO_MANY_EMAILS;
   logError(`${context} invite`, error);
@@ -386,6 +390,16 @@ export async function giveLogin(memberId: string, email: string): Promise<Action
   // unknown or skewed clock this errs towards leaving a login in place.
   const createdAt = Date.parse(invite.data.user?.created_at ?? "");
   const createdHere = Number.isFinite(createdAt) && createdAt >= invitedAt;
+  // A re-sent login that a removal unlinked and is about to delete (removed_login_id) belongs to
+  // nobody any more: don't link it here, where the deletion would leave this row a dead login.
+  if (!createdHere) {
+    const pending = await service.from("members").select("id").eq("removed_login_id", authUserId).limit(1);
+    if (pending.error) {
+      logError("giveLogin pending check", pending.error);
+      return fail(GENERIC_ERROR);
+    }
+    if ((pending.data ?? []).length > 0) return fail(EMAIL_TAKEN);
+  }
 
   // 5.
   const { data: linked, error: linkError } = await service
@@ -397,6 +411,7 @@ export async function giveLogin(memberId: string, email: string): Promise<Action
     })
     .eq("id", row.id)
     .is("auth_user_id", null)
+    .is("removed_at", null)
     .neq("role", "hq")
     .select("id");
   if (linkError) {
@@ -569,6 +584,13 @@ async function closeLogin(service: ServiceClient, memberId: string, loginId: str
       logError("removePerson login", error);
       return false;
     }
+    // A row given this login between the check and the delete now holds a dead one: unlink it, so
+    // it reads "No login yet" and can be given a login again.
+    const given = await service
+      .from("members")
+      .update({ auth_user_id: null, login_given_by: null, login_given_at: null })
+      .eq("auth_user_id", loginId);
+    if (given.error) logError("removePerson relink check", given.error);
   }
   const cleared = await service
     .from("members")
@@ -792,10 +814,12 @@ export async function changeEmail(memberId: string, email: string): Promise<Acti
   return result;
 }
 
-// A login they've signed in with: change its address in place, confirmed, so they keep their
-// sessions and the privacy notice they accepted, and their next sign-in link goes to the new
-// address. Auth sends nobody an email about it. If they can't have it changed any more (6), put
-// the old address back, confirmed again: that also voids any link sent meanwhile.
+// A login they've used: change its address in place, confirmed, so they keep their sessions and
+// the privacy notice they accepted, and their next sign-in link goes to the new address. Auth
+// sends nobody an email about it. Who changed it is recorded first, so the change is never made
+// without that record (and the record is taken back if the change is). If they can't have it
+// changed any more (6), the old address goes back, confirmed again: that also voids any link sent
+// meanwhile.
 async function moveUsedLogin(
   service: ServiceClient,
   row: EmailChangeRow,
@@ -804,30 +828,66 @@ async function moveUsedLogin(
   email: string,
   adminMemberId: string,
 ): Promise<ActionResult<EmailChange>> {
+  const changedAt = new Date().toISOString();
+  const recorded = await service
+    .from("members")
+    .update({ login_email_changed_by: adminMemberId, login_email_changed_at: changedAt })
+    .eq("id", row.id)
+    .eq("auth_user_id", loginId)
+    .is("removed_at", null)
+    .neq("role", "hq")
+    .select("id");
+  if (recorded.error) {
+    logError("changeEmail record", recorded.error);
+    return fail(GENERIC_ERROR);
+  }
+  if (!recorded.data || recorded.data.length === 0) return fail(EMAIL_RACE);
+  const unrecord = async () => {
+    const { error } = await service
+      .from("members")
+      .update({ login_email_changed_by: row.login_email_changed_by, login_email_changed_at: row.login_email_changed_at })
+      .eq("id", row.id)
+      .eq("login_email_changed_at", changedAt);
+    if (error) logError("changeEmail unrecord", error);
+  };
+  const restore = async (): Promise<boolean> => {
+    if (!oldEmail) return false;
+    const { error } = await service.auth.admin.updateUserById(loginId, { email: oldEmail, email_confirm: true });
+    if (error) logError("changeEmail restore", error);
+    return !error;
+  };
+
   const update = await service.auth.admin.updateUserById(loginId, { email, email_confirm: true });
   if (update.error) {
+    await unrecord();
     if (update.error.code === "email_exists" || update.error.status === 422) return fail(EMAIL_IN_USE);
+    if (update.error.code === "validation_failed") return fail(EMAIL_FORMAT);
     logError("changeEmail update", update.error);
     return fail(GENERIC_ERROR);
   }
 
   const still = await stillChangeable(service, row.id, loginId);
-  if (still !== "ok") {
-    // "gone": a removal or another change took this login off the row meanwhile, and owns it now.
-    if (still !== "gone" && oldEmail) {
-      const back = await service.auth.admin.updateUserById(loginId, { email: oldEmail, email_confirm: true });
-      if (back.error) logError("changeEmail restore", back.error);
+  if (still === "ok") return { ok: true, value: { invited: false } };
+
+  if (still === "gone") {
+    // The login left this row meanwhile. If another row holds it now (the owner relinked it), it
+    // mustn't keep an address an admin chose for someone else: put the old one back. If none does,
+    // a removal took it and deletes it (which frees the address), unless it was deleted already,
+    // under this change: then free the address now.
+    const holder = await service.from("members").select("id").eq("auth_user_id", loginId).limit(1);
+    if (holder.error) logError("changeEmail holder check", holder.error);
+    if (holder.error || (holder.data ?? []).length > 0) {
+      if (await restore()) await unrecord();
+    } else if (update.data.user?.deleted_at) {
+      const freed = await service.auth.admin.updateUserById(loginId, { email: `${loginId}@deleted.invalid` });
+      if (freed.error) logError("changeEmail free", freed.error);
     }
-    return fail(STILL_REFUSAL[still]);
+    return fail(EMAIL_RACE);
   }
 
-  const recorded = await service
-    .from("members")
-    .update({ login_email_changed_by: adminMemberId, login_email_changed_at: new Date().toISOString() })
-    .eq("id", row.id)
-    .eq("auth_user_id", loginId);
-  if (recorded.error) logError("changeEmail record", recorded.error);
-  return { ok: true, value: { invited: false } };
+  if (!(await restore())) return fail(EMAIL_NOT_RESTORED);
+  await unrecord();
+  return fail(STILL_REFUSAL[still]);
 }
 
 // A login they haven't used yet: invite the new address (a new login), link it to the person in
@@ -917,9 +977,9 @@ async function replaceUnusedLogin(
   return { ok: true, value: { invited: true } };
 }
 
-// A login replaced before it was ever used: linked to nobody now (checked), so nothing is lost with
-// it, and its invite link stops working. If deleting it fails, it opens nothing (no member row),
-// but its address stays taken.
+// A login replaced before it was ever used: linked to nobody now (checked), so it goes, and its
+// invite link stops working. If deleting it fails, it opens nothing (no member row), but its
+// address stays taken.
 async function deleteUnusedLogin(service: ServiceClient, loginId: string) {
   const linked = await service.from("members").select("id").eq("auth_user_id", loginId).limit(1);
   if (linked.error) {
@@ -927,6 +987,7 @@ async function deleteUnusedLogin(service: ServiceClient, loginId: string) {
     return;
   }
   if ((linked.data ?? []).length > 0) return;
-  const { error } = await service.auth.admin.deleteUser(loginId);
+  // Soft, as closeLogin does: should they have signed in with it after all, what they accepted stays.
+  const { error } = await service.auth.admin.deleteUser(loginId, true);
   if (error && error.status !== 404) logError("changeEmail old login", error);
 }

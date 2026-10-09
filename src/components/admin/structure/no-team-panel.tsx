@@ -38,11 +38,11 @@ export function NoTeamPanel({
         </Button>
       </header>
       <p className="text-sm text-muted-foreground">
-        People who aren&apos;t in any division, domain or team. To place someone, show people on the chart and drag
-        them onto a box.
+        People who don&apos;t sit anywhere: not in the organisation or any division, domain or team. To place
+        someone, open a box and use Add people, or show people on the chart and drag them onto a box.
       </p>
       {people.length === 0 ? (
-        <p className="text-muted-foreground">Everyone is in a team.</p>
+        <p className="text-muted-foreground">Everyone sits somewhere.</p>
       ) : (
         <ul className="@container divide-y">
           {people.map((person) => (

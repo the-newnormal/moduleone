@@ -73,7 +73,7 @@ export function logError(context: string, error: unknown): void {
 // The sentence to show for a failed Supabase call:
 // - 23514 (check_violation) and P0002 (0003's "That team doesn't exist."): the database's own
 //   message, or for a table check constraint, the sentence above;
-// - 42501: 0003's own sentences as they are, anything else "You don't have permission to do that.";
+// - 42501: the migrations' own sentences as they are, anything else "You don't have permission to do that.";
 // - 23505 on teams_code_key: "That code is already used.";
 // - anything else (25000, network errors, …): "Something went wrong. Try again.", logged with
 //   code and status under `context`.

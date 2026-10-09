@@ -66,7 +66,7 @@ describe("NoTeamPanel", () => {
     await render(<NoTeamPanel people={[BEN, CAT, ELI, GUS, HANA]} actions={panelActions()} onClose={() => {}} />);
     expect(text(heading())).toBe("No team (5)");
     expect(text(document.querySelector("aside")!)).toContain(
-      "People who aren't in any division, domain or team. To place someone, show people on the chart and drag them onto a box.",
+      "People who don't sit anywhere: not in the organisation or any division, domain or team. To place someone, open a box and use Add people, or show people on the chart and drag them onto a box.",
     );
     expect(buttons("Ben Kho")).toEqual(["Resend invite (Ben Kho)", "Change email (Ben Kho)", "Remove from Module One (Ben Kho)"]);
     expect(buttons("Cat Ng")).toEqual(["Give login (Cat Ng)", "Remove from Module One (Cat Ng)"]);
@@ -86,10 +86,10 @@ describe("NoTeamPanel", () => {
     expect(buttons("Cat Ng")).toEqual(["Give login (Cat Ng)", "Remove from Module One (Cat Ng)"]);
   });
 
-  it("says when everyone is in a team", async () => {
+  it("says when everyone sits somewhere", async () => {
     await render(<NoTeamPanel people={[]} actions={panelActions()} onClose={() => {}} />);
     expect(text(heading())).toBe("No team (0)");
-    expect(text(document.querySelector("aside")!)).toContain("Everyone is in a team.");
+    expect(text(document.querySelector("aside")!)).toContain("Everyone sits somewhere.");
     expect(document.querySelector("aside ul")).toBeNull();
   });
 

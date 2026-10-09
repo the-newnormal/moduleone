@@ -354,9 +354,11 @@ describe("ChangeEmailForm", () => {
     expect(text(html)).toContain("Change Mei Wong's sign-in email");
     expect(text(html)).toContain("Use an address only they read: whoever reads it can sign in as Mei Wong.");
     expect(text(html)).toContain(
-      "If they've already signed in, nobody is emailed about the change, so tell them yourself; they stay signed in where they are.",
+      "If they've used their login already (or it was set up ready to use), nobody is emailed about the change, so tell them yourself; they stay signed in where they are.",
     );
-    expect(text(html)).toContain("If they haven't, their invite goes to the new address and the old one stops working.");
+    expect(text(html)).toContain(
+      "If they're still waiting to use their invite, a new one goes to the new address and the old one stops working.",
+    );
     expect(text(html)).toMatch(/Cancel Change email$/);
   });
 });

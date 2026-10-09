@@ -98,9 +98,10 @@ export function ChangeEmailForm({
         <DialogTitle>Change {person.name}&apos;s sign-in email</DialogTitle>
         <DialogDescription>
           {person.name} signs in with a link sent to this address. Use an address only they read: whoever reads
-          it can sign in as {person.name}. If they&apos;ve already signed in, nobody is emailed about the change,
-          so tell them yourself; they stay signed in where they are. If they haven&apos;t, their invite goes to
-          the new address and the old one stops working.
+          it can sign in as {person.name}. If they&apos;ve used their login already (or it was set up ready to
+          use), nobody is emailed about the change, so tell them yourself; they stay signed in where they are.
+          If they&apos;re still waiting to use their invite, a new one goes to the new address and the old one
+          stops working.
         </DialogDescription>
       </DialogHeader>
       <div className="grid gap-1.5">
