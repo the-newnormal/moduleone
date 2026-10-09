@@ -94,6 +94,24 @@ describe("heatmapGroups", () => {
     ]);
   });
 
+  it("heads a division the viewer covers with its own row, and keeps it while it has check-ins", () => {
+    const busy: HeatmapCell[] = [{ week: "2026-10-05", health: null, pending: 1 }];
+    const org: Org = {
+      roots: [
+        node("ga", "Gather", "division", [node("bq", "Barbeques", "domain")]),
+        { ...node("cu", "Culture", "division"), cells: busy }, // its head's check-in, nothing under it
+        node("sp", "Special Projects", "division"), // nothing at all
+        node("hq", "HQ", "division", [node("fn", "Finance", "domain")], false), // a leader's context
+      ],
+      loose: [],
+    };
+    expect(heatmapGroups(org).map((g) => [g.label, g.head && [g.head.key, g.head.cells], g.rows.length])).toEqual([
+      ["Gather", ["ga", CELLS], 1],
+      ["Culture", ["cu", busy], 0],
+      ["HQ", null, 1],
+    ]);
+  });
+
   it("returns no groups for an empty org", () => {
     expect(heatmapGroups({ roots: [], loose: [] })).toEqual([]);
   });

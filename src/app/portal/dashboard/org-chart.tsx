@@ -13,6 +13,7 @@ import { HeatmapTooltip } from "./heatmap-tooltip";
 const drillIn = (teamId: string | null, week: string) => `/portal/dashboard/${teamId ?? "none"}/${week}`;
 
 function Bars({ row, config }: { row: Row; config: HealthConfig }) {
+  const viewing = row.cells[row.cells.length - 1].week;
   return (
     // For the eye and the pointer: each bar opens its own week. The row's link reads the weeks out
     // and is the way in from the keyboard, so the bars stay out of the tab order.
@@ -22,7 +23,8 @@ function Bars({ row, config }: { row: Row; config: HealthConfig }) {
         return (
           <Link
             key={cell.week}
-            href={drillIn(row.teamId, cell.week)}
+            // ?from= sends the drill-in's back link to the week being viewed, not the bar's.
+            href={`${drillIn(row.teamId, cell.week)}${cell.week === viewing ? "" : `?from=${viewing}`}`}
             prefetch={false}
             tabIndex={-1}
             data-tip-title={title}

@@ -5,8 +5,10 @@ import type { CheckinRow } from "@/lib/dashboard/org";
 import type { TeamNode } from "@/lib/dashboard/tree";
 import type { HealthConfig } from "@/lib/health/health";
 import { createClient } from "@/lib/supabase/server";
+import { weeksEndingAt } from "@/lib/dashboard/weeks";
 import TeamWeekPage from "./[teamId]/[week]/page";
 import DashboardPage from "./page";
+import TrendPage from "./trend/page";
 
 // The org chart (the dashboard's front page), what it links to, and the way back from a drill-in.
 
@@ -115,6 +117,7 @@ describe("the org chart", () => {
   it("steps back a week, and forward again to this one", async () => {
     heatmapData("hq");
     const html = await page({ week: "2026-09-28" });
+    expect(vi.mocked(loadHeatmapData).mock.calls[0][1]).toEqual(weeksEndingAt("2026-09-28", 8));
     expect(html).toMatch(/Week of 28 Sept? 2026/);
     expect(html).toContain(`href="/portal/dashboard/ip1/2026-09-28"`);
     expect(html).toMatch(/IP Lab 1 · week of 28 Sept? 2026\. Red · mean score 4\.0\./);
@@ -128,8 +131,9 @@ describe("the org chart", () => {
     expect(html).toContain(`href="/portal/dashboard/ip1/${THIS_WEEK}"`);
     expect(html).not.toContain(`href="/portal/dashboard/ip/${THIS_WEEK}"`);
     expect(html).not.toContain(`href="/portal/dashboard/ga/${THIS_WEEK}"`);
-    expect(html).toContain("IP Lab");
-    expect(html).toContain("Gather");
+    // The domain and division above it are labels, not boxes.
+    expect(html).toMatch(/<span class="flex min-h-9[^"]*">IP Lab<\/span>/);
+    expect(html).toMatch(/<h2 class="flex min-h-9[^"]*">Gather<\/h2>/);
   });
 
   it("stops at the earliest week the app accepts", async () => {
@@ -145,6 +149,16 @@ describe("the org chart", () => {
   it("sends the trend grid's old address (?weeks=) to the Trend tab", async () => {
     await expect(page({ weeks: "4" })).rejects.toThrow("NEXT_REDIRECT /portal/dashboard/trend?weeks=4");
     await expect(page({ weeks: "nonsense" })).rejects.toThrow("NEXT_REDIRECT /portal/dashboard/trend?weeks=8");
+    // With ?week= too, it's an org chart address.
+    heatmapData("hq");
+    expect(await page({ weeks: "4", week: "2026-09-28" })).toMatch(/Week of 28 Sept? 2026/);
+  });
+
+  it("opens an earlier week from its bar, and comes back to the week being viewed", async () => {
+    heatmapData("hq");
+    const html = await page({});
+    expect(html).toContain(`href="/portal/dashboard/ip1/2026-09-28?from=${THIS_WEEK}"`);
+    expect(html).toContain(`href="/portal/dashboard/ip1/${THIS_WEEK}"`); // this week's own bar
   });
 });
 
@@ -163,6 +177,12 @@ describe("a team's week", () => {
     expect(await drillIn(GATHER, THIS_WEEK)).toContain('href="/portal/dashboard"');
     expect(await drillIn(GATHER, "2026-09-28")).toContain('href="/portal/dashboard?week=2026-09-28"');
     expect(await drillIn(GATHER, "2026-09-28", { weeks: "4" })).toContain('href="/portal/dashboard/trend?weeks=4"');
+    // From an earlier week's bar on the chart for 28 Sep: back to 28 Sep.
+    expect(await drillIn(GATHER, "2026-08-17", { from: "2026-09-28" })).toContain(
+      'href="/portal/dashboard?week=2026-09-28"',
+    );
+    expect(await drillIn(GATHER, "2026-08-17", { from: THIS_WEEK })).toContain('href="/portal/dashboard"');
+    expect(await drillIn(GATHER, "2026-08-17", { from: "nonsense" })).toContain('href="/portal/dashboard?week=2026-08-17"');
   });
 
   it("reads a hand-typed uppercase team id as the same team", async () => {
@@ -241,5 +261,28 @@ describe("a team's week, with two teams of the same name under it", () => {
       } as never),
     );
     expect(html.match(/<h2[^>]*>Twins<\/h2>/g)).toHaveLength(2);
+  });
+});
+
+describe("the trend grid", () => {
+  const trend = async (searchParams: Record<string, string>) =>
+    renderToStaticMarkup(await TrendPage({ searchParams: Promise.resolve(searchParams) } as never));
+
+  it("heads each division with its own row for hq, and keeps ?weeks= on every cell", async () => {
+    heatmapData("hq");
+    const html = await trend({ weeks: "4" });
+    expect(vi.mocked(loadHeatmapData).mock.calls[0][1]).toEqual(weeksEndingAt(THIS_WEEK, 4));
+    expect(html).toMatch(/<th scope="rowgroup" class="sticky[^"]*">Gather<\/th>/);
+    for (const id of ["ga", "ip", "ip1"]) expect(html).toContain(`href="/portal/dashboard/${id}/${THIS_WEEK}?weeks=4"`);
+    expect(html).not.toMatch(/href="\/portal\/dashboard\/[^"/]+\/\d{4}-\d{2}-\d{2}"/); // none without ?weeks=
+  });
+
+  it("colours only what a leader leads", async () => {
+    heatmapData("leader", ["ip1"]);
+    const html = await trend({ weeks: "4" });
+    expect(html).toContain(`href="/portal/dashboard/ip1/${THIS_WEEK}?weeks=4"`);
+    expect(html).not.toContain("/portal/dashboard/ip/");
+    expect(html).not.toContain("/portal/dashboard/ga/");
+    expect(html).toContain("No colour: you lead only some of the teams under it");
   });
 });

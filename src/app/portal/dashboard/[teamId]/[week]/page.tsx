@@ -82,14 +82,16 @@ export default async function TeamWeekPage({
   const { data } = await supabase.auth.getClaims();
   if (!data?.claims) redirect(`/login?next=${encodeURIComponent(`/portal/dashboard/${teamId}/${week}`)}`);
 
-  // Opened from the trend grid (which passes its ?weeks=) or the org chart.
-  const { weeks } = await searchParams;
+  // Opened from the trend grid (which passes its ?weeks=) or the org chart, at this week or, from
+  // an earlier week's bar, at the week in ?from=.
+  const { weeks, from } = await searchParams;
+  const chartWeek = typeof from === "string" && isWeekStart(from) ? from : week;
   const back =
     weeks !== undefined
       ? `/portal/dashboard/trend?weeks=${parseWeekCount(weeks)}`
-      : week === weekStartFor(new Date())
+      : chartWeek === weekStartFor(new Date())
         ? "/portal/dashboard"
-        : `/portal/dashboard?week=${week}`;
+        : `/portal/dashboard?week=${chartWeek}`;
 
   const [config, role, ledTeams] = await Promise.all([
     loadScoringConfig(supabase),

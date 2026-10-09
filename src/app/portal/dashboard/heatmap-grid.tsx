@@ -15,18 +15,21 @@ function Cell({
   weeksParam,
   config,
   detailed,
+  edge = false,
 }: {
   row: HeatmapRow;
   cell: HeatmapCell;
   weeksParam: number;
   config: HealthConfig;
   detailed: boolean;
+  edge?: boolean; // the first row of a group, under its rule
 }) {
   const size = detailed ? "min-h-11 justify-start px-3 py-2 text-left" : "h-11 justify-center";
+  const td = edge ? "border-t px-0.5 pt-2 pb-0.5" : "p-0.5";
 
   if (!cell.health && cell.pending === 0) {
     return (
-      <td className="p-0.5">
+      <td className={td}>
         <span
           className={`flex items-center rounded-md ${detailed ? "text-muted-foreground" : "text-muted-foreground/60"} ${size}`}
         >
@@ -49,7 +52,7 @@ function Cell({
   const band = cell.health ? BANDS[cell.health.band] : null;
 
   return (
-    <td className="p-0.5">
+    <td className={td}>
       <Link
         href={`/portal/dashboard/${row.teamId ?? "none"}/${cell.week}?weeks=${weeksParam}`}
         aria-label={`${title}. ${lines.join(". ")}.`}
@@ -128,16 +131,39 @@ export function HeatmapGrid({
           </thead>
           {groups.map((group) => (
             <tbody key={group.key ?? "other"}>
-              <tr>
-                <th
-                  scope="rowgroup"
-                  colSpan={weeks.length + 1}
-                  className="border-t bg-card px-3 pt-3 pb-1 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
-                >
-                  {/* A cell spanning every column can't stick; its label can, so it stays in view on phones. */}
-                  <span className="sticky left-3 inline-block">{group.label ?? "Other"}</span>
-                </th>
-              </tr>
+              {group.head ? (
+                // The division's own row: everything in it, week by week.
+                <tr>
+                  <th
+                    scope="rowgroup"
+                    className="sticky left-0 z-10 border-t bg-card px-3 pt-2 pb-0.5 text-left font-sans text-xs font-semibold tracking-wide uppercase"
+                  >
+                    {group.label}
+                  </th>
+                  {group.head.cells.map((cell) => (
+                    <Cell
+                      key={cell.week}
+                      row={group.head!}
+                      cell={cell}
+                      weeksParam={weeksParam}
+                      config={config}
+                      detailed={weeks.length === 1}
+                      edge
+                    />
+                  ))}
+                </tr>
+              ) : (
+                <tr>
+                  <th
+                    scope="rowgroup"
+                    colSpan={weeks.length + 1}
+                    className="border-t bg-card px-3 pt-3 pb-1 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+                  >
+                    {/* A cell spanning every column can't stick; its label can, so it stays in view on phones. */}
+                    <span className="sticky left-3 inline-block">{group.label ?? "Other"}</span>
+                  </th>
+                </tr>
+              )}
               {group.rows.map((row) => (
                 <tr key={row.key}>
                   <th
