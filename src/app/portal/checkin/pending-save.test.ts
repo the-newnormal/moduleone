@@ -112,6 +112,64 @@ describe("a superseded save", () => {
   });
 });
 
+describe("heldOutcome", () => {
+  it("is undefined while the save runs and when nothing is held", async () => {
+    const { trackSave, heldOutcome } = await load();
+    expect(heldOutcome()).toBeUndefined();
+    const save = deferred<SaveOutcome>();
+    void trackSave(save.promise);
+    expect(heldOutcome()).toBeUndefined();
+    save.resolve(saved);
+    await save.promise;
+    // Saved: nothing is held any more.
+    expect(heldOutcome()).toBeUndefined();
+  });
+
+  it("is what a kept save came to: a failed take, or the news that it wasn't kept", async () => {
+    const { trackSave, heldOutcome } = await load();
+    await trackSave(Promise.resolve(failed));
+    expect(heldOutcome()).toEqual(failed);
+    await trackSave(Promise.resolve<SaveOutcome>({ step: "superseded" }));
+    expect(heldOutcome()).toEqual({ step: "superseded" });
+  });
+
+  it("is undefined again for a newer save still running, and once a recorder takes the old one over", async () => {
+    const { trackSave, heldOutcome, releaseSave } = await load();
+    await trackSave(Promise.resolve(failed));
+    const newer = deferred<SaveOutcome>();
+    void trackSave(newer.promise);
+    expect(heldOutcome()).toBeUndefined();
+    newer.resolve(failed);
+    await newer.promise;
+    expect(heldOutcome()).toEqual(failed);
+    releaseSave();
+    expect(heldOutcome()).toBeUndefined();
+  });
+});
+
+describe("takeSavedSignal", () => {
+  it("says once that a save landed, and nothing for one that failed or wasn't kept", async () => {
+    const { trackSave, takeSavedSignal } = await load();
+    expect(takeSavedSignal()).toBe(false);
+    await trackSave(Promise.resolve(failed));
+    await trackSave(Promise.resolve<SaveOutcome>({ step: "superseded" }));
+    expect(takeSavedSignal()).toBe(false);
+    await trackSave(Promise.resolve(saved));
+    expect(takeSavedSignal()).toBe(true);
+    expect(takeSavedSignal()).toBe(false);
+  });
+
+  it("counts an older save that landed after a newer one replaced it", async () => {
+    const { trackSave, takeSavedSignal } = await load();
+    const older = deferred<SaveOutcome>();
+    void trackSave(older.promise);
+    void trackSave(deferred<SaveOutcome>().promise);
+    older.resolve(saved);
+    await older.promise;
+    expect(takeSavedSignal()).toBe(true);
+  });
+});
+
 describe("pendingSave", () => {
   it("is null when nothing is saving", async () => {
     const { pendingSave } = await load();

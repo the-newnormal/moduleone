@@ -44,7 +44,7 @@ export function SignOutButton() {
 
   return (
     <form action={signOut} onSubmit={onSubmit}>
-      <Button type="submit" variant="outline" size="sm" disabled={waiting}>
+      <Button type="submit" variant="outline" disabled={waiting}>
         {waiting ? "Saving your check-in…" : "Sign out"}
       </Button>
     </form>

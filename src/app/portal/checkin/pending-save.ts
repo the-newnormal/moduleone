@@ -8,6 +8,12 @@ import type { SaveOutcome } from "./take";
 // take was already the draft), until a recorder has told the member.
 let inFlight: Promise<SaveOutcome | null> | null = null;
 
+// What the held save came to, once it has settled (see heldOutcome).
+let settled: { save: Promise<SaveOutcome | null>; outcome: SaveOutcome | null } | null = null;
+
+// A save landed in this tab and the portal hasn't looked since (see takeSavedSignal).
+let savedUnseen = false;
+
 // While this tab holds a take that can still be saved (saving, or failed and kept), closing or
 // reloading it would lose the take, so the browser asks first. The recorder guards a take it shows
 // itself; this covers one saving or kept after the recorder has gone.
@@ -33,16 +39,20 @@ function kept(outcome: SaveOutcome | null): boolean {
 
 function clear() {
   inFlight = null;
+  settled = null;
   unsaved = false;
 }
 
 export function trackSave<T extends SaveOutcome | null>(save: Promise<T>): Promise<T> {
   inFlight = save;
+  settled = null;
   unsaved = true;
   window.addEventListener("beforeunload", warn); // the same function, so adding it again does nothing
   save.then(
     (outcome) => {
+      if (outcome?.step === "saved") savedUnseen = true;
       if (inFlight !== save) return;
+      settled = { save, outcome };
       if (!kept(outcome)) clear();
       else unsaved = atRisk(outcome);
     },
@@ -55,6 +65,21 @@ export function trackSave<T extends SaveOutcome | null>(save: Promise<T>): Promi
 
 export function currentSave(): Promise<SaveOutcome | null> | null {
   return inFlight;
+}
+
+// How the save held now ended: a failed take or the news that one wasn't kept, both waiting for a
+// recorder to show them. Undefined while it is still running, or when nothing is held.
+export function heldOutcome(): SaveOutcome | null | undefined {
+  return inFlight !== null && settled?.save === inFlight ? settled.outcome : undefined;
+}
+
+// Whether a save has landed in this tab since the last call; true once per landing. The portal can
+// have been rendered before the draft was (the member left the recorder while it saved, and the save
+// finished before the portal appeared), so it asks, and refreshes once if it may be out of date.
+export function takeSavedSignal(): boolean {
+  const landed = savedUnseen;
+  savedUnseen = false;
+  return landed;
 }
 
 // A recorder took this save over (it shows the outcome, and guards a failed take itself), or the

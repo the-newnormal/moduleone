@@ -1,87 +1,87 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { logError } from "@/lib/admin/errors";
-import { loadRole } from "@/lib/dashboard/load";
+import { currentWeekStart } from "@/lib/checkin/week";
+import { loadScoringConfig } from "@/lib/dashboard/load";
+import { weeksEndingAt } from "@/lib/dashboard/weeks";
+import { loadPortalAccess, portalNav } from "@/lib/portal/access";
+import { loadMyWeek, STRIP_WEEKS, weekStrip } from "@/lib/portal/my-week";
+import { loadTeamHealthGlance } from "@/lib/portal/team-health";
 import { createClient } from "@/lib/supabase/server";
-import { SignOutButton } from "./sign-out-button";
+import { AdminTile } from "./_home/admin-tile";
+import { CheckedInTile } from "./_home/checked-in-tile";
+import { CheckinTile } from "./_home/checkin-tile";
+import { NeedsALookTile } from "./_home/needs-a-look-tile";
+import { PortalHeader } from "./_home/portal-header";
+import { QuestionsTile } from "./_home/questions-tile";
+import { TeamHealthStats, TeamHealthTile } from "./_home/team-health-tile";
+import { WeeksTile } from "./_home/weeks-tile";
 
 export const metadata: Metadata = { title: "Portal · Module One" };
 
+// The portal's dashboard. Everyone gets their own check-in, their last weeks and the questions;
+// leaders and hq also get team health and who's checked in (and division leaders and hq, what needs
+// a look); holders of the admin grant the way into admin. What each
+// viewer may see is decided here, on the server, before anything is loaded for it, and every query
+// runs as the viewer, so RLS decides the rows. Members never see a grade: their tiles read only
+// whether and when they checked in, and the heat-map is loaded only for leaders and hq.
 export default async function PortalPage() {
   const supabase = await createClient();
   // The proxy already redirects signed-out visitors; check again here so the page
   // never renders without a verified user.
   const { data } = await supabase.auth.getClaims();
   if (!data?.claims) redirect("/login?next=/portal");
-  // Team health shows grades, which members never see; it is for leaders and hq. If the role can't
-  // be read, the card is left out rather than the portal failing.
-  const role = await loadRole(supabase).catch(() => null);
-  const seesTeamHealth = role === "leader" || role === "hq";
 
-  // The admin pages check the grant again themselves; this only decides whether to show the link.
-  const admin = await supabase.rpc("app_has_grant", { requested: "admin" });
-  if (admin.error) logError("portal admin check", admin.error);
-  const isAdmin = admin.data === true;
+  const thisWeek = currentWeekStart(new Date());
+  const stripWeeks = weeksEndingAt(thisWeek, STRIP_WEEKS);
+  const accessLoad = loadPortalAccess(supabase);
+  // None of these reject: each loader logs its own failure and says so in what it returns.
+  const [access, mine, health, scoring] = await Promise.all([
+    accessLoad,
+    loadMyWeek(supabase, data.claims.sub, stripWeeks),
+    accessLoad.then((a) => (a.seesTeamHealth ? loadTeamHealthGlance(supabase, thisWeek) : null)),
+    // Admins who aren't leaders or hq get the thresholds without the heat-map.
+    accessLoad.then((a) =>
+      a.isAdmin && !a.seesTeamHealth
+        ? loadScoringConfig(supabase).catch((error: unknown) => {
+            logError("portal scoring", error);
+            return null;
+          })
+        : null,
+    ),
+  ]);
+
+  // The role loadHeatmapData read must agree too; if it doesn't, leave team health out.
+  const teamHealth = health && health.status !== "hidden" ? health : null;
+  const thresholds = teamHealth?.status === "ok" ? teamHealth.config.thresholds : (scoring?.thresholds ?? null);
+  const name = mine.state === "ok" || mine.state === "unavailable" ? mine.name : null;
+  const strip = mine.state === "ok" ? weekStrip(stripWeeks, mine.checkedIn, mine.thisWeek.state) : null;
+  const hasMember = mine.state !== "no_member";
+  const side = hasMember || access.isAdmin;
 
   return (
-    <main className="mx-auto grid w-full max-w-2xl gap-8 px-4 py-12">
-      <header className="flex items-start justify-between gap-4">
-        <div className="grid gap-1">
-          <h1 className="text-4xl">Portal</h1>
-          <p className="text-sm text-muted-foreground">
-            Signed in as <span className="font-medium text-foreground">{data.claims.email}</span>
-          </p>
+    <main className="mx-auto grid w-full max-w-[1120px] grid-cols-[minmax(0,1fr)] gap-10 px-4 py-6 sm:gap-12 sm:px-8 sm:py-8">
+      <PortalHeader name={name} email={data.claims.email} thisWeek={thisWeek} nav={portalNav(access)} />
+
+      <div className={`grid items-start gap-6 ${side ? "lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] lg:gap-8" : ""}`}>
+        <div className="grid min-w-0 gap-6">
+          <CheckinTile week={mine} thisWeek={thisWeek} />
+          {teamHealth?.status === "ok" && <TeamHealthStats health={teamHealth} />}
+          {teamHealth && <TeamHealthTile health={teamHealth} />}
+          {teamHealth?.status === "ok" && teamHealth.needsALook && (
+            <NeedsALookTile spots={teamHealth.needsALook} config={teamHealth.config} />
+          )}
         </div>
-        <SignOutButton />
-      </header>
+        {side && (
+          <div className="grid min-w-0 gap-6">
+            {hasMember && <WeeksTile strip={strip} />}
+            {teamHealth?.status === "ok" && <CheckedInTile rows={teamHealth.checkedIn} glance={teamHealth.glance} />}
+            {hasMember && <QuestionsTile />}
+            {access.isAdmin && <AdminTile thresholds={thresholds} />}
+          </div>
+        )}
+      </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            <h2 className="text-2xl">Weekly check-in</h2>
-          </CardTitle>
-          <CardDescription>
-            Five minutes, three questions.{" "}
-            <Link href="/portal/checkin" className="font-medium text-primary underline-offset-4 hover:underline">
-              Record this week&apos;s check-in
-            </Link>
-          </CardDescription>
-        </CardHeader>
-      </Card>
-
-      {seesTeamHealth && (
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              <h2 className="text-2xl">
-                <Link href="/portal/dashboard" className="hover:underline">
-                  Team health
-                </Link>
-              </h2>
-            </CardTitle>
-            <CardDescription>The red, yellow and green heat-map of check-ins, week by week.</CardDescription>
-          </CardHeader>
-        </Card>
-      )}
-
-      {isAdmin && (
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              <h2 className="text-2xl">
-                <Link href="/admin" className="hover:underline">
-                  Admin
-                </Link>
-              </h2>
-            </CardTitle>
-            <CardDescription>
-              Change the team structure, who is in each team, and the scoring settings.
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      )}
     </main>
   );
 }

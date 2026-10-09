@@ -53,11 +53,11 @@ export default async function TrendPage({ searchParams }: PageProps<"/portal/das
               key={count}
               href={`/portal/dashboard/trend?weeks=${count}`}
               aria-current={selected ? "page" : undefined}
-              className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1 ${
-                selected ? "border-foreground/30 bg-card font-semibold" : "hover:bg-card"
+              className={`inline-flex h-10 items-center gap-1 rounded-full px-4 text-[15px] font-medium ${
+                selected ? "bg-primary text-primary-foreground" : "border border-input hover:bg-accent"
               }`}
             >
-              {selected && <Check aria-hidden className="size-4" strokeWidth={2.75} />}
+              {selected && <Check aria-hidden className="size-4" strokeWidth={1.5} />}
               {count} {count === 1 ? "week" : "weeks"}
             </Link>
           );
@@ -67,7 +67,7 @@ export default async function TrendPage({ searchParams }: PageProps<"/portal/das
       <Legend config={config} view="trend" role={role} redCounts={weekCount > 1} />
 
       {groups.length === 0 || !role ? (
-        <p className="rounded-xl border bg-card p-6 text-muted-foreground">
+        <p className="rounded-xl bg-card p-6 text-muted-foreground">
           No teams or check-ins to show for {weekCount === 1 ? "this week" : "these weeks"} yet.
         </p>
       ) : (

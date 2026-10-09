@@ -73,7 +73,7 @@ export function HeatmapTooltip({ children }: { children: ReactNode }) {
       {tip && (
         <div
           aria-hidden
-          className="pointer-events-none fixed z-50 w-max max-w-[300px] rounded-lg border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-md"
+          className="pointer-events-none fixed z-50 w-max max-w-[300px] rounded-md border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-[0_12px_32px_rgba(20,20,20,0.12)]"
           style={{
             left: tip.x,
             top: tip.y,

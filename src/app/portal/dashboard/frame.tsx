@@ -54,20 +54,21 @@ export function DashboardFrame({
       </header>
 
       {!role ? (
-        <p className="rounded-xl border bg-card p-6">
+        <p className="rounded-xl bg-card p-6">
           Your sign-in isn&apos;t linked to a team member yet, so there&apos;s nothing to show. Ask an
           admin to add you.
         </p>
       ) : (
         <>
-          <nav aria-label="Views" className="flex w-fit gap-1 rounded-lg border bg-muted p-1 text-sm">
+          {/* Normal's Tabs: an underlined row, the current view marked with an ink bar. */}
+          <nav aria-label="Views" className="flex gap-6 overflow-x-auto border-b">
             {VIEWS.map(({ view: v, label, href }) => (
               <Link
                 key={v}
                 href={href}
                 aria-current={v === view ? "page" : undefined}
-                className={`rounded-md px-3 py-1.5 ${
-                  v === view ? "bg-card font-semibold shadow-sm" : "text-muted-foreground hover:text-foreground"
+                className={`relative inline-flex h-12 shrink-0 items-center rounded-sm text-[15px] font-medium after:absolute after:inset-x-0 after:-bottom-px after:h-[3px] after:rounded-full ${
+                  v === view ? "text-foreground after:bg-foreground" : "text-muted-foreground hover:text-foreground"
                 }`}
               >
                 {label}

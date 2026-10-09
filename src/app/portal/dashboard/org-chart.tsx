@@ -11,9 +11,11 @@ import { HeatmapTooltip } from "./heatmap-tooltip";
 // to it. A box covers its team and every team
 // under it (src/lib/dashboard/org.ts); open it to read that week's check-ins.
 
-const drillIn = (teamId: string | null, week: string) => `/portal/dashboard/${teamId ?? "none"}/${week}`;
+export const drillIn = (teamId: string | null, week: string) => `/portal/dashboard/${teamId ?? "none"}/${week}`;
 
-function Bars({ row, config }: { row: Row; config: HealthConfig }) {
+// `links` false draws the bars only (the portal, where bars this small would be poor tap targets;
+// earlier weeks open from the org chart), still with their tooltips.
+export function Bars({ row, config, links = true }: { row: Row; config: HealthConfig; links?: boolean }) {
   const viewing = row.cells[row.cells.length - 1].week;
   return (
     // For the eye and the pointer: each bar opens its own week. The row's link reads the weeks out
@@ -21,6 +23,18 @@ function Bars({ row, config }: { row: Row; config: HealthConfig }) {
     <span aria-hidden className="flex h-5 shrink-0 items-end gap-0.5">
       {row.cells.map((cell) => {
         const { title, lines } = describeCell(row.name, cell, config);
+        if (!links) {
+          return (
+            <span
+              key={cell.week}
+              data-tip-title={title}
+              data-tip-body={lines.join("\n")}
+              className="flex h-full w-2 items-end sm:w-2.5"
+            >
+              <span className={`w-full rounded-t-[2px] ${barClass(cell)}`} />
+            </span>
+          );
+        }
         return (
           <Link
             key={cell.week}
@@ -76,7 +90,7 @@ function TeamRow({ row, config, heading }: { row: Row; config: HealthConfig; hea
               </span>
             )}
             <Name
-              className={`truncate ${heading ? "font-sans text-xs font-semibold tracking-wide uppercase" : "font-medium"}`}
+              className={`truncate font-medium ${heading ? "font-sans text-[15px]" : ""}`}
             >
               {row.name}
             </Name>
@@ -139,11 +153,11 @@ function Card({
   config: HealthConfig;
 }) {
   return (
-    <section aria-label={label} className="grid grid-cols-[minmax(0,1fr)] gap-1 rounded-xl border bg-card p-2">
+    <section aria-label={label} className="grid grid-cols-[minmax(0,1fr)] gap-1 rounded-xl bg-card p-2">
       {head?.scored ? (
         <TeamRow row={head} config={config} heading />
       ) : (
-        <h2 className="flex min-h-9 items-center px-2.5 font-sans text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+        <h2 className="flex min-h-9 items-center px-2.5 font-sans text-xs leading-4 font-medium tracking-[0.02em] text-muted-foreground">
           {label}
         </h2>
       )}
@@ -180,7 +194,7 @@ export function OrgChart({ org, config }: { org: Org; config: HealthConfig }) {
         {organisations
           .filter((node) => node.scored)
           .map((node) => (
-            <section key={node.teamId} aria-label={node.name} className="grid grid-cols-[minmax(0,1fr)] rounded-xl border bg-card p-2 md:col-span-2">
+            <section key={node.teamId} aria-label={node.name} className="grid grid-cols-[minmax(0,1fr)] rounded-xl bg-card p-2 md:col-span-2">
               <TeamRow row={node} config={config} heading />
             </section>
           ))}

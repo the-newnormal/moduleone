@@ -26,7 +26,8 @@ export const metadata: Metadata = { title: "Team health · Module One" };
 const weekHref = (week: string, thisWeek: string) =>
   week === thisWeek ? "/portal/dashboard" : `/portal/dashboard?week=${week}`;
 
-const STEP = "inline-flex min-h-9 items-center gap-1 rounded-md border px-2.5";
+// Normal's secondary buttons: outline pills at the default control size.
+const STEP = "inline-flex h-10 items-center gap-1 rounded-full border px-4 text-[15px] font-medium";
 
 // A week the chart can show: its bars reach back ORG_WEEKS - 1 weeks, and every one must be a week
 // the drill-in accepts.
@@ -68,23 +69,23 @@ export default async function OrgChartPage({ searchParams }: PageProps<"/portal/
           {week === thisWeek && <span className="ml-2 text-sm font-normal text-muted-foreground"> This week</span>}
         </p>
         {previous ? (
-          <Link href={weekHref(previous, thisWeek)} className={`${STEP} hover:bg-card`}>
+          <Link href={weekHref(previous, thisWeek)} className={`${STEP} border-input hover:bg-accent`}>
             <ChevronLeft aria-hidden className="size-4" />
             Previous week
           </Link>
         ) : (
-          <span role="link" aria-disabled="true" className={`${STEP} text-muted-foreground/60`}>
+          <span role="link" aria-disabled="true" className={`${STEP} border-transparent bg-secondary text-muted-foreground`}>
             <ChevronLeft aria-hidden className="size-4" />
             Previous week
           </span>
         )}
         {next ? (
-          <Link href={weekHref(next, thisWeek)} className={`${STEP} hover:bg-card`}>
+          <Link href={weekHref(next, thisWeek)} className={`${STEP} border-input hover:bg-accent`}>
             Next week
             <ChevronRight aria-hidden className="size-4" />
           </Link>
         ) : (
-          <span role="link" aria-disabled="true" className={`${STEP} text-muted-foreground/60`}>
+          <span role="link" aria-disabled="true" className={`${STEP} border-transparent bg-secondary text-muted-foreground`}>
             Next week
             <ChevronRight aria-hidden className="size-4" />
           </span>
@@ -99,7 +100,7 @@ export default async function OrgChartPage({ searchParams }: PageProps<"/portal/
       <Legend config={config} view="org" role={role} />
 
       {org.roots.length + org.loose.length === 0 ? (
-        <p className="rounded-xl border bg-card p-6 text-muted-foreground">No teams or check-ins to show yet.</p>
+        <p className="rounded-xl bg-card p-6 text-muted-foreground">No teams or check-ins to show yet.</p>
       ) : (
         <OrgChart key={week} org={org} config={config} />
       )}
