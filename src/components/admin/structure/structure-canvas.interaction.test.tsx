@@ -224,6 +224,19 @@ describe("StructureCanvas", () => {
     expect(document.querySelector("aside")).toBeNull();
   });
 
+  it("leaves the panel open when something above it already handled the Escape (a menu closing)", async () => {
+    await canvas();
+    await menu("IP Lab 1", "People and leads");
+    const handled = (event: Event) => event.preventDefault();
+    document.addEventListener("keydown", handled, true);
+    try {
+      await press(document.body, "Escape");
+    } finally {
+      document.removeEventListener("keydown", handled, true);
+    }
+    expect(document.querySelector("aside")).not.toBeNull();
+  });
+
   it("tells screen readers what Enter does on a box and on a person", async () => {
     await canvas();
     const described = box("atlas").getAttribute("aria-describedby")!;

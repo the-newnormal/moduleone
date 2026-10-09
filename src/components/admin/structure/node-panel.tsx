@@ -28,8 +28,10 @@ export function NodePanel({
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      // A dialog open above the panel handles its own Escape.
-      if (event.key === "Escape" && !document.querySelector("[role=dialog], [role=alertdialog]")) onClose();
+      // A dialog, menu or list open above the panel handles its own Escape (Radix prevents its
+      // default when it closes one).
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (!document.querySelector("[role=dialog], [role=alertdialog]")) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
