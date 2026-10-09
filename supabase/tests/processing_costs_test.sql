@@ -1,4 +1,4 @@
--- The processing cost log (0007). Run: supabase test db
+-- The processing cost log (0008). Run: supabase test db
 -- Builds its own fixtures inside the transaction and rolls back, so it doesn't depend on seed.sql.
 --
 -- Fixtures: admin (grant admin), hq (role hq, no grants), m1 (a member with a check-in),

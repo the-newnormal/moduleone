@@ -1,4 +1,4 @@
--- 0007: what each check-in cost to process, so the monthly bill can be checked.
+-- 0008: what each check-in cost to process, so the monthly bill can be checked.
 --
 -- One row per paid API call that succeeded: a transcription (how many seconds of audio, by which
 -- model) or a grading (tokens in and out, by which model). Rows hold numbers and model names only:

@@ -242,6 +242,8 @@ describe("a team's week", () => {
       rubric_review: null,
       transcript: null,
       recording: null,
+      hasRecording: false,
+      awaitingGrader: false,
     });
     vi.mocked(loadTeamWeek).mockResolvedValue({
       teamName: "IP Lab",
@@ -254,6 +256,57 @@ describe("a team's week", () => {
       expect.stringContaining(">IP Lab 1</h2>"),
     ]);
     expect(html.match(/<h3[^>]*>[^<]*<\/h3>/g)?.map((h) => h.replace(/<[^>]+>/g, ""))).toEqual(["Wen", "Abe", "Xia"]);
+  });
+});
+
+describe("a team's week, for a Master Admin", () => {
+  const IP_LAB = "00000000-0000-4000-8000-0000000000bb";
+  const card = (id: string, memberName: string, graded: boolean, hasRecording: boolean) => ({
+    id,
+    memberName,
+    teamId: IP_LAB,
+    team: null,
+    activity_score: graded ? 3 : null,
+    excellence_score: graded ? 3 : null,
+    morale_score: graded ? 3 : null,
+    rubric_review: null,
+    transcript: null,
+    recording: null,
+    hasRecording,
+    awaitingGrader: !graded,
+  });
+  const drillIn = async (week: string) =>
+    renderToStaticMarkup(
+      await TeamWeekPage({
+        params: Promise.resolve({ teamId: IP_LAB, week }),
+        searchParams: Promise.resolve({}),
+      } as never),
+    );
+
+  beforeEach(() => {
+    vi.mocked(loadTeamWeek).mockResolvedValue({
+      teamName: "IP Lab",
+      context: [],
+      checkins: [card("a", "Abe", true, true), card("b", "Bea", false, true), card("c", "Cy", true, false)],
+    });
+  });
+
+  it("offers to reset every check-in, and to delete the recording of a graded one", async () => {
+    vi.mocked(loadRole).mockResolvedValue("hq");
+    const html = await drillIn(THIS_WEEK);
+    expect(html.match(/Reset check-in<span class="sr-only"> of [A-Za-z]+/g)).toHaveLength(3);
+    // Bea's isn't graded yet (the grader needs it) and Cy's has no recording.
+    expect(html.match(/Delete recording<span class="sr-only"> of [A-Za-z]+/g)).toEqual([
+      'Delete recording<span class="sr-only"> of Abe',
+    ]);
+  });
+
+  it("shows leaders neither", async () => {
+    vi.mocked(loadRole).mockResolvedValue("leader");
+    vi.mocked(loadLedTeams).mockResolvedValue([IP_LAB]);
+    const html = await drillIn(THIS_WEEK);
+    expect(html).not.toContain("Reset check-in");
+    expect(html).not.toContain("Delete recording");
   });
 });
 
@@ -270,6 +323,8 @@ describe("a team's week, with two teams of the same name under it", () => {
       rubric_review: null,
       transcript: null,
       recording: null,
+      hasRecording: false,
+      awaitingGrader: false,
     });
     vi.mocked(loadTeamWeek).mockResolvedValue({
       teamName: "IP Lab",

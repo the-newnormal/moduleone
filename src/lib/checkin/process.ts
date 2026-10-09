@@ -134,7 +134,9 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
     // fix grades the check-in.
     return fail(`grading_${error.reason}`, error, { giveBackAttempt: error.reason === "api" && !error.retryable });
   }
-  const [{ error: gradeError }] = await Promise.all([
+  // The grading call is paid for whether or not the save below changes a row, so its cost is
+  // logged either way (processing_costs keeps no foreign key to the check-in, 0008).
+  const [{ data: graded, error: gradeError }] = await Promise.all([
     admin
       .from("checkins")
       .update({
@@ -149,6 +151,7 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
       })
       .eq("id", checkinId)
       .is("graded_at", null)
+      .select("id")
       .abortSignal(AbortSignal.timeout(SAVE_MS)),
     recordCost(
       admin,
@@ -157,6 +160,8 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
     ),
   ]);
   if (gradeError) return fail("save_grade_failed", gradeError);
+  // No row: a Master Admin reset the check-in meanwhile (0007), or another attempt graded it.
+  if (!graded || graded.length === 0) return "skipped";
   return "graded";
 }
 
@@ -180,7 +185,7 @@ function usageColumns(usage: GradeUsage) {
   };
 }
 
-// Logs a paid call in processing_costs (0007) for the admin Costs page. Runs alongside the save
+// Logs a paid call in processing_costs (0008) for the admin Costs page. Runs alongside the save
 // that follows the call, inside the same SAVE_MS, and never fails the check-in: a missing row
 // only makes the month's total a little low.
 async function recordCost(admin: ReturnType<typeof createServiceRoleClient>, checkinId: string, rows: CostRow[]): Promise<void> {

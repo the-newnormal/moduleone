@@ -1,4 +1,4 @@
-// Prices and monthly totals for the admin Costs page, from processing_costs rows (0007). The rows
+// Prices and monthly totals for the admin Costs page, from processing_costs rows (0008). The rows
 // keep usage only; prices live here, so a price change is a code change, not a migration. Figures
 // are estimates for checking the bill, not the bill itself.
 

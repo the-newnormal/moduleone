@@ -29,6 +29,8 @@ let updates: Update[];
 let inserts: Insert[];
 let updateError: { code: string; message: string } | null;
 let insertError: { code: string; message: string } | null;
+// The rows an update's .select() returns (the grade's update asks which row it changed).
+let updatedRows: { id: string }[];
 const rpc = vi.fn();
 const download = vi.fn();
 const storageFrom = vi.fn(() => ({ download }));
@@ -51,8 +53,10 @@ function from(table: string) {
       const builder = {
         eq: (column: string, value: unknown) => (entry.filters.push(["eq", column, value]), builder),
         is: (column: string, value: unknown) => (entry.filters.push(["is", column, value]), builder),
+        select: () => builder,
         abortSignal: () => builder,
-        then: (resolve: (r: { error: typeof updateError }) => void) => resolve({ error: updateError }),
+        then: (resolve: (r: { data: unknown; error: typeof updateError }) => void) =>
+          resolve({ data: updateError ? null : updatedRows, error: updateError }),
       };
       return builder;
     },
@@ -69,6 +73,7 @@ beforeEach(() => {
   inserts = [];
   updateError = null;
   insertError = null;
+  updatedRows = [{ id: CHECKIN }];
   vi.mocked(createServiceRoleClient).mockReturnValue({ rpc, from, storage: { from: storageFrom } } as never);
   rpc.mockReset().mockResolvedValue(claim());
   download.mockReset().mockResolvedValue({ data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }), error: null });
@@ -194,6 +199,11 @@ describe("processCheckin", () => {
     rpc.mockResolvedValue(claim({ transcript: TRANSCRIPT, attempts: 2 }));
     await processCheckin(CHECKIN);
     expect(inserts.flatMap((i) => i.values.map((v) => v.step))).toEqual(["grading"]);
+  });
+
+  it("reports skipped, not graded, when the check-in was reset while it was being graded", async () => {
+    updatedRows = []; // a Master Admin deleted the row (0007), so the grade's update changes nothing
+    expect(await processCheckin(CHECKIN)).toBe("skipped");
   });
 
   it("does nothing when there is nothing to claim", async () => {
