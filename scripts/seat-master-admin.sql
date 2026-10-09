@@ -13,7 +13,7 @@
 do $$
 declare
   -- Whose login: the email they sign in with.
-  v_email      text := 'admin@newnormal.sg';
+  v_email      text := 'ashton@newnormal.sg';
   -- Where they sit: an active division's name.
   v_division   text := 'HQ';
   -- Also file their earlier check-ins, made with no seat, under that division.
