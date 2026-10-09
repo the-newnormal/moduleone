@@ -860,8 +860,8 @@ async function moveUsedLogin(
   const update = await service.auth.admin.updateUserById(loginId, { email, email_confirm: true });
   if (update.error) {
     await unrecord();
-    if (update.error.code === "email_exists" || update.error.status === 422) return fail(EMAIL_IN_USE);
     if (update.error.code === "validation_failed") return fail(EMAIL_FORMAT);
+    if (update.error.code === "email_exists" || update.error.status === 422) return fail(EMAIL_IN_USE);
     logError("changeEmail update", update.error);
     return fail(GENERIC_ERROR);
   }
@@ -870,24 +870,37 @@ async function moveUsedLogin(
   if (still === "ok") return { ok: true, value: { invited: false } };
 
   if (still === "gone") {
-    // The login left this row meanwhile. If another row holds it now (the owner relinked it), it
-    // mustn't keep an address an admin chose for someone else: put the old one back. If none does,
-    // a removal took it and deletes it (which frees the address), unless it was deleted already,
-    // under this change: then free the address now.
-    const holder = await service.from("members").select("id").eq("auth_user_id", loginId).limit(1);
-    if (holder.error) logError("changeEmail holder check", holder.error);
-    if (holder.error || (holder.data ?? []).length > 0) {
-      if (await restore()) await unrecord();
-    } else if (update.data.user?.deleted_at) {
+    // The login left this row meanwhile. A removal that's deleting it owns it (deleting it frees
+    // the address); one deleted already, under this change, gets an unusable address so the new
+    // one is free again. Anyone else's (the owner relinked or unlinked it by hand) mustn't keep an
+    // address an admin chose for this person: put the old one back.
+    if (await removalOwns(service, loginId)) return fail(EMAIL_RACE);
+    const now = await service.auth.admin.getUserById(loginId);
+    if (!now.error && now.data.user.deleted_at) {
       const freed = await service.auth.admin.updateUserById(loginId, { email: `${loginId}@deleted.invalid` });
       if (freed.error) logError("changeEmail free", freed.error);
+      return fail(EMAIL_RACE);
     }
+    if (now.error) logError("changeEmail recheck", now.error);
+    if (!(await restore())) return fail(EMAIL_NOT_RESTORED);
+    await unrecord();
     return fail(EMAIL_RACE);
   }
 
   if (!(await restore())) return fail(EMAIL_NOT_RESTORED);
   await unrecord();
   return fail(STILL_REFUSAL[still]);
+}
+
+// Whether a removal unlinked this login and is deleting it (removed_login_id). Unsure counts as no:
+// putting an old address back on a login that's being deleted does no harm.
+async function removalOwns(service: ServiceClient, loginId: string): Promise<boolean> {
+  const pending = await service.from("members").select("id").eq("removed_login_id", loginId).limit(1);
+  if (pending.error) {
+    logError("changeEmail removal check", pending.error);
+    return false;
+  }
+  return (pending.data ?? []).length > 0;
 }
 
 // A login they haven't used yet: invite the new address (a new login), link it to the person in

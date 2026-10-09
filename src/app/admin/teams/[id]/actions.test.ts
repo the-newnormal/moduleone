@@ -20,11 +20,13 @@ import {
   ALREADY_IN_TEAM,
   BAD_REQUEST,
   EARLIER_LOGIN,
+  EMAIL_FORMAT,
   EMAIL_HOLDS_GRANTS,
   EMAIL_IN_USE,
   EMAIL_MASTER_ADMIN,
   EMAIL_NEEDS_SERVICE_KEY,
   EMAIL_NEEDS_SITE_URL,
+  EMAIL_NOT_RESTORED,
   EMAIL_NOT_YOURSELF,
   EMAIL_ORGANISATION,
   EMAIL_RACE,
@@ -135,6 +137,7 @@ function signedOut() {
 }
 
 const rows = (...ids: string[]) => ({ data: ids.map((id) => ({ id })), error: null });
+const done = () => ({ data: null, error: null }); // a write without .select()
 const dbError = (code: string, message: string) => ({
   data: null,
   error: { code, message, details: "Failing row contains (mei.wong@example.com)", hint: null },
@@ -483,6 +486,13 @@ const HISTORY_QUERIES: Query[] = [
   { table: "member_profiles", calls: [["select", "member_id"], ["eq", "member_id", PERSON], ["limit", 1]] },
 ];
 
+// Before linking a login the invite only re-sent (made before it): is a removal about to delete
+// that login (members.removed_login_id)?
+const pendingRemoval = (login: string): Query => ({
+  table: "members",
+  calls: [["select", "id"], ["eq", "removed_login_id", login], ["limit", 1]],
+});
+
 // Only the project owner decides who sits in the organisation node or leads it (migration 0006):
 // every action that would change either refuses, whatever a client sends, and writes nothing.
 describe("the organisation node", () => {
@@ -552,6 +562,22 @@ describe("giveLogin", () => {
     expect(deleteUser).not.toHaveBeenCalled();
   }
 
+  // The guarded link: only while the member still has no login, isn't removed and isn't a Master
+  // Admin.
+  const GIVE_LINK: Query = {
+    table: "members",
+    calls: [
+      ["update", { auth_user_id: NEW_LOGIN, login_given_by: ADMIN, login_given_at: "2026-10-09T04:30:00.000Z" }],
+      ["eq", "id", PERSON],
+      ["is", "auth_user_id", null],
+      ["is", "removed_at", null],
+      ["neq", "role", "hq"],
+      ["select", "id"],
+    ],
+  };
+  // An invite that only re-sent a login made before it.
+  const resent = () => ({ data: { user: { id: NEW_LOGIN, created_at: "2026-10-01T00:00:00.000Z" } }, error: null });
+
   it("invites the email, links the new login to the member and records who gave it", async () => {
     loginAllowed(rows(PERSON));
 
@@ -568,22 +594,10 @@ describe("giveLogin", () => {
     expect(inviteUserByEmail).toHaveBeenCalledExactlyOnceWith(EMAIL, {
       redirectTo: `${SITE}/auth/callback?next=/portal`,
     });
-    // 5. the guarded link
+    // 5. the guarded link (this invite made the login, so no removal can be waiting on it)
     expect(serviceQueries).toEqual([
       ...HISTORY_QUERIES,
-      {
-        table: "members",
-        calls: [
-          [
-            "update",
-            { auth_user_id: NEW_LOGIN, login_given_by: ADMIN, login_given_at: "2026-10-09T04:30:00.000Z" },
-          ],
-          ["eq", "id", PERSON],
-          ["is", "auth_user_id", null],
-          ["neq", "role", "hq"],
-          ["select", "id"],
-        ],
-      },
+      GIVE_LINK,
       // 5b. nothing that would come with the login arrived meanwhile
       ...LATE_QUERIES,
     ]);
@@ -636,10 +650,11 @@ describe("giveLogin", () => {
   });
 
   it.each([
-    ["one this invite made", "2026-10-09T04:30:00.000Z"],
-    ["one it only re-sent", "2026-10-01T00:00:00.000Z"],
-  ])("deletes the login (%s) when the unlink fails twice, which unlinks the row too", async (_label, createdAt) => {
-    loginAllowed(rows(PERSON), dbError("08006", "down"), dbError("08006", "down"));
+    ["one this invite made", "2026-10-09T04:30:00.000Z", []],
+    // A re-sent login is first checked for a removal waiting on it (none here).
+    ["one it only re-sent", "2026-10-01T00:00:00.000Z", [rows()]],
+  ])("deletes the login (%s) when the unlink fails twice, which unlinks the row too", async (_label, createdAt, pending) => {
+    loginAllowed(...pending, rows(PERSON), dbError("08006", "down"), dbError("08006", "down"));
     inviteUserByEmail.mockResolvedValue({ data: { user: { id: NEW_LOGIN, created_at: createdAt } }, error: null });
     serviceQueue.member_grants = [{ data: [{ grant_name: "admin" }], error: null }];
     await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
@@ -803,6 +818,8 @@ describe("giveLogin", () => {
     ["a 429", { code: "over_request_rate_limit", status: 429 }, TOO_MANY_EMAILS],
     ["over_email_send_rate_limit", { code: "over_email_send_rate_limit", status: 400 }, TOO_MANY_EMAILS],
     ["the built-in sender's refusal", { code: "email_address_not_authorized", status: 400 }, NO_EMAIL_SENDER],
+    // An address parseEmail lets through and Auth's stricter check refuses (a non-ASCII local part).
+    ["Auth's address check", { code: "validation_failed", status: 400 }, EMAIL_FORMAT],
     ["a server error", { code: "unexpected_failure", status: 500 }, GENERIC_ERROR],
     ["a network error", { code: undefined, status: 0 }, GENERIC_ERROR],
   ])("maps an invite failure (%s) and links nothing", async (_label, error, message) => {
@@ -849,11 +866,50 @@ describe("giveLogin", () => {
     ["was made before this invite (a re-sent pending invite)", "2026-10-09T04:29:59.999Z"],
     ["doesn't say when it was made", undefined],
   ])("never deletes a login that %s", async (_label, createdAt) => {
-    loginAllowed(rows(), rows());
+    loginAllowed(rows(), rows()); // no removal waiting on it, then the guarded link reaches no row
     inviteUserByEmail.mockResolvedValue({ data: { user: { id: NEW_LOGIN, created_at: createdAt } }, error: null });
     await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: INVITE_RACE });
     expect(deleteUser).not.toHaveBeenCalled();
-    expect(serviceQueries).toHaveLength(HISTORY_QUERIES.length + 1); // no "does anyone use it?" either
+    // no "does anyone use it?" either
+    expect(serviceQueries).toEqual([...HISTORY_QUERIES, pendingRemoval(NEW_LOGIN), GIVE_LINK]);
+  });
+
+  // A removal unlinks the login and deletes it afterwards; a re-sent invite for its address returns
+  // that same login meanwhile. Linked here, the deletion would leave this row a dead login.
+  it("refuses an address whose re-sent login a removal is about to delete, and links nothing", async () => {
+    loginAllowed(rows("a0000000-0000-4000-8000-000000000003"));
+    inviteUserByEmail.mockResolvedValue(resent());
+    await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_TAKEN });
+    expect(serviceQueries).toEqual([...HISTORY_QUERIES, pendingRemoval(NEW_LOGIN)]);
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("says 'something went wrong' when it can't tell whether a removal waits on the re-sent login, and links nothing", async () => {
+    loginAllowed(dbError("08006", `down for ${EMAIL}`));
+    inviteUserByEmail.mockResolvedValue(resent());
+    await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
+    expect(serviceQueries).toEqual([...HISTORY_QUERIES, pendingRemoval(NEW_LOGIN)]);
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("giveLogin pending check failed", { code: "08006", status: undefined });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("links a re-sent login no removal waits on", async () => {
+    loginAllowed(rows(), rows(PERSON));
+    inviteUserByEmail.mockResolvedValue(resent());
+    await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: true, value: null });
+    expect(serviceQueries).toEqual([...HISTORY_QUERIES, pendingRemoval(NEW_LOGIN), GIVE_LINK, ...LATE_QUERIES]);
+    expectRevalidated();
+  });
+
+  // The admin's read saw them not removed; a removal before the link must stop it.
+  it("links nothing to someone removed meanwhile (the link skips removed rows), and deletes the new login", async () => {
+    loginAllowed(rows(), rows()); // the guarded link reaches no row, then "does anyone use this login?"
+    await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: INVITE_RACE });
+    expect(serviceQueries[HISTORY_QUERIES.length]).toEqual(GIVE_LINK); // filtered on removed_at
+    expect(deleteUser).toHaveBeenCalledExactlyOnceWith(NEW_LOGIN);
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 
   it("checks history and links by the id as stored, whatever case the request used", async () => {
@@ -1025,6 +1081,7 @@ describe("resendInvite", () => {
     ["a 422 (they signed in meanwhile)", { code: "email_exists", status: 422 }, INVITE_USED],
     ["a rate limit", { code: "over_email_send_rate_limit", status: 429 }, TOO_MANY_EMAILS],
     ["the built-in sender's refusal", { code: "email_address_not_authorized", status: 400 }, NO_EMAIL_SENDER],
+    ["Auth's address check", { code: "validation_failed", status: 400 }, EMAIL_FORMAT],
     ["a server error", { code: "unexpected_failure", status: 500 }, GENERIC_ERROR],
   ])("maps an invite failure (%s)", async (_label, error, message) => {
     userQueue.members = [invited()];
@@ -1115,6 +1172,15 @@ describe("removePerson", () => {
     table: "members",
     calls: [["update", { removed_login_id: null }], ["eq", "id", PERSON], ["eq", "removed_login_id", LOGIN]],
   };
+  // After deleting it: a row given the login between the check and the delete holds a dead one, so
+  // it's unlinked (and reads "No login yet").
+  const RELINK_CHECK: Query = {
+    table: "members",
+    calls: [["update", { auth_user_id: null, login_given_by: null, login_given_at: null }], ["eq", "auth_user_id", LOGIN]],
+  };
+  // The service role's members queue when nothing uses the login: the check, the unlink after the
+  // delete, the clear.
+  const closes = () => [rows(), done(), done()];
   const removeCalls = () => rpc.mock.calls.filter(([fn]) => fn === "admin_remove_member");
   const missingKey = () =>
     vi.mocked(createServiceRoleClient).mockImplementation(() => {
@@ -1143,13 +1209,14 @@ describe("removePerson", () => {
   it("removes someone with a login, then closes it (a soft delete) and clears removed_login_id", async () => {
     userQueue.members = [personRow({ auth_user_id: LOGIN })];
     removal = removed("removed", LOGIN);
-    serviceQueue.members = [rows(), { data: null, error: null }];
+    serviceQueue.members = closes();
     await expect(removePerson(PERSON)).resolves.toEqual({ ok: true, value: { outcome: "removed", loginKept: false } });
     expect(removeCalls()).toEqual([["admin_remove_member", { p_member_id: PERSON }]]);
     // Soft: the auth.users row stays, and with it the privacy-notice acceptances it gave.
     expect(deleteUser).toHaveBeenCalledExactlyOnceWith(LOGIN, true);
-    // The clear is filtered on the login too, so it never clears one a later removal recorded.
-    expect(serviceQueries).toEqual([LOGIN_CHECK, CLEAR]);
+    // Then any row given the login meanwhile is unlinked; the clear is filtered on the login too,
+    // so it never clears one a later removal recorded.
+    expect(serviceQueries).toEqual([LOGIN_CHECK, RELINK_CHECK, CLEAR]);
     expect(console.error).not.toHaveBeenCalled();
     expectRevalidated();
   });
@@ -1157,7 +1224,7 @@ describe("removePerson", () => {
   it("reads the row as the admin and removes them before touching their login with the service role", async () => {
     userQueue.members = [personRow({ auth_user_id: LOGIN })];
     removal = removed("removed", LOGIN);
-    serviceQueue.members = [rows(), { data: null, error: null }];
+    serviceQueue.members = closes();
     await removePerson(PERSON);
     const grantCheck = rpc.mock.invocationCallOrder[0];
     const load = from.mock.invocationCallOrder[0];
@@ -1172,10 +1239,10 @@ describe("removePerson", () => {
   it("finishes an earlier removal whose login is still to delete", async () => {
     userQueue.members = [personRow({ removed_login_id: LOGIN })];
     removal = removed("removed", LOGIN); // already removed: it hands back the login still to delete
-    serviceQueue.members = [rows(), { data: null, error: null }];
+    serviceQueue.members = closes();
     await expect(removePerson(PERSON)).resolves.toEqual({ ok: true, value: { outcome: "removed", loginKept: false } });
     expect(deleteUser).toHaveBeenCalledExactlyOnceWith(LOGIN, true);
-    expect(serviceQueries).toEqual([LOGIN_CHECK, CLEAR]);
+    expect(serviceQueries).toEqual([LOGIN_CHECK, RELINK_CHECK, CLEAR]);
   });
 
   it.each([
@@ -1212,7 +1279,7 @@ describe("removePerson", () => {
   it("still closes a login given after it read the row", async () => {
     userQueue.members = [personRow()];
     removal = removed("removed", LOGIN);
-    serviceQueue.members = [rows(), { data: null, error: null }];
+    serviceQueue.members = closes();
     await expect(removePerson(PERSON)).resolves.toEqual({ ok: true, value: { outcome: "removed", loginKept: false } });
     expect(deleteUser).toHaveBeenCalledExactlyOnceWith(LOGIN, true);
   });
@@ -1283,10 +1350,10 @@ describe("removePerson", () => {
     expect(console.error).toHaveBeenCalledExactlyOnceWith("removePerson load failed", { code: "08006", status: undefined });
   });
 
-  it("never deletes a login a member row uses again (it's theirs now), and still clears removed_login_id", async () => {
+  it("never deletes or unlinks a login a member row uses again (it's theirs now), and still clears removed_login_id", async () => {
     userQueue.members = [personRow({ auth_user_id: LOGIN })];
     removal = removed("removed", LOGIN);
-    serviceQueue.members = [rows("a0000000-0000-4000-8000-000000000003"), { data: null, error: null }];
+    serviceQueue.members = [rows("a0000000-0000-4000-8000-000000000003"), done()];
     await expect(removePerson(PERSON)).resolves.toEqual({ ok: true, value: { outcome: "removed", loginKept: false } });
     expect(deleteUser).not.toHaveBeenCalled();
     expect(serviceQueries).toEqual([LOGIN_CHECK, CLEAR]);
@@ -1295,14 +1362,14 @@ describe("removePerson", () => {
   it("counts a login that's gone already (404) as closed", async () => {
     userQueue.members = [personRow({ auth_user_id: LOGIN })];
     removal = removed("removed", LOGIN);
-    serviceQueue.members = [rows(), { data: null, error: null }];
+    serviceQueue.members = closes();
     deleteUser.mockResolvedValue({ data: null, error: { name: "AuthApiError", status: 404, code: "user_not_found" } });
     await expect(removePerson(PERSON)).resolves.toEqual({ ok: true, value: { outcome: "removed", loginKept: false } });
-    expect(serviceQueries).toEqual([LOGIN_CHECK, CLEAR]);
+    expect(serviceQueries).toEqual([LOGIN_CHECK, RELINK_CHECK, CLEAR]);
     expect(console.error).not.toHaveBeenCalled();
   });
 
-  it("says the login was kept when deleting it fails, leaves removed_login_id, and logs only code and status", async () => {
+  it("says the login was kept when deleting it fails, unlinks nothing, leaves removed_login_id, and logs only code and status", async () => {
     userQueue.members = [personRow({ auth_user_id: LOGIN })];
     removal = removed("removed", LOGIN);
     serviceQueue.members = [rows()];
@@ -1329,20 +1396,42 @@ describe("removePerson", () => {
   it("counts the login as closed when only clearing removed_login_id fails, and logs it", async () => {
     userQueue.members = [personRow({ auth_user_id: LOGIN })];
     removal = removed("removed", LOGIN);
-    serviceQueue.members = [rows(), dbError("08006", "down")];
+    serviceQueue.members = [rows(), done(), dbError("08006", "down")];
     await expect(removePerson(PERSON)).resolves.toEqual({ ok: true, value: { outcome: "removed", loginKept: false } });
     expect(deleteUser).toHaveBeenCalledExactlyOnceWith(LOGIN, true);
     expect(console.error).toHaveBeenCalledExactlyOnceWith("removePerson clear failed", { code: "08006", status: undefined });
   });
 
+  // giveLogin re-sends a pending invite to the same login, so a row may be given it between the
+  // check and the delete: that row then holds a dead login, and is unlinked.
+  it("unlinks a row given the login between the check and the delete, after deleting it", async () => {
+    userQueue.members = [personRow({ auth_user_id: LOGIN })];
+    removal = removed("removed", LOGIN);
+    serviceQueue.members = closes();
+    await expect(removePerson(PERSON)).resolves.toEqual({ ok: true, value: { outcome: "removed", loginKept: false } });
+    expect(serviceQueries[1]).toEqual(RELINK_CHECK);
+    expect(deleteUser.mock.invocationCallOrder[0]).toBeLessThan(serviceFrom.mock.invocationCallOrder[1]);
+  });
+
+  it("still counts the login as closed when that unlink fails, and logs only code and status", async () => {
+    userQueue.members = [personRow({ auth_user_id: LOGIN })];
+    removal = removed("removed", LOGIN);
+    serviceQueue.members = [rows(), dbError("08006", `down for ${EMAIL}`), done()];
+    await expect(removePerson(PERSON)).resolves.toEqual({ ok: true, value: { outcome: "removed", loginKept: false } });
+    expect(serviceQueries).toEqual([LOGIN_CHECK, RELINK_CHECK, CLEAR]);
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("removePerson relink check failed", { code: "08006", status: undefined });
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("example.com");
+    expectRevalidated();
+  });
+
   it("reads, removes and clears by the id in lower case, whatever case the request used", async () => {
     userQueue.members = [personRow({ auth_user_id: LOGIN })];
     removal = removed("removed", LOGIN);
-    serviceQueue.members = [rows(), { data: null, error: null }];
+    serviceQueue.members = closes();
     await expect(removePerson(PERSON.toUpperCase())).resolves.toEqual({ ok: true, value: { outcome: "removed", loginKept: false } });
     expect(userQueries).toEqual([LOAD]);
     expect(removeCalls()).toEqual([["admin_remove_member", { p_member_id: PERSON }]]);
-    expect(serviceQueries).toEqual([LOGIN_CHECK, CLEAR]);
+    expect(serviceQueries).toEqual([LOGIN_CHECK, RELINK_CHECK, CLEAR]);
   });
 
   it.each([
@@ -1435,6 +1524,26 @@ const STILL_QUERIES = [
   ORG_LOOKUP,
 ];
 const usedBy = (login: string): Query => ({ table: "members", calls: [["select", "id"], ["eq", "auth_user_id", login], ["limit", 1]] });
+
+// A used login: who changes it is recorded first, only while the row still has this login, isn't
+// removed and isn't a Master Admin's.
+const RECORD: Query = {
+  table: "members",
+  calls: [
+    ["update", { login_email_changed_by: ADMIN, login_email_changed_at: NOW }],
+    ["eq", "id", PERSON],
+    ["eq", "auth_user_id", LOGIN],
+    ["is", "removed_at", null],
+    ["neq", "role", "hq"],
+    ["select", "id"],
+  ],
+};
+// Taking that record back when the change is: to who changed it before (nobody, unless a test
+// says otherwise), only while the record is still this change's.
+const unrecord = (before: Record<string, unknown> = { login_email_changed_by: null, login_email_changed_at: null }): Query => ({
+  table: "members",
+  calls: [["update", before], ["eq", "id", PERSON], ["eq", "login_email_changed_at", NOW]],
+});
 
 // What the late check can find, and what each says.
 const LATE_REFUSALS: [string, Record<string, unknown>, Late, string][] = [
@@ -1646,16 +1755,16 @@ describe("changeEmail", () => {
   it("counts a login that has signed in as used even without a confirmed address", async () => {
     changeAllowed();
     getUserById.mockResolvedValue(authUser({ email_confirmed_at: null }));
-    serviceSees([stillRow(), { data: null, error: null }]);
+    serviceSees([rows(PERSON), stillRow()]);
     await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: true, value: { invited: false } });
     expect(updateUserById).toHaveBeenCalledExactlyOnceWith(LOGIN, { email: NEW_EMAIL, email_confirm: true });
     expect(inviteUserByEmail).not.toHaveBeenCalled();
     expect(deleteUser).not.toHaveBeenCalled();
   });
 
-  it("gives a used login the new address in place, confirmed, records who changed it and invites nobody", async () => {
+  it("records who changes a used login, gives it the new address in place, confirmed, and invites nobody", async () => {
     changeAllowed();
-    serviceSees([stillRow(), { data: null, error: null }]);
+    serviceSees([rows(PERSON), stillRow()]);
     await expect(changeEmail(PERSON, "  Mei.W@Example.NET ")).resolves.toEqual({ ok: true, value: { invited: false } });
     // The checks, as the admin (RLS applies)
     expect(userQueries).toEqual([CHANGE_LOAD, GRANTS, ORG_LOOKUP]);
@@ -1666,24 +1775,42 @@ describe("changeEmail", () => {
     expect(updateUserById).toHaveBeenCalledExactlyOnceWith(LOGIN, { email: NEW_EMAIL, email_confirm: true });
     expect(inviteUserByEmail).not.toHaveBeenCalled();
     expect(deleteUser).not.toHaveBeenCalled();
-    // the late check, then who changed it, only while the row still has this login
-    expect(serviceQueries).toEqual([
-      ...STILL_QUERIES,
-      {
-        table: "members",
-        calls: [
-          ["update", { login_email_changed_by: ADMIN, login_email_changed_at: NOW }],
-          ["eq", "id", PERSON],
-          ["eq", "auth_user_id", LOGIN],
-        ],
-      },
-    ]);
+    // who changed it, recorded first, then the late check; nothing is written after it
+    expect(serviceQueries).toEqual([RECORD, ...STILL_QUERIES]);
     expectRevalidated();
+  });
+
+  it("records who changes it before changing the address, so the change is never made without the record", async () => {
+    changeAllowed();
+    serviceSees([rows(PERSON), stillRow()]);
+    await changeEmail(PERSON, NEW_EMAIL);
+    const [record, lateCheck] = serviceFrom.mock.invocationCallOrder;
+    expect(record).toBeLessThan(updateUserById.mock.invocationCallOrder[0]);
+    expect(updateUserById.mock.invocationCallOrder[0]).toBeLessThan(lateCheck);
+  });
+
+  it("changes nothing when the record reaches no row (the person changed meanwhile)", async () => {
+    changeAllowed();
+    serviceSees([rows()]);
+    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_RACE });
+    expect(serviceQueries).toEqual([RECORD]);
+    expect(updateUserById).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("changes nothing when recording who changes it fails, and logs only code and status", async () => {
+    changeAllowed();
+    serviceSees([dbError("08006", `down for ${NEW_EMAIL}`)]);
+    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
+    expect(serviceQueries).toEqual([RECORD]);
+    expect(updateUserById).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("changeEmail record failed", { code: "08006", status: undefined });
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 
   it("checks everything as the admin before any service-role call, and the login and address before changing it", async () => {
     changeAllowed();
-    serviceSees([stillRow(), { data: null, error: null }]);
+    serviceSees([rows(PERSON), stillRow()]);
     await changeEmail(PERSON, NEW_EMAIL);
     const grantCheck = rpc.mock.invocationCallOrder[0];
     const lastAdminRead = Math.max(...from.mock.invocationCallOrder);
@@ -1692,6 +1819,7 @@ describe("changeEmail", () => {
     expect(lastAdminRead).toBeLessThan(client);
     expect(client).toBeLessThan(getUserById.mock.invocationCallOrder[0]);
     expect(getUserById.mock.invocationCallOrder[0]).toBeLessThan(serviceRpc.mock.invocationCallOrder[0]);
+    expect(serviceRpc.mock.invocationCallOrder[0]).toBeLessThan(serviceFrom.mock.invocationCallOrder[0]);
     expect(serviceRpc.mock.invocationCallOrder[0]).toBeLessThan(updateUserById.mock.invocationCallOrder[0]);
   });
 
@@ -1699,84 +1827,215 @@ describe("changeEmail", () => {
     changeAllowed();
     userQueue.teams = [organisationIs(ORG)];
     userQueue.team_leads = [rows()];
-    serviceSees([stillRow(), { data: null, error: null }], { organisation: organisationIs(ORG), leads: rows() });
+    serviceSees([rows(PERSON), stillRow()], { organisation: organisationIs(ORG), leads: rows() });
     await expect(changeEmail(PERSON.toUpperCase(), NEW_EMAIL)).resolves.toEqual({ ok: true, value: { invited: false } });
     expect(userQueries.slice(1)).toEqual([GRANTS, ORG_LOOKUP, ORG_LEADS]);
-    expect(serviceQueries.slice(0, 4)).toEqual([...STILL_QUERIES, ORG_LEADS]);
-    expect(serviceQueries[4].calls).toContainEqual(["eq", "id", PERSON]);
+    // RECORD is filtered on the id as stored, too.
+    expect(serviceQueries).toEqual([RECORD, ...STILL_QUERIES, ORG_LEADS]);
   });
 
   it("doesn't need NEXT_PUBLIC_SITE_URL for a used login (nobody is emailed)", async () => {
     vi.stubEnv("NEXT_PUBLIC_SITE_URL", "");
     changeAllowed();
-    serviceSees([stillRow(), { data: null, error: null }]);
+    serviceSees([rows(PERSON), stillRow()]);
     await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: true, value: { invited: false } });
   });
 
   it.each([
-    ["email_exists", { code: "email_exists", status: 422 }, EMAIL_IN_USE],
-    ["any 422", { code: undefined, status: 422 }, EMAIL_IN_USE],
-    ["a server error", { code: "unexpected_failure", status: 500 }, GENERIC_ERROR],
-  ])("maps a failed change (%s) and records nothing", async (_label, error, message) => {
+    ["email_exists", { code: "email_exists", status: 422 }, EMAIL_IN_USE, []],
+    ["any 422", { code: undefined, status: 422 }, EMAIL_IN_USE, []],
+    // An address parseEmail lets through and Auth's stricter check refuses (a non-ASCII local part).
+    ["Auth's address check", { code: "validation_failed", status: 400 }, EMAIL_FORMAT, []],
+    [
+      "a server error",
+      { code: "unexpected_failure", status: 500 },
+      GENERIC_ERROR,
+      [["changeEmail update failed", { code: "unexpected_failure", status: 500 }]],
+    ],
+  ])("maps a failed change (%s) and takes the record back", async (_label, error, message, logged) => {
     changeAllowed();
+    serviceSees([rows(PERSON), done()]);
     updateUserById.mockResolvedValue({ data: { user: null }, error: { ...error, name: "AuthApiError", message: NEW_EMAIL } });
     await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: message });
     expect(updateUserById).toHaveBeenCalledOnce();
-    expect(serviceFrom).not.toHaveBeenCalled();
+    expect(serviceQueries).toEqual([RECORD, unrecord()]);
+    expect(vi.mocked(console.error).mock.calls).toEqual(logged);
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
+  it("takes the record back to who changed it before, only while it's still this change's", async () => {
+    const before = { login_email_changed_by: OTHER_ADMIN, login_email_changed_at: "2026-10-05T10:00:00.000Z" };
+    changeAllowed(person(before));
+    serviceSees([rows(PERSON), done()]);
+    updateUserById.mockResolvedValue({ data: { user: null }, error: { name: "AuthApiError", code: "email_exists", status: 422, message: NEW_EMAIL } });
+    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_IN_USE });
+    expect(serviceQueries).toEqual([RECORD, unrecord(before)]);
+  });
+
+  it("still says why the change failed when taking the record back fails too, and logs only code and status", async () => {
+    changeAllowed();
+    serviceSees([rows(PERSON), dbError("08006", `down for ${NEW_EMAIL}`)]);
+    updateUserById.mockResolvedValue({ data: { user: null }, error: { name: "AuthApiError", code: "email_exists", status: 422, message: NEW_EMAIL } });
+    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_IN_USE });
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("changeEmail unrecord failed", { code: "08006", status: undefined });
+  });
+
   it.each(LATE_REFUSALS)(
-    "puts a used login's old address back, confirmed, and refuses when %s meanwhile",
+    "puts a used login's old address back, confirmed, takes the record back and refuses when %s meanwhile",
     async (_label, changes, late, error) => {
       changeAllowed();
-      serviceSees([stillRow(changes)], late);
+      serviceSees([rows(PERSON), stillRow(changes), done()], late);
       await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error });
       expect(updateUserById.mock.calls).toEqual([
         [LOGIN, { email: NEW_EMAIL, email_confirm: true }],
         [LOGIN, { email: EMAIL, email_confirm: true }],
       ]);
-      // Nobody is recorded as having changed it.
-      expect(serviceQueries.filter((q) => q.calls[0][0] === "update")).toEqual([]);
+      // Nobody is recorded as having changed it any more, once the old address is back.
+      expect(serviceQueries[0]).toEqual(RECORD);
+      expect(serviceQueries.at(-1)).toEqual(unrecord());
+      expect(updateUserById.mock.invocationCallOrder[1]).toBeLessThan(Math.max(...serviceFrom.mock.invocationCallOrder));
       expect(revalidatePath).not.toHaveBeenCalled();
     },
   );
 
   it("puts the old address back when the late check can't read the row, and logs only code and status", async () => {
     changeAllowed();
-    serviceSees([dbError("08006", "down")]);
+    serviceSees([rows(PERSON), dbError("08006", "down"), done()]);
     await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
     expect(updateUserById).toHaveBeenLastCalledWith(LOGIN, { email: EMAIL, email_confirm: true });
+    expect(serviceQueries.at(-1)).toEqual(unrecord());
     expect(console.error).toHaveBeenCalledExactlyOnceWith("changeEmail late check failed", { code: "08006", status: undefined });
   });
 
-  it.each(LATE_GONE)("refuses without putting a used login's old address back when %s meanwhile", async (_label, row) => {
+  it("says the old address couldn't be put back, keeping the record, when putting it back fails", async () => {
     changeAllowed();
-    serviceSees([row]);
-    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_RACE });
-    expect(updateUserById).toHaveBeenCalledExactlyOnceWith(LOGIN, { email: NEW_EMAIL, email_confirm: true });
-    expect(serviceQueries).toEqual(STILL_QUERIES);
-    expect(deleteUser).not.toHaveBeenCalled();
-    expect(revalidatePath).not.toHaveBeenCalled();
-  });
-
-  it("still refuses when putting the old address back fails, and logs only code and status", async () => {
-    changeAllowed();
-    serviceSees([stillRow()], { grants: { data: [{ grant_name: "admin" }], error: null } });
+    serviceSees([rows(PERSON), stillRow()], { grants: { data: [{ grant_name: "admin" }], error: null } });
     updateUserById
       .mockResolvedValueOnce({ data: { user: { id: LOGIN } }, error: null })
       .mockResolvedValueOnce({ data: { user: null }, error: { name: "AuthApiError", status: 500, code: "unexpected_failure", message: EMAIL } });
-    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_HOLDS_GRANTS });
+    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_NOT_RESTORED });
+    // The new address stays, so who set it stays recorded.
+    expect(serviceQueries).toEqual([RECORD, ...STILL_QUERIES]);
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("changeEmail restore failed", { code: "unexpected_failure", status: 500 });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("says the old address couldn't be put back when the login had none, keeping the record", async () => {
+    changeAllowed();
+    getUserById.mockResolvedValue(authUser({ email: undefined }));
+    serviceSees([rows(PERSON), stillRow({ role: "hq" })]);
+    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_NOT_RESTORED });
+    expect(updateUserById).toHaveBeenCalledExactlyOnceWith(LOGIN, { email: NEW_EMAIL, email_confirm: true });
+    expect(serviceQueries).toEqual([RECORD, ...STILL_QUERIES]);
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  // ----- a used login that left their row meanwhile ("gone") -----
+
+  // A removal unlinked it and is deleting it, which frees the address: leave it to that.
+  it.each(LATE_GONE)(
+    "refuses, leaving the new address and the record, when %s meanwhile and a removal is deleting the login",
+    async (_label, row) => {
+      changeAllowed();
+      serviceSees([rows(PERSON), row, rows(OTHER_ADMIN)]);
+      await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_RACE });
+      expect(updateUserById).toHaveBeenCalledExactlyOnceWith(LOGIN, { email: NEW_EMAIL, email_confirm: true });
+      expect(serviceQueries).toEqual([RECORD, ...STILL_QUERIES, pendingRemoval(LOGIN)]);
+      expect(getUserById).toHaveBeenCalledOnce();
+      expect(deleteUser).not.toHaveBeenCalled();
+      expect(console.error).not.toHaveBeenCalled();
+      expect(revalidatePath).not.toHaveBeenCalled();
+    },
+  );
+
+  // The owner relinked or unlinked it by hand: it mustn't keep an address an admin chose for this
+  // person.
+  it.each(LATE_GONE)(
+    "puts the old address back, confirmed, and takes the record back when %s meanwhile and no removal is deleting the login",
+    async (_label, row) => {
+      changeAllowed();
+      serviceSees([rows(PERSON), row, rows(), done()]);
+      await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_RACE });
+      expect(getUserById.mock.calls).toEqual([[LOGIN], [LOGIN]]);
+      expect(updateUserById.mock.calls).toEqual([
+        [LOGIN, { email: NEW_EMAIL, email_confirm: true }],
+        [LOGIN, { email: EMAIL, email_confirm: true }],
+      ]);
+      expect(serviceQueries).toEqual([RECORD, ...STILL_QUERIES, pendingRemoval(LOGIN), unrecord()]);
+      expect(deleteUser).not.toHaveBeenCalled();
+      expect(revalidatePath).not.toHaveBeenCalled();
+    },
+  );
+
+  it("puts the old address back when it can't tell whether a removal is deleting the login, and logs only code and status", async () => {
+    changeAllowed();
+    serviceSees([rows(PERSON), LATE_GONE[0][1], dbError("08006", `down for ${NEW_EMAIL}`), done()]);
+    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_RACE });
+    expect(updateUserById).toHaveBeenLastCalledWith(LOGIN, { email: EMAIL, email_confirm: true });
+    expect(serviceQueries).toEqual([RECORD, ...STILL_QUERIES, pendingRemoval(LOGIN), unrecord()]);
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("changeEmail removal check failed", { code: "08006", status: undefined });
+  });
+
+  it("puts the old address back when it can't read the login again, and logs only code and status", async () => {
+    changeAllowed();
+    serviceSees([rows(PERSON), LATE_GONE[0][1], rows(), done()]);
+    getUserById
+      .mockResolvedValueOnce(authUser())
+      .mockResolvedValueOnce({ data: { user: null }, error: { name: "AuthApiError", status: 500, code: "unexpected_failure", message: EMAIL } });
+    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_RACE });
+    expect(updateUserById).toHaveBeenLastCalledWith(LOGIN, { email: EMAIL, email_confirm: true });
+    expect(serviceQueries.at(-1)).toEqual(unrecord());
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("changeEmail recheck failed", { code: "unexpected_failure", status: 500 });
+  });
+
+  it("says the old address couldn't be put back, keeping the record, when the login left their row and putting it back fails", async () => {
+    changeAllowed();
+    serviceSees([rows(PERSON), LATE_GONE[0][1], rows()]);
+    updateUserById
+      .mockResolvedValueOnce({ data: { user: { id: LOGIN } }, error: null })
+      .mockResolvedValueOnce({ data: { user: null }, error: { name: "AuthApiError", status: 500, code: "unexpected_failure", message: EMAIL } });
+    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_NOT_RESTORED });
+    expect(serviceQueries).toEqual([RECORD, ...STILL_QUERIES, pendingRemoval(LOGIN)]);
     expect(console.error).toHaveBeenCalledExactlyOnceWith("changeEmail restore failed", { code: "unexpected_failure", status: 500 });
   });
 
-  it("keeps the change when recording who made it fails, and logs it", async () => {
+  // A removal soft-deleted the login while this change was under way, and its deletion could not
+  // free an address that was only set afterwards.
+  it("frees the new address when the login was deleted under this change", async () => {
     changeAllowed();
-    serviceSees([stillRow(), dbError("08006", "down")]);
-    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: true, value: { invited: false } });
-    expect(updateUserById).toHaveBeenCalledOnce();
-    expect(console.error).toHaveBeenCalledExactlyOnceWith("changeEmail record failed", { code: "08006", status: undefined });
-    expectRevalidated();
+    serviceSees([rows(PERSON), LATE_GONE[0][1], rows()]);
+    getUserById.mockResolvedValueOnce(authUser()).mockResolvedValueOnce(authUser({ deleted_at: "2026-10-09T04:29:59Z" }));
+    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_RACE });
+    expect(updateUserById.mock.calls).toEqual([
+      [LOGIN, { email: NEW_EMAIL, email_confirm: true }],
+      [LOGIN, { email: `${LOGIN}@deleted.invalid` }],
+    ]);
+    expect(serviceQueries).toEqual([RECORD, ...STILL_QUERIES, pendingRemoval(LOGIN)]);
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(console.error).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("still refuses when freeing the address fails, and logs only code and status", async () => {
+    changeAllowed();
+    serviceSees([rows(PERSON), LATE_GONE[0][1], rows()]);
+    getUserById.mockResolvedValueOnce(authUser()).mockResolvedValueOnce(authUser({ deleted_at: "2026-10-09T04:29:59Z" }));
+    updateUserById
+      .mockResolvedValueOnce({ data: { user: { id: LOGIN } }, error: null })
+      .mockResolvedValueOnce({ data: { user: null }, error: { name: "AuthApiError", status: 500, code: "unexpected_failure", message: NEW_EMAIL } });
+    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_RACE });
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("changeEmail free failed", { code: "unexpected_failure", status: 500 });
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("example");
+  });
+
+  it("checks for an invalid address before a taken one when the change fails, as invites do", async () => {
+    changeAllowed();
+    serviceSees([rows(PERSON), done()]);
+    updateUserById.mockResolvedValueOnce({
+      data: { user: null },
+      error: { name: "AuthApiError", status: 422, code: "validation_failed", message: "Unable to validate email address" },
+    });
+    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_FORMAT });
   });
 
   // ----- a login they haven't used: a new login, invited at the new address, replaces it -----
@@ -1795,7 +2054,7 @@ describe("changeEmail", () => {
     ],
   });
 
-  it("replaces an unused login: invites the new address, links the new login, then deletes the old one", async () => {
+  it("replaces an unused login: invites the new address, links the new login, then soft-deletes the old one", async () => {
     changeAllowed();
     getUserById.mockResolvedValue(authUser(UNUSED));
     serviceSees([rows(PERSON), stillRow({ auth_user_id: NEW_LOGIN }), rows()]);
@@ -1805,8 +2064,9 @@ describe("changeEmail", () => {
     // The link keeps who gave the login; the late check is about the new login; then is the old
     // one linked to anyone?
     expect(serviceQueries).toEqual([link(), ...STILL_QUERIES, usedBy(LOGIN)]);
-    // The old login was never used, so a hard delete loses nothing, and its invite link dies.
-    expect(deleteUser).toHaveBeenCalledExactlyOnceWith(LOGIN);
+    // Its invite link dies. Soft, as a removal's: should they have signed in with it after all,
+    // what they accepted stays.
+    expect(deleteUser).toHaveBeenCalledExactlyOnceWith(LOGIN, true);
     expectRevalidated();
   });
 
@@ -1833,6 +2093,7 @@ describe("changeEmail", () => {
     ["email_exists", { code: "email_exists", status: 422 }, EMAIL_IN_USE],
     ["a rate limit", { code: "over_email_send_rate_limit", status: 429 }, TOO_MANY_EMAILS],
     ["the built-in sender's refusal", { code: "email_address_not_authorized", status: 400 }, NO_EMAIL_SENDER],
+    ["Auth's address check", { code: "validation_failed", status: 400 }, EMAIL_FORMAT],
     ["a server error", { code: "unexpected_failure", status: 500 }, GENERIC_ERROR],
   ])("changes nothing when the invite fails (%s)", async (_label, error, message) => {
     changeAllowed();
@@ -1996,8 +2257,9 @@ describe("changeEmail", () => {
       serviceSees([rows(PERSON), row, rows(), rows()]);
       await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_RACE });
       expect(serviceQueries).toEqual([link(), ...STILL_QUERIES, usedBy(NEW_LOGIN), usedBy(LOGIN)]);
-      // The new one (this invite made it), and the old one, which nothing links after the swap.
-      expect(deleteUser.mock.calls).toEqual([[NEW_LOGIN], [LOGIN]]);
+      // The new one (this invite made it, and nobody used it), and the old one, which nothing links
+      // after the swap (softly).
+      expect(deleteUser.mock.calls).toEqual([[NEW_LOGIN], [LOGIN, true]]);
       expect(revalidatePath).not.toHaveBeenCalled();
     },
   );
@@ -2042,12 +2304,29 @@ describe("changeEmail", () => {
 
   it("never logs an email address", async () => {
     const failure = { name: "AuthApiError", code: "unexpected_failure", status: 500, message: `Failed for ${EMAIL} and ${NEW_EMAIL}` };
+    const down = dbError("08006", `down for ${NEW_EMAIL}`);
     const scenarios: (() => void)[] = [
       () => getUserById.mockResolvedValueOnce({ data: { user: null }, error: failure }),
       () => serviceRpc.mockResolvedValueOnce({ data: null, error: failure }),
-      () => updateUserById.mockResolvedValueOnce({ data: { user: null }, error: failure }),
+      () => serviceSees([down]),
       () => {
-        serviceSees([stillRow()], { grants: { data: [{ grant_name: "admin" }], error: null } });
+        serviceSees([rows(PERSON), done()]);
+        updateUserById.mockResolvedValueOnce({ data: { user: null }, error: failure });
+      },
+      () => {
+        serviceSees([rows(PERSON), down]);
+        updateUserById.mockResolvedValueOnce({ data: { user: null }, error: { ...failure, code: "email_exists", status: 422 } });
+      },
+      () => {
+        serviceSees([rows(PERSON), stillRow()], { grants: { data: [{ grant_name: "admin" }], error: null } });
+        updateUserById
+          .mockResolvedValueOnce({ data: { user: { id: LOGIN } }, error: null })
+          .mockResolvedValueOnce({ data: { user: null }, error: failure });
+      },
+      () => serviceSees([rows(PERSON), LATE_GONE[0][1], down, done()]),
+      () => {
+        serviceSees([rows(PERSON), LATE_GONE[0][1], rows()]);
+        getUserById.mockResolvedValueOnce(authUser()).mockResolvedValueOnce(authUser({ deleted_at: NOW }));
         updateUserById
           .mockResolvedValueOnce({ data: { user: { id: LOGIN } }, error: null })
           .mockResolvedValueOnce({ data: { user: null }, error: failure });
@@ -2058,7 +2337,7 @@ describe("changeEmail", () => {
       },
       () => {
         getUserById.mockResolvedValueOnce(authUser(UNUSED));
-        serviceSees([dbError("08006", `down for ${NEW_EMAIL}`), rows()]);
+        serviceSees([down, rows()]);
       },
     ];
     for (const arrange of scenarios) {
@@ -2070,8 +2349,12 @@ describe("changeEmail", () => {
     expect(vi.mocked(console.error).mock.calls.map(([context]) => context)).toEqual([
       "changeEmail lookup failed",
       "changeEmail in use failed",
+      "changeEmail record failed",
       "changeEmail update failed",
+      "changeEmail unrecord failed",
       "changeEmail restore failed",
+      "changeEmail removal check failed",
+      "changeEmail free failed",
       "changeEmail invite failed",
       "changeEmail link failed",
     ]);
