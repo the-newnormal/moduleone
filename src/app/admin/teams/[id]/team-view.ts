@@ -68,7 +68,15 @@ export type Candidate = { id: string; name: string; teamId: string | null; teamN
 
 // A leader who leads this team through team_leads, or could be made to. inThisTeam: they also sit
 // in this team (a lead row added before they moved here), so they'd still lead it without the row.
-export type LeadPerson = { id: string; name: string; teamName: string | null; inThisTeam: boolean };
+// viaDomain: for a team, the domain holding it when they lead that domain too (they sit in it or
+// have a lead row for it), so they'd also still lead this team without the row.
+export type LeadPerson = {
+  id: string;
+  name: string;
+  teamName: string | null;
+  inThisTeam: boolean;
+  viaDomain: string | null;
+};
 
 // A leader who leads this team because they lead the domain it sits in (they sit in the domain,
 // or have a lead row for it): leads cover everything under the led node. Changed on the domain's page.
@@ -248,6 +256,7 @@ export function buildTeamView({
     name: m.name,
     teamName: nameOfTeam(m.team_id),
     inThisTeam: m.team_id === teamId,
+    viaDomain: domain && (m.team_id === domain.id || domainLeadIds.has(m.id)) ? domain.name : null,
   });
   const leadPeople: LeadPerson[] = [...leadIds]
     .map((id) => memberById.get(id))

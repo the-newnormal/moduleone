@@ -432,9 +432,16 @@ function loginAllowed(...link: Result[]) {
   userQueue.members = [memberRow()];
   userQueue.member_grants = [rows()];
   serviceQueue.checkins = [rows()];
-  serviceQueue.member_profiles = [rows()];
+  serviceQueue.member_profiles = [rows(), rows()]; // the history check, then the late check
+  serviceQueue.member_grants = [rows()]; // the late check, after linking
   serviceQueue.members = link;
 }
+
+// After linking: did a grant or a Big Five profile arrive while the invite was out?
+const LATE_QUERIES: Query[] = [
+  { table: "member_grants", calls: [["select", "grant_name"], ["eq", "member_id", PERSON], ["limit", 1]] },
+  { table: "member_profiles", calls: [["select", "member_id"], ["eq", "member_id", PERSON], ["limit", 1]] },
+];
 
 // The checks for anything left from an earlier login, as giveLogin makes them.
 const HISTORY_QUERIES: Query[] = [
@@ -486,10 +493,55 @@ describe("giveLogin", () => {
           ["select", "id"],
         ],
       },
+      // 5b. nothing that would come with the login arrived meanwhile
+      ...LATE_QUERIES,
     ]);
     expect(deleteUser).not.toHaveBeenCalled();
     // 6.
     expectRevalidated();
+  });
+
+  // A grant or a Big Five profile that reaches the row while the invite is out: the link and the
+  // new login are undone before anyone can use them.
+  const UNLINK: Query = {
+    table: "members",
+    calls: [
+      ["update", { auth_user_id: null, login_given_by: null, login_given_at: null }],
+      ["eq", "id", PERSON],
+      ["eq", "auth_user_id", NEW_LOGIN],
+    ],
+  };
+  it.each([
+    ["a grant", "member_grants", { data: [{ grant_name: "recordings" }], error: null }, HOLDS_GRANTS],
+    ["a Big Five profile", "member_profiles", { data: [{ member_id: PERSON }], error: null }, EARLIER_LOGIN],
+  ])("undoes the link and the new login when %s arrived meanwhile", async (_label, table, found, message) => {
+    loginAllowed(rows(PERSON), rows(), rows()); // link, unlink, "does anyone use this login?"
+    if (table === "member_grants") serviceQueue.member_grants = [found];
+    else serviceQueue.member_profiles = [rows(), found];
+    await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: message });
+    expect(serviceQueries.slice(HISTORY_QUERIES.length + 1)).toEqual([
+      ...LATE_QUERIES,
+      UNLINK,
+      { table: "members", calls: [["select", "id"], ["eq", "auth_user_id", NEW_LOGIN], ["limit", 1]] },
+    ]);
+    expect(deleteUser).toHaveBeenCalledExactlyOnceWith(NEW_LOGIN);
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("undoes the link when it can't tell whether anything arrived meanwhile", async () => {
+    loginAllowed(rows(PERSON), rows(), rows());
+    serviceQueue.member_grants = [dbError("08006", "down")];
+    await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
+    expect(serviceQueries).toContainEqual(UNLINK);
+    expect(deleteUser).toHaveBeenCalledExactlyOnceWith(NEW_LOGIN);
+  });
+
+  it("keeps the login (and says so generically) when undoing the link fails", async () => {
+    loginAllowed(rows(PERSON), dbError("08006", "down"));
+    serviceQueue.member_grants = [{ data: [{ grant_name: "admin" }], error: null }];
+    await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledWith("giveLogin unlink failed", expect.objectContaining({ code: "08006" }));
   });
 
   it("refuses a member who holds a grant, without using the service role", async () => {

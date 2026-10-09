@@ -32,7 +32,28 @@ type Props = {
 // Where a lead sits themselves.
 function leadWhere(lead: LeadPerson, noun: string): string {
   if (lead.inThisTeam) return `Leader in this ${noun}, also added as a lead`;
-  return lead.teamName ? `Leader in ${lead.teamName}` : "Leader with no team";
+  const where = lead.teamName ? `Leader in ${lead.teamName}` : "Leader with no team";
+  return lead.viaDomain ? `${where}, also leads ${lead.viaDomain}` : where;
+}
+
+// What removing someone's lead row changes: nothing they can see, when they still lead this node
+// by sitting in it or by leading the domain that holds it (leads cover everything under them).
+function removeLeadCopy(lead: LeadPerson, team: TeamSummary, noun: string) {
+  const keeps = lead.inThisTeam
+    ? `they sit in this ${noun}`
+    : lead.viaDomain
+      ? `they also lead ${lead.viaDomain}, which holds it`
+      : null;
+  if (!keeps) {
+    return {
+      description: `They'll no longer see the check-ins made in ${coverage(team)} through this lead.`,
+      done: `${lead.name} no longer leads ${team.name}.`,
+    };
+  }
+  return {
+    description: `This only removes the extra lead. They'll still see the check-ins made in ${coverage(team)}, because ${keeps}.`,
+    done: `Removed the extra lead. ${lead.name} still leads ${team.name}, because ${keeps}.`,
+  };
 }
 
 // One line on what leading means here.
@@ -97,13 +118,13 @@ export function LeadsSection({ team, ownLeaders, leads, inheritedLeads, leadOpti
                       Remove as lead<span className="sr-only"> ({lead.name})</span>
                     </>
                   }
-                  title={`Stop ${lead.name} leading ${team.name}?`}
-                  description={`They'll no longer see the check-ins made in ${coverage(team)} through this lead.`}
+                  title={`Remove ${lead.name}'s lead for ${team.name}?`}
+                  description={removeLeadCopy(lead, team, noun).description}
                   confirmLabel="Remove lead"
                   destructive
                   run={() => actions.removeLead(team.id, lead.id)}
                   context="removeLead"
-                  onDone={() => setStatus(`${lead.name} no longer leads ${team.name}.`)}
+                  onDone={() => setStatus(removeLeadCopy(lead, team, noun).done)}
                   focusAfter={`[id="${headingId}"]`}
                 />
               </div>

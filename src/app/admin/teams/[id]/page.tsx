@@ -4,6 +4,7 @@ import { LeadsSection } from "@/components/admin/team/leads-section";
 import { PeopleSection } from "@/components/admin/team/people-section";
 import { TeamHeader } from "@/components/admin/team/team-header";
 import { logError } from "@/lib/admin/errors";
+import { readAll } from "@/lib/admin/read-all";
 import { adminForMetadata, requireAdminPage } from "@/lib/admin/session";
 import { TEAM_COLUMNS, type TeamRow } from "@/lib/admin/tree";
 import { isUuid } from "@/lib/admin/validate";
@@ -38,19 +39,25 @@ export async function generateMetadata({ params }: PageProps<"/admin/teams/[id]"
 // A domain's or team's page ("clicking into the team name"): who is in it, who leads it, and
 // giving people logins. Read as the signed-in admin, who sees every team, member and lead (RLS).
 export default async function TeamPage({ params }: PageProps<"/admin/teams/[id]">) {
-  const { id } = await params;
-  const { supabase, memberId } = await requireAdminPage(`/admin/teams/${encodeURIComponent(id)}`);
-  if (!isUuid(id)) notFound();
+  const { id: rawId } = await params;
+  const { supabase, memberId } = await requireAdminPage(`/admin/teams/${encodeURIComponent(rawId)}`);
+  if (!isUuid(rawId)) notFound();
+  // The database spells ids in lower case; a URL may not.
+  const id = rawId.toLowerCase();
 
   // Every team (for the breadcrumb and the team names shown next to people), every member (people
   // to add and leaders to pick come from anywhere), every lead (a demotion removes all of a
   // leader's leads, and the warning lists them), and who holds a grant (they get their login from
-  // the project owner). The organisation is small.
+  // the project owner). Read in full, past PostgREST's per-request row limit (readAll).
   const [teams, members, leads, grants] = await Promise.all([
-    supabase.from("teams").select(TEAM_COLUMNS),
-    supabase.from("members").select(MEMBER_COLUMNS),
-    supabase.from("team_leads").select("team_id, member_id"),
-    supabase.from("member_grants").select("member_id"),
+    readAll((from, to) => supabase.from("teams").select(TEAM_COLUMNS).order("id").range(from, to)),
+    readAll((from, to) => supabase.from("members").select(MEMBER_COLUMNS).order("id").range(from, to)),
+    readAll((from, to) =>
+      supabase.from("team_leads").select("team_id, member_id").order("team_id").order("member_id").range(from, to),
+    ),
+    readAll((from, to) =>
+      supabase.from("member_grants").select("member_id").order("member_id").order("grant_name").range(from, to),
+    ),
   ]);
   const failed = teams.error ?? members.error ?? leads.error ?? grants.error;
   if (failed) {

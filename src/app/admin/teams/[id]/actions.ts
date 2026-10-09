@@ -171,8 +171,11 @@ export async function removeLead(teamId: string, memberId: string): Promise<Acti
   return OK;
 }
 
-// Where invite links come back to: NEXT_PUBLIC_SITE_URL, never the request's headers (which a
-// caller controls). Null if it's unset or not an http(s) URL.
+// This site's URL, for the invite's redirectTo (<site>/auth/callback; Supabase accepts it only if
+// it's in the project's redirect URLs). The link in the invite email itself is built from Supabase
+// Auth's Site URL ({{ .SiteURL }} in supabase/templates/invite.html), so NEXT_PUBLIC_SITE_URL must
+// match it. Never the request's headers (which a caller controls). Null if it's unset or not an
+// http(s) URL.
 function siteUrl(): URL | null {
   const raw = process.env.NEXT_PUBLIC_SITE_URL?.trim();
   if (!raw) return null;
@@ -227,6 +230,23 @@ async function earlierLogin(service: ServiceClient, memberId: string): Promise<"
   return "none";
 }
 
+// Whether a grant or a Big Five profile reached the member row after giveLogin first checked:
+// the project owner gives grants in the dashboard and big_five holders write profiles, outside
+// this action. (Check-ins and recordings need a login on the row, so they can't appear meanwhile.)
+async function lateAccess(service: ServiceClient, memberId: string): Promise<"none" | "grants" | "profile" | "unknown"> {
+  const [grants, profile] = await Promise.all([
+    service.from("member_grants").select("grant_name").eq("member_id", memberId).limit(1),
+    service.from("member_profiles").select("member_id").eq("member_id", memberId).limit(1),
+  ]);
+  if (!grants.error && (grants.data ?? []).length > 0) return "grants";
+  if (!profile.error && (profile.data ?? []).length > 0) return "profile";
+  if (grants.error || profile.error) {
+    logError("giveLogin late check", grants.error ?? profile.error);
+    return "unknown";
+  }
+  return "none";
+}
+
 // After an invite that couldn't be linked to the member: delete the login it made, so the email
 // can be used again. Supabase re-sends an invite for an address that was invited but hasn't signed
 // in yet, and returns that existing login (another member's, or one the project owner invited in
@@ -251,10 +271,11 @@ async function discardLogin(service: ServiceClient, authUserId: string, createdH
 //   3. as the admin (RLS): the member exists, isn't a Master Admin, has no login, isn't the caller,
 //      and holds no grants (a new login would get them; grants are the project owner's);
 //   4. service role: nothing is left on the row from an earlier login (check-ins, a Big Five
-//      profile, recordings), then invite the email, coming back to
-//      <NEXT_PUBLIC_SITE_URL>/auth/callback;
+//      profile, recordings), then invite the email (its link goes to Supabase Auth's Site URL +
+//      /auth/callback, which NEXT_PUBLIC_SITE_URL must match; see siteUrl);
 //   5. service role: link the new login, only if the member still has none and still isn't a
-//      Master Admin; if that reaches no row, delete the new login again;
+//      Master Admin; if that reaches no row, delete the new login again; then check again that
+//      no grant or Big Five profile arrived meanwhile, and undo the link if one did;
 //   6. refresh the team pages.
 // Logs carry codes and statuses only, never the email.
 export async function giveLogin(memberId: string, email: string): Promise<ActionResult> {
@@ -337,6 +358,24 @@ export async function giveLogin(memberId: string, email: string): Promise<Action
     return fail(INVITE_RACE);
   }
 
+  // 5b. Step 3's grant check and step 4's history check ran before the invite. If a grant or a
+  // Big Five profile arrived since, undo the link and the new login (when this invite made it).
+  // Nobody can sign in with it before opening the invite, so it never reads either.
+  const late = await lateAccess(service, row.id);
+  if (late !== "none") {
+    const { error: unlinkError } = await service
+      .from("members")
+      .update({ auth_user_id: null, login_given_by: null, login_given_at: null })
+      .eq("id", row.id)
+      .eq("auth_user_id", authUserId);
+    if (unlinkError) {
+      logError("giveLogin unlink", unlinkError);
+      return fail(GENERIC_ERROR);
+    }
+    await discardLogin(service, authUserId, createdHere);
+    return fail(late === "grants" ? HOLDS_GRANTS : late === "profile" ? EARLIER_LOGIN : GENERIC_ERROR);
+  }
+
   // 6.
   revalidateTeamTree();
   return OK;
@@ -350,7 +389,8 @@ export async function giveLogin(memberId: string, email: string): Promise<Action
 //   3. as the admin (RLS): the member exists, isn't a Master Admin or the caller, and has a login
 //      that was given in Module One (login_given_at);
 //   4. service role: that login hasn't been used (no confirmed email, never signed in);
-//   5. service role: invite its address again, coming back to <NEXT_PUBLIC_SITE_URL>/auth/callback.
+//   5. service role: invite its address again (the link goes to Supabase Auth's Site URL +
+//      /auth/callback, as for giveLogin).
 // The address never leaves the server; logs carry codes and statuses only. Nothing on the page
 // changes, so nothing is revalidated.
 export async function resendInvite(memberId: string): Promise<ActionResult> {

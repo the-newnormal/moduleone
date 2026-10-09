@@ -200,7 +200,7 @@ describe("buildTeamView", () => {
   it("separates leaders who sit in the team from team_leads rows", () => {
     const v = view("team-ip1")!;
     expect(v.ownLeaders).toEqual([{ id: "m-leo", name: "Leo Tan", domain: null }]);
-    expect(v.leads).toEqual([{ id: "m-ana", name: "Ana Lee", teamName: "IP Lab 2", inThisTeam: false }]);
+    expect(v.leads).toEqual([{ id: "m-ana", name: "Ana Lee", teamName: "IP Lab 2", inThisTeam: false, viaDomain: null }]);
   });
 
   it("lists a leader who sits in the team and also leads its domain once, saying both", () => {
@@ -215,6 +215,8 @@ describe("buildTeamView", () => {
     const ip2 = view("team-ip2", MEMBERS, [...LEADS, { team_id: "dom-ip", member_id: "m-leo" }])!;
     expect(ip2.ownLeaders).toEqual([{ id: "m-ana", name: "Ana Lee", domain: null }]);
     expect(ip2.leads.map((l) => l.id)).toEqual(["m-leo"]);
+    // Removing that row wouldn't stop him leading IP Lab 2: he leads IP Lab, which holds it.
+    expect(ip2.leads[0].viaDomain).toBe("IP Lab");
     expect(ip2.inheritedLeads).toEqual([]);
   });
 
@@ -236,8 +238,8 @@ describe("buildTeamView", () => {
     const v = view("team-ip1", MEMBERS, leads)!;
     expect(v.ownLeaders).toEqual([]);
     expect(v.leads).toEqual([
-      { id: "m-ana", name: "Ana Lee", teamName: "IP Lab 2", inThisTeam: false },
-      { id: "m-leo", name: "Leo Tan", teamName: "IP Lab 1", inThisTeam: true },
+      { id: "m-ana", name: "Ana Lee", teamName: "IP Lab 2", inThisTeam: false, viaDomain: null },
+      { id: "m-leo", name: "Leo Tan", teamName: "IP Lab 1", inThisTeam: true, viaDomain: null },
     ]);
   });
 
@@ -267,8 +269,8 @@ describe("buildTeamView", () => {
 
   it("offers leaders from any team as leads, but not the admin, current leads, or leaders already in it", () => {
     expect(view("team-ip1")!.leadOptions).toEqual([
-      { id: "m-cat", name: "Cat Ng", teamName: null, inThisTeam: false },
-      { id: "m-eve", name: "Ève Tan", teamName: "Legacy", inThisTeam: false },
+      { id: "m-cat", name: "Cat Ng", teamName: null, inThisTeam: false, viaDomain: null },
+      { id: "m-eve", name: "Ève Tan", teamName: "Legacy", inThisTeam: false, viaDomain: null },
     ]);
     expect(view("team-ip2")!.leadOptions.map((o) => o.name)).toEqual(["Cat Ng", "Ève Tan"]);
   });

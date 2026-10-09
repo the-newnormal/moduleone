@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { withCounts } from "@/components/admin/structure/counts";
 import { StructureEditor } from "@/components/admin/structure/structure-editor";
 import { logError } from "@/lib/admin/errors";
+import { readAll } from "@/lib/admin/read-all";
 import { requireAdminPage } from "@/lib/admin/session";
 import { TEAM_COLUMNS, type TeamRow } from "@/lib/admin/tree";
 import { archiveNode, createNode, moveNode, restoreNode, updateNode } from "./actions";
@@ -13,10 +14,15 @@ export const metadata: Metadata = { title: "Structure · Admin · Module One" };
 export default async function StructurePage() {
   const { supabase } = await requireAdminPage("/admin/structure");
 
+  // Read in full, past PostgREST's per-request row limit (readAll).
   const [teams, members, leads] = await Promise.all([
-    supabase.from("teams").select(TEAM_COLUMNS),
-    supabase.from("members").select("id, team_id, role").not("team_id", "is", null),
-    supabase.from("team_leads").select("team_id, member_id"),
+    readAll((from, to) => supabase.from("teams").select(TEAM_COLUMNS).order("id").range(from, to)),
+    readAll((from, to) =>
+      supabase.from("members").select("id, team_id, role").not("team_id", "is", null).order("id").range(from, to),
+    ),
+    readAll((from, to) =>
+      supabase.from("team_leads").select("team_id, member_id").order("team_id").order("member_id").range(from, to),
+    ),
   ]);
   const failed = teams.error ?? members.error ?? leads.error;
   if (failed || !teams.data || !members.data || !leads.data) {

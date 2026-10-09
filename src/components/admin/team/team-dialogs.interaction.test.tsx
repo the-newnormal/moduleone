@@ -6,7 +6,7 @@ import { act } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { Candidate, LeadPerson, Person, TeamSummary } from "@/app/admin/teams/[id]/team-view";
 import type { ActionResult } from "@/lib/admin/errors";
-import { button, click, deferred, dialog, press, queryButton, render, text } from "@/test/dom";
+import { button, click, deferred, dialog, press, queryButton, render, settle, text } from "@/test/dom";
 import { AddPeopleDialog } from "./add-people-dialog";
 import { ConfirmButton } from "./confirm-button";
 import { LeadsSection } from "./leads-section";
@@ -186,8 +186,8 @@ describe("AddPeopleDialog", () => {
 });
 
 describe("LeadsSection", () => {
-  const OPTIONS: LeadPerson[] = [{ id: "m-cat", name: "Cat Ng", teamName: null, inThisTeam: false }];
-  const LEADS: LeadPerson[] = [{ id: "m-ana", name: "Ana Lee", teamName: "IP Lab 2", inThisTeam: false }];
+  const OPTIONS: LeadPerson[] = [{ id: "m-cat", name: "Cat Ng", teamName: null, inThisTeam: false, viaDomain: null }];
+  const LEADS: LeadPerson[] = [{ id: "m-ana", name: "Ana Lee", teamName: "IP Lab 2", inThisTeam: false, viaDomain: null }];
 
   it("can't close Add lead while adding, and shows the refusal when it comes", async () => {
     const answer = deferred<ActionResult>();
@@ -213,5 +213,25 @@ describe("LeadsSection", () => {
     await frames();
     expect(actions.removeLead).toHaveBeenCalledWith(TEAM.id, "m-ana");
     expect(text(document.activeElement!)).toBe("Leads");
+  });
+
+  it.each([
+    ["sits in it", { inThisTeam: true, viaDomain: null }, "because they sit in this"],
+    ["leads the domain holding it", { inThisTeam: false, viaDomain: "IP Lab" }, "because they also lead IP Lab, which holds it"],
+  ])("doesn't say a removed lead stops leading the team while they still lead it (%s)", async (_label, where, reason) => {
+    const leo: LeadPerson = { id: "m-leo", name: "Leo Tan", teamName: "IP Lab 1", ...where };
+    const actions = { addLead: vi.fn(ok), removeLead: vi.fn(ok) };
+    await render(
+      <LeadsSection team={TEAM} ownLeaders={[]} leads={[leo]} inheritedLeads={[]} leadOptions={[]} actions={actions} />,
+    );
+    await click(button("Remove as lead (Leo Tan)"));
+    expect(text(dialog()!)).toContain("This only removes the extra lead.");
+    expect(text(dialog()!)).toContain(reason);
+    expect(text(dialog()!)).not.toContain("no longer see");
+    await click(button("Remove lead"));
+    await settle();
+    expect(actions.removeLead).toHaveBeenCalledWith(TEAM.id, "m-leo");
+    expect(text()).toContain(`Removed the extra lead. Leo Tan still leads ${TEAM.name}, ${reason}`);
+    expect(text()).not.toContain("no longer leads");
   });
 });

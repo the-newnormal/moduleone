@@ -84,6 +84,8 @@ export function ScoringForm({
           autoComplete="off"
           spellCheck={false}
           value={form[field]}
+          // Read-only while saving, so the form can't show values other than the ones being saved.
+          disabled={pending}
           onChange={(e) => edit(field, e.target.value)}
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? `${inputId}-error` : undefined}

@@ -227,8 +227,8 @@ describe("EditTeamForm", () => {
 
 describe("LeadsSection", () => {
   const LEADS: LeadPerson[] = [
-    { id: "m-ana", name: "Ana Lee", teamName: "IP Lab 2", inThisTeam: false },
-    { id: "m-ian", name: "Ian Goh", teamName: "IP Lab 1", inThisTeam: true },
+    { id: "m-ana", name: "Ana Lee", teamName: "IP Lab 2", inThisTeam: false, viaDomain: null },
+    { id: "m-ian", name: "Ian Goh", teamName: "IP Lab 1", inThisTeam: true, viaDomain: null },
   ];
   const render = (
     team = TEAM,
@@ -285,8 +285,8 @@ describe("LeadsSection", () => {
 describe("AddLeadPanel", () => {
   it("lists leaders with their own team", () => {
     const options: LeadPerson[] = [
-      { id: "m-cat", name: "Cat Ng", teamName: null, inThisTeam: false },
-      { id: "m-eve", name: "Eve Tan", teamName: "Legacy", inThisTeam: false },
+      { id: "m-cat", name: "Cat Ng", teamName: null, inThisTeam: false, viaDomain: null },
+      { id: "m-eve", name: "Eve Tan", teamName: "Legacy", inThisTeam: false, viaDomain: null },
     ];
     const html = renderToStaticMarkup(
       <AddLeadPanel team={TEAM} leadOptions={options} addLead={actions.addLead} onDone={() => {}} />,
