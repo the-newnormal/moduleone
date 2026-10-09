@@ -13,7 +13,7 @@
 --   plain      a member with no team
 --   chief      hq, no team
 begin;
-select plan(69);
+select plan(74);
 
 create function pg_temp.n(sql text) returns int language plpgsql as $$
 declare result int;
@@ -64,7 +64,7 @@ select results_eq(
   'in their founding order'
 );
 select is(has_function_privilege('authenticated', f, 'execute'), false, format('signed-in users cannot call %s', f))
-  from unnest(array['public.teams_fill_tree()', 'public.members_lead_where_placed()', 'public.members_check_role()']) f;
+  from unnest(array['public.teams_fill_tree()', 'public.members_lead_where_placed()', 'public.members_check_role()', 'public.members_check_login()']) f;
 
 -- ---------- fixtures ----------
 insert into auth.users (id, email) values
@@ -219,6 +219,45 @@ insert into checkins (id, member_id, week_start) values
   ('d6000000-0000-4000-8000-000000000002', 'c6000000-0000-4000-8000-000000000002', '2026-10-05');
 select is((select team_id from checkins where id = 'd6000000-0000-4000-8000-000000000002'), pg_temp.org(),
   'boss checks in at the organisation''s own level');
+reset role;
+
+-- ---------- only the project owner gives a login to someone in the organisation ----------
+-- giveLogin links a login through the server and records who gave it; the owner, linking one in
+-- the dashboard, doesn't.
+insert into auth.users (id, email) values
+  ('a6000000-0000-4000-8000-000000000011', 'seat@org.test'),
+  ('a6000000-0000-4000-8000-000000000012', 'seat2@org.test'),
+  ('a6000000-0000-4000-8000-000000000013', 'deputy@org.test'),
+  ('a6000000-0000-4000-8000-000000000014', 'divhead@org.test');
+set local role service_role;
+set local request.jwt.claims to '{"role": "service_role"}';
+insert into members (id, name, team_id) values
+  ('c6000000-0000-4000-8000-000000000011', 'DO seat', pg_temp.org()),
+  ('c6000000-0000-4000-8000-000000000013', 'DO deputy', 'b6000000-0000-4000-8000-000000000002'),
+  ('c6000000-0000-4000-8000-000000000014', 'DO div head', 'b6000000-0000-4000-8000-000000000001');
+update members set role = 'leader' where id = 'c6000000-0000-4000-8000-000000000013';
+insert into team_leads (team_id, member_id) values (pg_temp.org(), 'c6000000-0000-4000-8000-000000000013');
+select is(
+  pg_temp.error_of($$update members set auth_user_id = 'a6000000-0000-4000-8000-000000000011',
+    login_given_by = 'c6000000-0000-4000-8000-000000000001', login_given_at = now()
+    where id = 'c6000000-0000-4000-8000-000000000011'$$),
+  '42501: Only the project owner gives a login to someone in the organisation.',
+  'an admin''s Give login cannot link a login to someone sitting in the organisation');
+select is(
+  pg_temp.error_of($$update members set auth_user_id = 'a6000000-0000-4000-8000-000000000013',
+    login_given_by = 'c6000000-0000-4000-8000-000000000001', login_given_at = now()
+    where id = 'c6000000-0000-4000-8000-000000000013'$$),
+  '42501: Only the project owner gives a login to someone in the organisation.',
+  'nor to a lead of the organisation');
+select is(
+  pg_temp.error_of($$update members set auth_user_id = 'a6000000-0000-4000-8000-000000000014',
+    login_given_by = 'c6000000-0000-4000-8000-000000000001', login_given_at = now()
+    where id = 'c6000000-0000-4000-8000-000000000014'$$),
+  'no error', 'but it can for someone in a division');
+select is(
+  pg_temp.error_of($$update members set auth_user_id = 'a6000000-0000-4000-8000-000000000012'
+    where id = 'c6000000-0000-4000-8000-000000000011'$$),
+  'no error', 'the owner links a login to someone in the organisation (no giver recorded)');
 reset role;
 
 -- ---------- whoever sits in a division leads it ----------

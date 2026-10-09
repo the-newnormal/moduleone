@@ -4,9 +4,9 @@
 -- rename it). Every division sits under it; domains and teams never do. Someone who sits in it
 -- (say, the person above all divisions) checks in at the organisation's own level and, as its
 -- leader, sees every check-in in every division under it (app_led_team_ids already follows the
--- tree down). That shows as much as hq does, so only the project owner places people there or
--- makes someone a lead of it (from the Supabase dashboard or the server); signed-in admins are
--- refused. It is never archived,
+-- tree down). That shows as much as hq does, so only the project owner places people there,
+-- makes someone a lead of it or gives them a login (from the Supabase dashboard or the server);
+-- signed-in admins are refused, and so is a login an admin gives through the app. It is never archived,
 -- moved or turned into anything else, and there is only ever one.
 --
 -- Automatic leadership: anyone placed in a division, or in the organisation, leads it. A member
@@ -312,6 +312,35 @@ revoke execute on function members_check_role() from public, anon, authenticated
 
 create trigger members_check_role after insert or update of role, team_id on members
   for each row execute function members_check_role();
+
+-- An admin gives someone a login (giveLogin) through the server, which the database can't tell
+-- from the project owner, so placement's auth.uid() check doesn't reach it. A login linked to
+-- someone sitting in the organisation, or leading it, would let whoever owns that email read every
+-- check-in, so only the owner gives one: giveLogin always records who gave the login
+-- (login_given_by), and the owner linking a login in the dashboard leaves that empty.
+create function members_check_login() returns trigger
+  language plpgsql security definer set search_path = '' as $$
+begin
+  if new.auth_user_id is null or old.auth_user_id is not null or new.login_given_by is null then
+    return null;
+  end if;
+  if current_setting('transaction_isolation') <> 'read committed' then
+    raise exception using errcode = 'invalid_transaction_state',
+      message = 'Change the team tree in a READ COMMITTED transaction.';
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended('moduleone:team_tree', 0));
+  if exists (select 1 from public.teams t where t.id = new.team_id and t.kind = 'organisation')
+     or exists (select 1 from public.team_leads l join public.teams t on t.id = l.team_id
+                where l.member_id = new.id and t.kind = 'organisation') then
+    raise exception using errcode = 'insufficient_privilege',
+      message = 'Only the project owner gives a login to someone in the organisation.';
+  end if;
+  return null;
+end $$;
+revoke execute on function members_check_login() from public, anon, authenticated;
+
+create trigger members_check_login after update of auth_user_id on members
+  for each row execute function members_check_login();
 
 -- ---------- admin_move_team: the organisation stays put, divisions stay under it ----------
 -- As in 0003, plus: the organisation can't be moved, and a division dropped at the top level
