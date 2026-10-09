@@ -116,7 +116,7 @@ function PersonRow({
         )}
       </div>
 
-      {person.editable && (
+      {(person.editable || person.canGiveLogin || person.canResendInvite) && (
         <div className="flex flex-wrap gap-2 sm:justify-end">
           {person.canGiveLogin && (
             <GiveLoginDialog person={person} giveLogin={actions.giveLogin} onDone={onDone} focusAfter={heading} />
@@ -136,7 +136,7 @@ function PersonRow({
               onDone={() => onDone(`Sent ${name} a new invite.`)}
             />
           )}
-          {leader ? (
+          {!person.editable ? null : leader ? (
             // Everyone placed here leads it (0006): move them out to make them a member.
             !team.everyoneLeads && (
             <ConfirmButton
@@ -160,22 +160,24 @@ function PersonRow({
               onDone={() => onDone(`${name} is a leader now.`)}
             />
           )}
-          <ConfirmButton
-            label={
-              <>
-                Remove from {team.kind}
-                {who}
-              </>
-            }
-            title={`Remove ${name} from ${team.name}?`}
-            description={removeDescription(person, team)}
-            confirmLabel="Remove"
-            destructive
-            run={() => actions.removeFromTeam(team.id, person.id)}
-            context="removeFromTeam"
-            onDone={() => onDone(`Removed ${name} from ${team.name}.`)}
-            focusAfter={heading}
-          />
+          {person.editable && (
+            <ConfirmButton
+              label={
+                <>
+                  Remove from {team.kind}
+                  {who}
+                </>
+              }
+              title={`Remove ${name} from ${team.name}?`}
+              description={removeDescription(person, team)}
+              confirmLabel="Remove"
+              destructive
+              run={() => actions.removeFromTeam(team.id, person.id)}
+              context="removeFromTeam"
+              onDone={() => onDone(`Removed ${name} from ${team.name}.`)}
+              focusAfter={heading}
+            />
+          )}
         </div>
       )}
     </li>

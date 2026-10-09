@@ -145,6 +145,18 @@ describe("PeopleSection", () => {
     expect(text(html)).toContain("Only the project owner places people in the organisation");
   });
 
+  it("offers Give login and Resend invite on the organisation node, but no role or removal changes (since 0006)", () => {
+    const html = render({ ...TEAM, kind: "organisation", kindLabel: "Organisation" }, [
+      person("m-eli", "Eli Chao", { role: "leader", roleLabel: "Leader", title: "President", editable: false, canGiveLogin: true }),
+      person("m-vp", "Vee Pang", { role: "leader", roleLabel: "Leader", editable: false, hasLogin: true, canResendInvite: true }),
+    ]);
+    expect(row(html, "Eli Chao")).toContain("Give login (Eli Chao)");
+    expect(row(html, "Vee Pang")).toContain("Resend invite (Vee Pang)");
+    for (const name of ["Eli Chao", "Vee Pang"]) {
+      expect(row(html, name)).not.toMatch(/Make member|Make leader|Remove from/);
+    }
+  });
+
   it("offers no Make member where everyone leads (a division once 0006 is live)", () => {
     const html = render({ ...DIVISION, everyoneLeads: true });
     expect(row(html, "Leo Tan")).not.toContain("Make member");

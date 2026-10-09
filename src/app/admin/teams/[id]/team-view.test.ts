@@ -169,22 +169,44 @@ describe("buildTeamView", () => {
 
   it("handles the organisation node above every division (since 0006)", () => {
     const teams = [node("org", "The New Normal", "organisation", null), ...TEAMS.map((t) => (t.id === "div-gather" ? { ...t, parent_id: "org" } : t))];
-    const members = [...MEMBERS, member("m-eli", "Eli Chao", "leader", "org")];
-    const at = (teamId: string) => buildTeamView({ teamId, adminMemberId: ADMIN, teams, members, leads: LEADS, grants: [] })!;
+    const members = [
+      ...MEMBERS,
+      member("m-eli", "Eli Chao", "leader", "org"),
+      member("m-vp", "Vee Pang", "leader", "org", { auth_user_id: "u-vp", login_given_by: ADMIN, login_given_at: "2026-10-09T04:00:00Z" }),
+      member("m-gina", "Gina Grant", "leader", "org"),
+      member("m-chief", "Chief Ong", "hq", "org"),
+    ];
+    const at = (teamId: string) =>
+      buildTeamView({ teamId, adminMemberId: ADMIN, teams, members, leads: LEADS, grants: [{ member_id: "m-gina" }] })!;
     expect(at("org").team).toMatchObject({ kind: "organisation", kindLabel: "Organisation", typeLabel: null });
     expect(at("org").crumbs).toEqual([]);
-    expect(at("org").people.map((p) => p.name)).toEqual(["Eli Chao"]);
+    expect(at("org").people.map((p) => p.name)).toEqual(["Chief Ong", "Eli Chao", "Gina Grant", "Vee Pang"]);
     // No "Unplaced" above what's in a division under it, and still above an unplaced domain.
     expect(at("dom-ip").crumbs.map((c) => c.label)).toEqual(["The New Normal", "Gather"]);
     expect(at("dom-legacy").crumbs.map((c) => c.label)).toEqual(["Unplaced"]);
     // Whoever sits in it leads everything below.
-    expect(at("div-gather").inheritedLeads).toEqual([{ id: "m-eli", name: "Eli Chao", domainId: "org", domainName: "The New Normal" }]);
+    expect(at("div-gather").inheritedLeads).toEqual(
+      ["m-eli:Eli Chao", "m-gina:Gina Grant", "m-vp:Vee Pang"].map((p) => {
+        const [id, name] = p.split(":");
+        return { id, name, domainId: "org", domainName: "The New Normal" };
+      }),
+    );
     // Everyone placed in a division or in it leads it, once there's an organisation (0006); before,
     // a division takes members too.
     expect([at("org"), at("div-gather"), at("dom-ip")].map((v) => v.team.everyoneLeads)).toEqual([true, true, false]);
     expect(view("div-gather")!.team.everyoneLeads).toBe(false);
-    // Only the project owner places people there or decides who leads it: nothing to change here.
-    expect(at("org").people.every((p) => !p.editable && !p.canGiveLogin)).toBe(true);
+    // Only the project owner places people there or decides who leads it: nothing to change here,
+    // except that admins give them a login (the owner's decision), as anywhere else.
+    expect(at("org").people.every((p) => !p.editable)).toBe(true);
+    const logins = Object.fromEntries(
+      at("org").people.map((p) => [p.name, [p.canGiveLogin, p.ownerGivesLogin, p.canResendInvite]]),
+    );
+    expect(logins).toEqual({
+      "Chief Ong": [false, false, false], // a Master Admin: never from the app
+      "Eli Chao": [true, false, false],
+      "Gina Grant": [false, true, false], // holds grants: the owner gives it
+      "Vee Pang": [false, false, true], // given in Module One: its invite can be re-sent
+    });
     expect(at("org").candidates).toEqual([]);
     // Nor are they offered to move into any other team.
     expect(at("team-ip2").candidates.map((c) => c.id)).not.toContain("m-eli");

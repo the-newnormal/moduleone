@@ -55,14 +55,17 @@ export type Person = {
   roleLabel: string;
   title: string | null; // the node's title for its leaders ("President"), for a leader or hq sitting here
   isSelf: boolean; // the signed-in admin
-  editable: boolean; // false for Master Admins and the admin's own row (RLS refuses those)
+  // Role and removal controls: false for Master Admins and the admin's own row (RLS refuses those),
+  // and for everyone on the organisation's page (only the project owner changes who sits there).
+  editable: boolean;
   hasLogin: boolean;
   loginGiven: string | null; // "Login given by Hana Lim on 9 Oct 2026", only while they have a login
-  // Give login is offered: editable, no login, and no grants (a new login would get them, so the
-  // project owner gives those; giveLogin refuses them too).
+  // Give login is offered: not a Master Admin or the admin themselves, no login, and no grants (a
+  // new login would get them, so the project owner gives those; giveLogin refuses them too). Also
+  // on the organisation's page: admins give whoever the owner placed there a login (owner's call).
   canGiveLogin: boolean;
-  ownerGivesLogin: boolean; // editable, no login, holds grants
-  canResendInvite: boolean; // editable, with a login given in Module One (it may not be used yet)
+  ownerGivesLogin: boolean; // as canGiveLogin, but holds grants
+  canResendInvite: boolean; // not a Master Admin or the admin, with a login given in Module One
   otherLeads: string[]; // names of the teams they also lead (team_leads), lost if made a member
   leadsHere: boolean; // a team_leads row for this team too, so they lead it wherever they sit
   // The name of the nearest node above this one (its domain or division) where they have a lead
@@ -238,14 +241,16 @@ export function buildTeamView({
     nodesAbove.find((t) => (m.role === "leader" && m.team_id === t.id) || leadRows.get(t.id)?.has(m.id));
 
   // Only the project owner places people in the organisation node (migration 0006), and whoever
-  // sits there sees every check-in: its page shows who's there but offers no changes.
+  // sits there sees every check-in: its page shows who's there and offers no changes, except
+  // giving them a login (admins may, by the owner's decision).
   const ownerOnly = row.kind === "organisation";
 
   const people: Person[] = members
     .filter((m) => m.team_id === teamId)
     .map((m) => {
       const role = asRole(m.role);
-      const editable = !ownerOnly && isEditableMember({ id: m.id, role }, adminMemberId);
+      const loginsHere = isEditableMember({ id: m.id, role }, adminMemberId);
+      const editable = !ownerOnly && loginsHere;
       const hasLogin = m.auth_user_id !== null;
       const giver = m.login_given_by ? (memberById.get(m.login_given_by)?.name ?? null) : null;
       return {
@@ -259,9 +264,9 @@ export function buildTeamView({
         hasLogin,
         // A login deleted in the Supabase dashboard leaves login_given_* behind; don't show it.
         loginGiven: hasLogin ? loginGivenText(giver, m.login_given_at) : null,
-        canGiveLogin: editable && !hasLogin && !holdsGrants.has(m.id),
-        ownerGivesLogin: editable && !hasLogin && holdsGrants.has(m.id),
-        canResendInvite: editable && hasLogin && m.login_given_at !== null,
+        canGiveLogin: loginsHere && !hasLogin && !holdsGrants.has(m.id),
+        ownerGivesLogin: loginsHere && !hasLogin && holdsGrants.has(m.id),
+        canResendInvite: loginsHere && hasLogin && m.login_given_at !== null,
         otherLeads: [...(leadsOf.get(m.id) ?? [])].sort((a, b) => a.localeCompare(b, "en")),
         leadsHere: leadIds.has(m.id),
         leadsDomain: role === "leader" ? (ledAboveByRow(m)?.name ?? null) : null,
