@@ -32,7 +32,7 @@ const models = (process.env.GRADER_COMPARE_MODELS ?? "claude-opus-5-5,claude-hai
 function costOf(grade: Grade): number | null {
   if (!GRADING_USD_PER_MTOK[grade.model]) return null;
   return rowCostUsd({
-    checkin_id: null,
+    checkin_id: "comparison",
     step: "grading",
     model: grade.model,
     audio_ms: null,

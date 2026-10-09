@@ -25,7 +25,7 @@ export const GRADING_USD_PER_MTOK: Record<string, TokenPrice> = {
 };
 
 export type CostRow = {
-  checkin_id: string | null;
+  checkin_id: string;
   step: "transcription" | "grading";
   model: string;
   audio_ms: number | null;
@@ -48,7 +48,8 @@ export type MonthCosts = {
   outputTokens: number;
   gradingUsd: number;
   totalUsd: number;
-  // Models used this month that have no price above; their calls are left out of the US$ figures.
+  // Calls this month that can't be priced (a model with no price above, or a recording of unknown
+  // length); they are left out of the US$ figures.
   unpriced: string[];
 };
 
@@ -56,7 +57,8 @@ export function rowCostUsd(row: CostRow): number | null {
   if (row.step === "transcription") {
     if (row.model.startsWith("local:")) return 0;
     const perMinute = TRANSCRIPTION_USD_PER_MINUTE[row.model];
-    return perMinute === undefined ? null : ((row.audio_ms ?? 0) / 60_000) * perMinute;
+    // A recording whose length the recorder didn't report can't be priced; it isn't free.
+    return perMinute === undefined || row.audio_ms === null ? null : (row.audio_ms / 60_000) * perMinute;
   }
   const price = GRADING_USD_PER_MTOK[row.model];
   if (!price) return null;
@@ -108,9 +110,11 @@ export function monthlyCosts(rows: readonly CostRow[]): MonthCosts[] {
       };
       months.set(key, month);
     }
-    if (row.checkin_id) month.ids.add(row.checkin_id);
+    month.ids.add(row.checkin_id);
     const usd = rowCostUsd(row);
-    if (usd === null) month.unpricedSet.add(row.model);
+    if (usd === null) {
+      month.unpricedSet.add(row.step === "transcription" && row.audio_ms === null ? `${row.model} (length unknown)` : row.model);
+    }
     if (row.step === "transcription") {
       month.audioMinutes += (row.audio_ms ?? 0) / 60_000;
       month.transcriptionUsd += usd ?? 0;

@@ -10,8 +10,10 @@
 
 create table processing_costs (
   id                  bigint generated always as identity primary key,
-  -- Kept when a check-in goes, so past months still add up.
-  checkin_id          uuid references checkins(id) on delete set null,
+  -- The check-in it was for. Not a foreign key: when a check-in is deleted its costs stay, still
+  -- grouped by this id, so past months keep their totals and their count of check-ins. The id says
+  -- nothing about anyone once the check-in is gone.
+  checkin_id          uuid not null,
   step                text not null check (step in ('transcription', 'grading')),
   -- e.g. 'openai:gpt-4o-transcribe' or 'claude-haiku-5-5' (the model that actually answered).
   model               text not null check (length(model) between 1 and 200),

@@ -75,6 +75,15 @@ describe("monthlyCosts", () => {
     expect(month.audioMinutes).toBeCloseTo(10);
   });
 
+  it("doesn't count a recording of unknown length as free", () => {
+    const row = transcription({ audio_ms: null });
+    expect(rowCostUsd(row)).toBeNull();
+    const [month] = monthlyCosts([row, grading()]);
+    expect(month.unpriced).toEqual(["openai:gpt-4o-transcribe (length unknown)"]);
+    expect(month.transcriptionUsd).toBe(0);
+    expect(month.checkins).toBe(1);
+  });
+
   it("is empty with no rows", () => {
     expect(monthlyCosts([])).toEqual([]);
   });

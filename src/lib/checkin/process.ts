@@ -180,11 +180,15 @@ function usageColumns(usage: GradeUsage) {
 // that follows the call, inside the same SAVE_MS, and never fails the check-in: a missing row
 // only makes the month's total a little low.
 async function recordCost(admin: ReturnType<typeof createServiceRoleClient>, checkinId: string, row: CostRow): Promise<void> {
-  const { error } = await admin
-    .from("processing_costs")
-    .insert({ checkin_id: checkinId, ...row })
-    .abortSignal(AbortSignal.timeout(SAVE_MS));
-  if (error) console.error("processCheckin: could not record the cost", { checkinId, step: row.step, code: error.code });
+  try {
+    const { error } = await admin
+      .from("processing_costs")
+      .insert({ checkin_id: checkinId, ...row })
+      .abortSignal(AbortSignal.timeout(SAVE_MS));
+    if (error) console.error("processCheckin: could not record the cost", { checkinId, step: row.step, code: error.code });
+  } catch (error) {
+    console.error("processCheckin: could not record the cost", { checkinId, step: row.step, error: describe(error) });
+  }
 }
 
 function mimeFromFilename(filename: string): string {

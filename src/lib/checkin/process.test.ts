@@ -154,6 +154,22 @@ describe("processCheckin", () => {
     });
   });
 
+  it("still grades when the cost log request throws", async () => {
+    // A cost log that rejects instead of returning an error must not escape processCheckin.
+    const rejecting = { abortSignal: () => rejecting, then: (_: unknown, reject: (e: unknown) => void) => reject(new Error("network down")) };
+    const client = vi.mocked(createServiceRoleClient)() as unknown as { from: (t: string) => Record<string, unknown> };
+    vi.mocked(createServiceRoleClient).mockReturnValue({
+      ...client,
+      from: (table: string) => (table === "processing_costs" ? { insert: () => rejecting } : client.from(table)),
+    } as never);
+    expect(await processCheckin(CHECKIN)).toBe("graded");
+    expect(console.error).toHaveBeenCalledWith("processCheckin: could not record the cost", {
+      checkinId: CHECKIN,
+      step: "grading",
+      error: "Error: network down",
+    });
+  });
+
   it("logs only the grading cost when it reuses a saved transcript", async () => {
     rpc.mockResolvedValue(claim({ transcript: TRANSCRIPT, attempts: 2 }));
     await processCheckin(CHECKIN);

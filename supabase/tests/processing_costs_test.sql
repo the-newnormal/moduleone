@@ -4,7 +4,7 @@
 -- Fixtures: admin (grant admin), hq (role hq, no grants), m1 (a member with a check-in),
 -- outsider (signed in, no members row).
 begin;
-select plan(18);
+select plan(19);
 
 insert into auth.users (id, email) values
   ('a7000000-0000-4000-8000-000000000001', 'admin@costs.test'),
@@ -52,21 +52,25 @@ select lives_ok(
   'the server logs a grading'
 );
 select throws_ok(
-  $$insert into processing_costs (checkin_id, step, model, audio_ms) values (null, 'grading', 'claude-haiku-5-5', 1000)$$,
+  $$insert into processing_costs (checkin_id, step, model, audio_ms) values (gen_random_uuid(), 'grading', 'claude-haiku-5-5', 1000)$$,
   '23514', null, 'a grading row needs its tokens and no audio'
 );
 select throws_ok(
-  $$insert into processing_costs (checkin_id, step, model, audio_ms, input_tokens) values (null, 'transcription', 'openai:whisper-1', 1000, 5)$$,
+  $$insert into processing_costs (checkin_id, step, model, audio_ms, input_tokens) values (gen_random_uuid(), 'transcription', 'openai:whisper-1', 1000, 5)$$,
   '23514', null, 'a transcription row has no tokens'
 );
 select throws_ok(
-  $$insert into processing_costs (step, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
-    values ('grading', 'claude-haiku-5-5', -1, 0, 0, 0)$$,
+  $$insert into processing_costs (checkin_id, step, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
+    values (gen_random_uuid(), 'grading', 'claude-haiku-5-5', -1, 0, 0, 0)$$,
   '23514', null, 'token counts are never negative'
 );
 select throws_ok(
-  $$insert into processing_costs (step, model) values ('summary', 'x')$$,
+  $$insert into processing_costs (checkin_id, step, model) values (gen_random_uuid(), 'summary', 'x')$$,
   '23514', null, 'only transcription and grading are logged'
+);
+select throws_ok(
+  $$insert into processing_costs (step, model, audio_ms) values ('transcription', 'openai:whisper-1', 1)$$,
+  '23502', null, 'every row names its check-in'
 );
 reset role;
 
@@ -76,7 +80,7 @@ set local request.jwt.claims to '{"sub": "a7000000-0000-4000-8000-000000000001",
 select is((select count(*)::int from processing_costs where checkin_id = 'd7000000-0000-4000-8000-000000000001'), 2,
   'an admin reads the cost log');
 select throws_ok(
-  $$insert into processing_costs (step, model, audio_ms) values ('transcription', 'openai:whisper-1', 1)$$,
+  $$insert into processing_costs (checkin_id, step, model, audio_ms) values (gen_random_uuid(), 'transcription', 'openai:whisper-1', 1)$$,
   '42501', null, 'not even an admin writes it through the API'
 );
 
@@ -92,8 +96,8 @@ reset role;
 
 -- ---------- history outlives the check-in ----------
 delete from checkins where id = 'd7000000-0000-4000-8000-000000000001';
-select is((select count(*)::int from processing_costs where checkin_id is null and model in ('openai:gpt-4o-transcribe', 'claude-haiku-5-5')), 2,
-  'deleting a check-in keeps its costs for the month''s total');
+select is((select count(*)::int from processing_costs where checkin_id = 'd7000000-0000-4000-8000-000000000001'), 2,
+  'deleting a check-in keeps its costs, still grouped by its id, for the month''s total and count');
 
 select * from finish();
 rollback;
