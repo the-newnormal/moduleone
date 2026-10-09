@@ -4,9 +4,10 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 // The service-role client (./admin.ts) bypasses RLS, so only the "Give login" and "Resend invite"
-// server actions may use it. This scans every source file under src/ and fails if anything else imports it, mocks
-// it, or reads the service key itself. To use it somewhere new, that has to be a reviewed change
-// to ALLOWED below.
+// server actions and the check-in's server code (which writes for the member it takes from the
+// session) may use it. This scans every source file under src/ and fails if anything else imports
+// it, mocks it, or reads the service key itself. To use it somewhere new, that has to be a reviewed
+// change to ALLOWED below.
 
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 const TARGET = "src/lib/supabase/admin";
@@ -17,6 +18,12 @@ const ALLOWED = new Set([
   "src/lib/supabase/admin-imports.test.ts",
   "src/app/admin/teams/[id]/actions.ts", // giveLogin and resendInvite
   "src/app/admin/teams/[id]/actions.test.ts",
+  "src/app/portal/checkin/actions.ts", // recording, drafts and submitting a check-in
+  "src/app/portal/checkin/actions.test.ts",
+  "src/app/portal/checkin/housekeeping.ts", // tidying old drafts and files, the daily job
+  "src/app/portal/checkin/housekeeping.test.ts",
+  "src/lib/checkin/process.ts", // transcribing and grading a submitted check-in
+  "src/lib/checkin/process.test.ts",
 ]);
 
 const SOURCE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
@@ -59,7 +66,7 @@ describe("the service-role client", () => {
     expect(files.length).toBeGreaterThan(20);
   });
 
-  it("is imported by nothing but the Give login and Resend invite actions", () => {
+  it("is imported by nothing but the files allowed above", () => {
     const offenders = files.filter(
       (file) => !ALLOWED.has(file) && referencesServiceClient(file, readFileSync(join(ROOT, file), "utf8")),
     );
@@ -73,11 +80,12 @@ describe("the service-role client", () => {
     expect(readers).toEqual(["src/lib/supabase/admin.ts"]);
   });
 
-  it("is used only from a server action file", () => {
-    const action = "src/app/admin/teams/[id]/actions.ts";
-    if (!files.includes(action)) return;
-    const source = readFileSync(join(ROOT, action), "utf8");
-    expect(source.trimStart()).toMatch(/^["']use server["'];?/);
+  it("is used only from server code: a server action file, or a module marked server-only", () => {
+    for (const file of ALLOWED) {
+      if (file.endsWith(".test.ts") || !files.includes(file)) continue;
+      const source = readFileSync(join(ROOT, file), "utf8").trimStart();
+      expect(source, file).toMatch(/^(["']use server["']|import ["']server-only["']);?/);
+    }
   });
 
   it("never has a public (browser) variable for a secret", () => {

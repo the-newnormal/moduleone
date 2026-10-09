@@ -1,12 +1,15 @@
 import "server-only";
 import { createClient } from "@supabase/supabase-js";
 
-// THE ONLY SERVICE-ROLE CLIENT. It bypasses RLS entirely, so exactly one file may import it: the
-// admin team page's actions (src/app/admin/teams/[id]/actions.ts), where giveLogin invites an
-// email and links the new login to a member row, and resendInvite re-sends an unused invite, each
-// after checking, as the signed-in admin, that it may. Everything else reads and writes as the
-// signed-in user (./server.ts) so RLS decides.
-// admin-imports.test.ts fails if anything else imports this file.
+// THE ONLY SERVICE-ROLE CLIENT. It bypasses RLS entirely, so only the files listed in
+// admin-imports.test.ts may import it, which fails if anything else does:
+// - the admin team page's actions (src/app/admin/teams/[id]/actions.ts), where giveLogin invites an
+//   email and links the new login to a member row, and resendInvite re-sends an unused invite, each
+//   after checking, as the signed-in admin, that it may;
+// - the check-in's server code (src/app/portal/checkin/actions.ts and housekeeping.ts,
+//   src/lib/checkin/process.ts), which writes recordings, drafts, transcripts and scores for the
+//   member it takes from the session, never from the request (members only read; CLAUDE.md).
+// Everything else reads and writes as the signed-in user (./server.ts) so RLS decides.
 //
 // `server-only` makes a build fail if a Client Component ever imports it, and the key has no
 // NEXT_PUBLIC_ prefix, so Next.js never puts it in a browser bundle.
