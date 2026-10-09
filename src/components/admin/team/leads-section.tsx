@@ -116,6 +116,8 @@ export function LeadsSection({ team, ownLeaders, leads, inheritedLeads, leadOpti
                 <p className="font-medium break-words">{lead.name}</p>
                 <p className="text-sm text-muted-foreground">{leadWhere(lead, noun)}</p>
               </div>
+              {/* The organisation's leads are the project owner's to change. */}
+              {team.kind !== "organisation" && (
               <div className="flex sm:justify-end">
                 <ConfirmButton
                   label={
@@ -133,6 +135,7 @@ export function LeadsSection({ team, ownLeaders, leads, inheritedLeads, leadOpti
                   focusAfter={`[id="${headingId}"]`}
                 />
               </div>
+              )}
             </li>
           ))}
           {inheritedLeads.map((lead) => (

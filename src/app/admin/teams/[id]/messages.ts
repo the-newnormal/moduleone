@@ -36,5 +36,5 @@ export const NOT_GIVEN_HERE = "This login wasn't given in Module One, so the pro
 export const INVITE_USED =
   "This person has already used their invite, so there's nothing to resend. They sign in at the login page.";
 
-// addLead
-export const ORGANISATION_OWNER_ONLY = "Only the project owner decides who leads the organisation.";
+// Every change to who sits in or leads the organisation node (migration 0006)
+export const ORGANISATION_OWNER_ONLY = "Only the project owner decides who sits in the organisation and who leads it.";

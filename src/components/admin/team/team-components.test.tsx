@@ -282,10 +282,12 @@ describe("LeadsSection", () => {
     );
   });
 
-  it("offers no Add lead on the organisation node, and says who placed its leaders (since 0006)", () => {
-    const html = render({ ...DIVISION, kind: "organisation", kindLabel: "Organisation" }, [{ id: "m-eli", name: "Eli Chao", domain: null }], []);
+  it("offers no Add lead or Remove as lead on the organisation node, and says who placed its leaders (since 0006)", () => {
+    const html = render({ ...DIVISION, kind: "organisation", kindLabel: "Organisation" }, [{ id: "m-eli", name: "Eli Chao", domain: null }]);
     expect(text(html)).not.toContain("Add lead");
+    expect(text(html)).not.toContain("Remove as lead");
     expect(row(html, "Eli Chao")).toBe("Eli Chao Placed here by the project owner");
+    expect(row(html, "Ana Lee")).toBe("Ana Lee Leader in IP Lab 2");
   });
 
   it("speaks of a division as a division", () => {

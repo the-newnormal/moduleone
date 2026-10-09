@@ -39,6 +39,17 @@ import {
 
 const OK: ActionResult = { ok: true, value: null };
 
+type Supabase = Extract<Awaited<ReturnType<typeof requireAdmin>>, { ok: true }>["value"]["supabase"];
+
+// The organisation node's id (migration 0006), or null before there is one. Whoever sits in it or
+// leads it sees every division's check-ins, so only the project owner decides either: the pages
+// offer none of it, and these actions refuse it too, whatever a client sends.
+async function organisationId(supabase: Supabase, context: string): Promise<ActionResult<string | null>> {
+  const { data, error } = await supabase.from("teams").select("id").eq("kind", "organisation").limit(1);
+  if (error) return fail(toUserMessage(error, context));
+  return { ok: true, value: (data as { id: string }[] | null)?.[0]?.id ?? null };
+}
+
 // Put an existing member in this team. fromTeamId is the team the page showed them in (null: no
 // team); if they've moved since, nothing changes, so nobody is moved without the admin seeing
 // where from.
@@ -52,6 +63,9 @@ export async function addMember(
 
   if (!isUuid(teamId) || !isUuid(memberId) || !isParentId(fromTeamId)) return fail(BAD_REQUEST);
   if (fromTeamId === teamId) return fail(ALREADY_IN_TEAM);
+  const org = await organisationId(admin.value.supabase, "addMember");
+  if (!org.ok) return org;
+  if (org.value !== null && (teamId === org.value || fromTeamId === org.value)) return fail(ORGANISATION_OWNER_ONLY);
 
   const move = admin.value.supabase.from("members").update({ team_id: teamId }).eq("id", memberId);
   const { data, error } = await (fromTeamId === null
@@ -77,6 +91,9 @@ export async function createMember(teamId: string, person: NewPerson): Promise<A
   const name = parseName(input.name);
   if (!name.ok) return name;
   if (!isAssignableRole(input.role)) return fail(PICK_ROLE);
+  const org = await organisationId(admin.value.supabase, "createMember");
+  if (!org.ok) return org;
+  if (teamId === org.value) return fail(ORGANISATION_OWNER_ONLY);
 
   const { data, error } = await admin.value.supabase
     .from("members")
@@ -99,6 +116,9 @@ export async function removeFromTeam(teamId: string, memberId: string): Promise<
   if (!admin.ok) return admin;
 
   if (!isUuid(teamId) || !isUuid(memberId)) return fail(BAD_REQUEST);
+  const org = await organisationId(admin.value.supabase, "removeFromTeam");
+  if (!org.ok) return org;
+  if (teamId === org.value) return fail(ORGANISATION_OWNER_ONLY);
 
   const { data, error } = await admin.value.supabase
     .from("members")
@@ -121,6 +141,13 @@ export async function setRole(memberId: string, role: string): Promise<ActionRes
 
   if (!isUuid(memberId)) return fail(BAD_REQUEST);
   if (!isAssignableRole(role)) return fail(PICK_ROLE);
+  const org = await organisationId(admin.value.supabase, "setRole");
+  if (!org.ok) return org;
+  if (org.value !== null) {
+    const sits = await admin.value.supabase.from("members").select("team_id").eq("id", memberId).maybeSingle();
+    if (sits.error) return fail(toUserMessage(sits.error, "setRole"));
+    if ((sits.data as { team_id: string | null } | null)?.team_id === org.value) return fail(ORGANISATION_OWNER_ONLY);
+  }
 
   const { data, error } = await admin.value.supabase
     .from("members")
@@ -142,11 +169,9 @@ export async function addLead(teamId: string, memberId: string): Promise<ActionR
 
   if (!isUuid(teamId) || !isUuid(memberId)) return fail(BAD_REQUEST);
 
-  // A lead of the organisation node (migration 0006) would see every check-in, which only the
-  // project owner decides.
-  const target = await admin.value.supabase.from("teams").select("kind").eq("id", teamId).maybeSingle();
-  if (target.error) return fail(toUserMessage(target.error, "addLead"));
-  if ((target.data as { kind: string } | null)?.kind === "organisation") return fail(ORGANISATION_OWNER_ONLY);
+  const org = await organisationId(admin.value.supabase, "addLead");
+  if (!org.ok) return org;
+  if (teamId === org.value) return fail(ORGANISATION_OWNER_ONLY);
 
   const { error } = await admin.value.supabase
     .from("team_leads")
@@ -166,6 +191,9 @@ export async function removeLead(teamId: string, memberId: string): Promise<Acti
   if (!admin.ok) return admin;
 
   if (!isUuid(teamId) || !isUuid(memberId)) return fail(BAD_REQUEST);
+  const org = await organisationId(admin.value.supabase, "removeLead");
+  if (!org.ok) return org;
+  if (teamId === org.value) return fail(ORGANISATION_OWNER_ONLY);
 
   const { error } = await admin.value.supabase
     .from("team_leads")
