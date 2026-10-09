@@ -188,6 +188,29 @@ describe("SaveWatch", () => {
     expect(text()).toBe("Record this week's check-in");
   });
 
+  // A save kept in this tab from an earlier visit has already ended: the portal mustn't claim it's
+  // saving, nor reload the page for it every time the member comes back.
+  it("says nothing and doesn't refresh for a take that ended earlier as not kept (superseded)", async () => {
+    await trackSave(Promise.resolve<SaveOutcome>({ step: "superseded" }));
+    expect(currentSave()).not.toBeNull(); // still held, for the recorder to tell the member
+    await render(tile);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(status()).toBeNull();
+    expect(alert()).toBeNull();
+    expect(router.refresh).not.toHaveBeenCalled();
+    expect(text()).toBe("Record this week's check-in");
+  });
+
+  it("sends the member straight back to the check-in for a take that failed earlier, without saying it's saving", async () => {
+    await trackSave(Promise.resolve(failed));
+    await render(tile);
+    expect(status()).toBeNull();
+    expect(text(alert()!)).toBe("Your last recording hasn't been saved yet.");
+    expect(router.refresh).not.toHaveBeenCalled();
+  });
+
   it("doesn't refresh a page the member has already left", async () => {
     const save = saving();
     const page = await render(tile);

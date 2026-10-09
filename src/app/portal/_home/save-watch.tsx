@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { currentSave, pendingSave, wasDeleted } from "../checkin/pending-save";
+import { currentSave, heldOutcome, pendingSave, wasDeleted } from "../checkin/pending-save";
 import type { SaveOutcome } from "../checkin/take";
 
 // Coming back here from the recorder can beat the take's upload: the page was rendered before the
@@ -22,9 +22,13 @@ export function SaveWatch({ children }: { children: ReactNode }) {
     // cleanup, which React runs in this same commit, after this page rendered but before this.
     const save = currentSave();
     if (!save) return;
-    let mounted = true;
+    // A save that ended before this page mounted isn't saving: a failed take still needs saving, and
+    // the news that a take wasn't kept waits for the recorder to tell it, with nothing to refresh.
+    const ended = heldOutcome();
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the save only exists from here
-    setHeld("saving");
+    setHeld(ended === undefined ? "saving" : atRisk(ended) ? "failed" : null);
+    if (ended !== undefined) return;
+    let mounted = true;
     void pendingSave().then((outcome) => {
       if (!mounted) return;
       if (atRisk(outcome)) return setHeld("failed");
