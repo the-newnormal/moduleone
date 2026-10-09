@@ -7,13 +7,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { processCheckin } from "@/lib/checkin/process";
 import { loadHeatmapData, loadRole, loadScoringConfig, type Role } from "@/lib/dashboard/load";
-import { type CheckinRow, cellsFor } from "@/lib/dashboard/org";
+import { type CheckinRow, cellsFor, type HeatmapCell } from "@/lib/dashboard/org";
 import type { TeamNode } from "@/lib/dashboard/tree";
 import type { HealthConfig } from "@/lib/health/health";
 import { createClient } from "@/lib/supabase/server";
 import { text } from "@/test/dom";
 import { tidyMemberAudio } from "./checkin/housekeeping";
-import { describeCell } from "./dashboard/describe";
+import { cellWord, describeCell } from "./dashboard/describe";
 import PortalPage from "./page";
 
 // The portal's dashboard as each viewer gets it. Members never see a grade: the page may ask only
@@ -78,33 +78,70 @@ const graded = (week_start: string, submitted_at: string | null = `${week_start}
   audio_path: `${MEMBER}/${week_start}.webm`,
 });
 
-// --- The viewer's client: claims, the admin-grant rpc, and reads of their own rows. ---
+// --- The viewer's client: claims, the admin-grant rpc, and reads. ---
 
 type Result = { data: unknown; error: unknown };
+type Row = Record<string, unknown>;
 type Filter = [op: string, column: string, value: unknown];
-type Query = { table: string; columns: string | null; filters: Filter[] };
+type Query = { table: string; columns: string | null; filters: Filter[]; limit: number | null };
 type Builder = PromiseLike<Result> & {
   select(columns: string): Builder;
   eq(column: string, value: unknown): Builder;
+  in(column: string, values: readonly unknown[]): Builder;
+  not(column: string, operator: string, value: unknown): Builder;
+  gt(column: string, value: unknown): Builder;
   gte(column: string, value: unknown): Builder;
   lte(column: string, value: unknown): Builder;
   order(column: string): Builder;
+  limit(count: number): Builder;
   overrideTypes(): Builder;
   maybeSingle(): Promise<Result>;
 };
 
+// The viewer's own reads (their member row, their check-ins, their draft), by table.
 let tables: Record<string, Result>;
+// Who's checked in reads people by team ("id, team_id") and this week's check-ins ("id, member_id").
+// The fake answers those two from these lists, applying the filters the page asks for (so a page
+// that dropped one would count the wrong people), but hands back whole rows, names and grades
+// included, as RLS would: only what the page selects and shows keeps them off the portal.
+let people: Row[];
+let teamCheckins: Row[];
+// Requests ("table: columns") that come back with a PostgREST error.
+let failing: Set<string>;
 let queries: Query[];
 let adminGrant: Result;
 const getClaims = vi.fn();
 const rpc = vi.fn();
 
+const PEOPLE_BY_TEAM = "members: id, team_id";
+const WHO_CHECKED_IN = "checkins: id, member_id";
+
+function matching(rows: readonly Row[], query: Query): Row[] {
+  let out = [...rows];
+  for (const [op, column, value] of query.filters) {
+    if (op === "eq") out = out.filter((r) => r[column] === value);
+    else if (op === "in") out = out.filter((r) => (value as unknown[]).includes(r[column]));
+    else if (op === "gt") out = out.filter((r) => String(r[column]) > String(value));
+    else if (op === "not" && JSON.stringify(value) === JSON.stringify(["is", null]))
+      out = out.filter((r) => r[column] !== null);
+    else throw new Error(`unexpected filter ${op} ${column} on ${query.table}`);
+  }
+  out.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  return query.limit === null ? out : out.slice(0, query.limit);
+}
+
 // Reads only: a write (insert, update, upsert, delete) isn't there to call, and the client has no
 // storage, so a page that tried either would fall over into "Couldn't load your check-in".
 function from(table: string): Builder {
-  const query: Query = { table, columns: null, filters: [] };
+  const query: Query = { table, columns: null, filters: [], limit: null };
   queries.push(query);
-  const settle = () => Promise.resolve(tables[table] ?? { data: null, error: { message: `unexpected table ${table}` } });
+  const settle = (): Promise<Result> => {
+    const key = `${table}: ${query.columns}`;
+    if (failing.has(key)) return Promise.resolve({ data: null, error: { code: "PGRST000", message: "down" } });
+    if (key === PEOPLE_BY_TEAM) return Promise.resolve({ data: matching(people, query), error: null });
+    if (key === WHO_CHECKED_IN) return Promise.resolve({ data: matching(teamCheckins, query), error: null });
+    return Promise.resolve(tables[table] ?? { data: null, error: { message: `unexpected table ${table}` } });
+  };
   const filter =
     (op: string) =>
     (column: string, value: unknown): Builder => {
@@ -117,9 +154,16 @@ function from(table: string): Builder {
       return builder;
     },
     eq: filter("eq"),
+    in: filter("in"),
+    not: (column, operator, value) => filter("not")(column, [operator, value]),
+    gt: filter("gt"),
     gte: filter("gte"),
     lte: filter("lte"),
     order: () => builder,
+    limit(count) {
+      query.limit = count;
+      return builder;
+    },
     overrideTypes: () => builder,
     maybeSingle: settle,
     then: (onFulfilled, onRejected) => settle().then(onFulfilled, onRejected),
@@ -196,6 +240,72 @@ const MEMBER_DATA = {
   ledTeams: [],
 };
 
+// The six weeks Team health shows on the portal, oldest first, ending with this week.
+const SIX_WEEKS = ["2026-08-31", "2026-09-07", "2026-09-14", "2026-09-21", LAST_WEEK, THIS_WEEK];
+
+// For Needs a look: The New Normal › Gather › IP Lab › IP Lab 1 and IP Lab 2, and The New Normal ›
+// Culture › Atlas.
+const ORG_TEAMS = [
+  team("org", "The New Normal", "organisation", null),
+  team("ga", "Gather", "division", "org", 0),
+  team("cu", "Culture", "division", "org", 1),
+  team("ip", "IP Lab", "domain", "ga"),
+  team("ip1", "IP Lab 1", "team", "ip", 0),
+  team("ip2", "IP Lab 2", "team", "ip", 1),
+  team("at", "Atlas", "team", "cu"),
+];
+// This week: IP Lab 1 red with both its check-ins red; Atlas green, but with someone red in it; IP
+// Lab 2 green all through. Three weeks ago Atlas was red, which is too long ago to list.
+const RED_THIS_WEEK = [
+  scored("at", "2026-09-14", [1, 1, 1]), // 0.6, red
+  scored("ip1", THIS_WEEK, [2, 2, 3]), // 4, red
+  scored("ip1", THIS_WEEK, [2, 1, 3]), // 2, red: IP Lab 1's mean is 3.0, red
+  scored("ip2", THIS_WEEK, [4, 3, 3]), // 12, green
+  scored("at", THIS_WEEK, [5, 5, 5]), // 30, green
+  scored("at", THIS_WEEK, [2, 2, 3]), // 4, red: Atlas's mean is 17.0, green
+];
+// Nothing red yet this week; last week IP Lab 1 was.
+const RED_LAST_WEEK = [
+  scored("at", "2026-09-14", [1, 1, 1]), // 0.6, red, too long ago
+  scored("ip1", LAST_WEEK, [2, 2, 3]), // 4, red
+  scored("ip1", LAST_WEEK, [2, 1, 3]), // 2, red
+  scored("ip2", THIS_WEEK, [4, 3, 3]), // 12, green
+  scored("at", THIS_WEEK, null), // waiting for the grader
+];
+// What app_led_team_ids gives whoever leads each node: it and everything under it.
+const LEADS = {
+  organisation: ["org", "ga", "cu", "ip", "ip1", "ip2", "at"],
+  division: ["ga", "ip", "ip1", "ip2"],
+  domain: ["ip", "ip1", "ip2"],
+  team: ["ip1"],
+};
+// The heat-map as RLS hands it to hq, or to a leader of `led` (the check-ins made in teams they
+// lead, and their own elsewhere: the viewer sits in Atlas).
+function orgData(checkins: CheckinRow[], led: keyof typeof LEADS | "hq") {
+  const covered = led === "hq" ? null : new Set(LEADS[led]);
+  return {
+    teams: ORG_TEAMS,
+    checkins: covered ? checkins.filter((c) => c.team_id === null || covered.has(c.team_id)) : checkins,
+    config: CONFIG,
+    role: led === "hq" ? ("hq" as const) : ("leader" as const),
+    ledTeams: covered ? [...covered] : [],
+  };
+}
+
+// People as they're placed now, for Who's checked in, with the names RLS would also hand back.
+const person = (n: number, team_id: string | null, name: string) => ({
+  id: `9e000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
+  team_id,
+  name,
+  auth_user_id: null,
+});
+// Someone's check-in as RLS hands it to leaders and hq: grade, review and transcript included.
+const checkinBy = (member: { id: string }, week_start: string) => ({
+  ...graded(week_start),
+  id: `c1000000-0000-4000-8000-${member.id.slice(-4)}${week_start.replaceAll("-", "")}`,
+  member_id: member.id,
+});
+
 function viewer(role: Role | null, { admin = false }: { admin?: boolean } = {}) {
   vi.mocked(loadRole).mockResolvedValue(role);
   vi.mocked(loadHeatmapData).mockResolvedValue(
@@ -223,6 +333,27 @@ function stat(label: string) {
 const weekCount = () =>
   [...(tile("weeks")?.querySelectorAll("p > span") ?? [])].map((el) => text(el)).join(" ");
 const checkinQueries = () => queries.filter((q) => q.table === "checkins");
+const asked = (key: string) => queries.filter((q) => `${q.table}: ${q.columns}` === key);
+
+// Team health's rows (each with a link for this week so far), as [name, the box].
+const glanceRows = (within: ParentNode) =>
+  [...within.querySelectorAll("li")].filter((li) => [...li.children].some((el) => el.matches("a[aria-label]")));
+const rowName = (li: Element) => text(li.firstElementChild!);
+// A row's bars (one link per week, for the pointer) and its link for this week so far.
+const barsOf = (li: Element) => li.querySelector('span[aria-hidden="true"]')!;
+const thisWeekOf = (li: Element) => [...li.children].find((el) => el.matches("a[aria-label]")) as HTMLAnchorElement;
+// What the org chart says of a box's six weeks when this week's link is read out.
+function readOut(name: string, cells: HeatmapCell[]) {
+  const { title, lines } = describeCell(name, cells[cells.length - 1], CONFIG);
+  const earlier = cells.slice(0, -1).map(cellWord).join(", ");
+  return `${title}. ${lines.join(". ")}. The 5 weeks before, oldest first: ${earlier}.`;
+}
+// Who's checked in, as [box, count] per row.
+const checkedInRows = () =>
+  [...tile("checked-in")!.querySelectorAll("li")].map((li) => {
+    const [name, count] = [...li.querySelector("div")!.children];
+    return [text(name), text(count)];
+  });
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -232,6 +363,9 @@ beforeEach(() => {
     checkins: { data: [], error: null },
     checkin_drafts: { data: null, error: null },
   };
+  people = [];
+  teamCheckins = [];
+  failing = new Set();
   queries = [];
   getClaims.mockReset().mockResolvedValue({
     data: { claims: { sub: AUTH_USER, email: "mei@example.com" } },
@@ -378,43 +512,88 @@ describe("the week strip", () => {
   });
 });
 
-// Members never see a grade. The portal's own check-in queries must ask for the week and when it
-// was submitted, of the viewer's own row only, whoever is looking: RLS hands a leader their teams'
-// rows and hq everyone's, grades included.
+// Members never see a grade. The portal's own check-in query must ask for the week and when it was
+// submitted, of the viewer's own row only, whoever is looking: RLS hands a leader their teams' rows
+// and hq everyone's, grades included. The only other check-in query, Who's checked in's, is for
+// leaders and hq and asks this week's rows for whose they are, nothing more. (Team health's grades
+// come through loadHeatmapData, for leaders and hq only; its own tests cover what it selects.)
 describe("the grade guard", () => {
+  // Any column that holds or gives away a grade, or every column at once.
+  const GRADE_COLUMNS = /\*|score|category|review|transcript|audio|graded/;
+
   beforeEach(() => {
     tables.checkins = {
       data: [graded("2026-09-07"), graded(LAST_WEEK), graded(THIS_WEEK)],
       error: null,
     };
+    const colleague = person(1, "ip1", "Ana Lim");
+    people = [colleague, { ...person(0, "at", NAME), id: MEMBER }];
+    teamCheckins = [checkinBy(colleague, THIS_WEEK), checkinBy({ id: MEMBER }, THIS_WEEK)];
   });
 
-  it.each(["member", "leader", "hq"] as const)("asks only whether and when, of %s's own check-ins", async (role) => {
-    viewer(role);
+  it.each(["member", "leader", "hq"] as const)(
+    "asks only whether and when of %s's own check-ins, and at most whose this week's are",
+    async (role) => {
+      viewer(role);
+      await render();
+      const all = checkinQueries();
+      // Every check-in query names its columns (none falls back to all of them), and none is a grade.
+      for (const query of all) {
+        expect(query.columns).not.toBeNull();
+        expect(query.columns).not.toMatch(GRADE_COLUMNS);
+      }
+
+      const own = all.filter((q) => q.columns === "week_start, submitted_at");
+      expect(own).toHaveLength(1);
+      expect(own[0].filters.filter(([, column]) => column === "member_id")).toEqual([["eq", "member_id", MEMBER]]);
+
+      const others = all.filter((q) => !own.includes(q));
+      for (const query of others) {
+        expect(query.columns).toBe("id, member_id");
+        expect(query.filters.filter(([, column]) => column === "week_start")).toEqual([
+          ["eq", "week_start", THIS_WEEK],
+        ]);
+      }
+      expect(others.length > 0).toBe(role !== "member");
+    },
+  );
+
+  it.each([
+    ["a member", false],
+    ["a member with the admin grant", true],
+  ] as const)("has %s ask nothing about anyone else: no one's check-ins, no team's people", async (_, admin) => {
+    viewer("member", { admin });
     await render();
-    const asked = checkinQueries();
-    expect(asked.length).toBeGreaterThan(0);
-    for (const query of asked) {
-      expect(query.columns).toBe("week_start, submitted_at");
-      expect(query.filters.filter(([, column]) => column === "member_id")).toEqual([["eq", "member_id", MEMBER]]);
-    }
+    expect(asked(WHO_CHECKED_IN)).toEqual([]);
+    expect(asked(PEOPLE_BY_TEAM)).toEqual([]);
+    // The only member row read is their own, by their login.
+    expect(queries.filter((q) => q.table === "members")).toEqual([
+      expect.objectContaining({ columns: "id, name", filters: [["eq", "auth_user_id", AUTH_USER]] }),
+    ]);
   });
 
-  it.each(["member", "leader", "hq"] as const)("shows %s none of their own review or transcript", async (role) => {
-    viewer(role);
+  it.each(["member", "leader", "hq"] as const)(
+    "shows %s none of their own or anyone's review, transcript or name",
+    async (role) => {
+      viewer(role);
+      const html = await render();
+      for (const secret of ["wellbeing", REVIEW, "burnt out", TRANSCRIPT, "exhausted", "Ana Lim"]) {
+        expect(html).not.toContain(secret);
+      }
+    },
+  );
+
+  it("shows a member no colour, band, score or category at all, and never loads the heat-map", async () => {
     const html = await render();
-    for (const secret of ["wellbeing", REVIEW, "burnt out", TRANSCRIPT, "exhausted"]) {
+    for (const secret of ["Green", "Yellow", "Red", "wellbeing", "mean score", "graded check-in"]) {
       expect(html).not.toContain(secret);
     }
-  });
-
-  it("shows a member no colour, band or category at all, and never loads the heat-map", async () => {
-    const html = await render();
-    for (const secret of ["Green", "Yellow", "Red", "wellbeing"]) expect(html).not.toContain(secret);
+    // No score as the page writes one (one or two decimals), anywhere in what they read.
+    expect(text()).not.toMatch(/\d\.\d/);
     expect(html).not.toMatch(/status-good|status-warning|status-critical/);
     expect(loadHeatmapData).not.toHaveBeenCalled();
-    expect(tile("team-health")).toBeNull();
-    expect(document.querySelector("[data-placeholder]")).toBeNull();
+    for (const id of ["team-health", "needs-a-look", "checked-in"]) expect(tile(id)).toBeNull();
+    expect(document.querySelector('dl[aria-label="This week in numbers"]')).toBeNull();
     // The strip still says they checked in.
     expect(weekCount()).toBe("3 check-ins in the last 8 weeks");
   });
@@ -549,35 +728,56 @@ describe("the portal's imports", () => {
 });
 
 describe("Team health", () => {
-  it("shows a leader the teams they lead, last week beside this week, each cell opening that week", async () => {
+  // Every row: six bars, oldest first, each opening its own week (the earlier ones keep this week to
+  // come back to), out of the tab order and hidden from screen readers; then this week so far, the
+  // way in from the keyboard, which reads the five weeks before out.
+  function expectRow(li: Element, teamId: string, name: string, cells: HeatmapCell[]) {
+    expect(cells.map((c) => c.week)).toEqual(SIX_WEEKS);
+    expect(rowName(li)).toBe(name);
+    const bars = [...barsOf(li).querySelectorAll("a")];
+    expect(bars.map((a) => a.getAttribute("href"))).toEqual(
+      SIX_WEEKS.map((week) => `/portal/dashboard/${teamId}/${week}${week === THIS_WEEK ? "" : `?from=${THIS_WEEK}`}`),
+    );
+    bars.forEach((a, i) => {
+      expect(a.getAttribute("tabindex")).toBe("-1");
+      expect(a.getAttribute("data-tip-title")).toBe(describeCell(name, cells[i], CONFIG).title);
+      expect(a.getAttribute("data-tip-body")).toBe(describeCell(name, cells[i], CONFIG).lines.join("\n"));
+    });
+    const now = thisWeekOf(li);
+    expect(now.getAttribute("href")).toBe(`/portal/dashboard/${teamId}/${THIS_WEEK}`);
+    expect(now.getAttribute("aria-label")).toBe(readOut(name, cells));
+  }
+
+  it("shows a leader the teams they lead, six weeks of bars beside this week so far, each to its week", async () => {
     viewer("leader");
     const html = await render();
     const health = tile("team-health")!;
     expect(text(health)).toContain("The teams you lead");
-    expect([...health.querySelectorAll("li > span:first-child")].map((el) => text(el))).toEqual([
-      "IP Lab 1",
-      "IP Lab 2",
-    ]);
+    expect(text(health)).toContain("Last 6 weeks");
+    expect(text(health)).toContain("This week so far · 5 Oct");
+    expect(text(health)).toContain("the last 6 weeks, oldest first");
+    const rows = glanceRows(health);
+    expect(rows.map(rowName)).toEqual(["IP Lab 1", "IP Lab 2"]);
 
-    // Each cell's accessible name is the org chart's description of that team's week.
-    for (const [teamId, name] of [
+    // Each box is the org chart's: its bars and its accessible name describe its weeks as there.
+    for (const [i, [teamId, name]] of [
       ["ip1", "IP Lab 1"],
       ["ip2", "IP Lab 2"],
-    ]) {
+    ].entries()) {
       const cells = cellsFor(
         LEADER_CHECKINS.filter((c) => c.team_id === teamId),
-        [LAST_WEEK, THIS_WEEK],
+        SIX_WEEKS,
         CONFIG,
       );
-      for (const cell of cells) {
-        const a = link(`/portal/dashboard/${teamId}/${cell.week}`, health);
-        expect(a, `${teamId} ${cell.week}`).not.toBeNull();
-        const { title, lines } = describeCell(name, cell, CONFIG);
-        expect(a!.getAttribute("aria-label")).toBe(`${title}. ${lines.join(". ")}`);
-      }
+      expectRow(rows[i], teamId, name, cells);
     }
-    expect(link("/portal/dashboard/ip1/2026-09-28", health)!.getAttribute("aria-label")).toBe(
-      "IP Lab 1 · week of 28 Sept 2026. Green · mean score 12.0. 1 graded check-in: 1 green, 0 yellow, 0 red",
+    expect(thisWeekOf(rows[0]).getAttribute("aria-label")).toBe(
+      "IP Lab 1 · week of 5 Oct 2026. Red · mean score 4.0. 1 graded check-in: 0 green, 0 yellow, 1 red." +
+        " The 5 weeks before, oldest first: no check-ins, no check-ins, no check-ins, no check-ins, green.",
+    );
+    expect(thisWeekOf(rows[1]).getAttribute("aria-label")).toBe(
+      "IP Lab 2 · week of 5 Oct 2026. Nothing graded yet. 1 waiting for the grader." +
+        " The 5 weeks before, oldest first: no check-ins, no check-ins, no check-ins, no check-ins, no check-ins.",
     );
 
     // Their own check-in in Atlas is their grade, not a team's: it stays off the glance and the
@@ -598,53 +798,249 @@ describe("Team health", () => {
     const other = [...health.querySelectorAll("p")].find((p) => text(p) === "Other");
     expect(other).toBeDefined();
     const otherList = other!.nextElementSibling!;
-    expect(text(otherList)).toContain("Loose Ends");
-    expect(link(`/portal/dashboard/lo/${LAST_WEEK}`, otherList)).not.toBeNull();
-    expect(link(`/portal/dashboard/lo/${THIS_WEEK}`, otherList)).not.toBeNull();
-    expect(text(health)).toContain("The New Normal");
-    expect(text(health)).toContain("Gather");
+    expect(glanceRows(health).map(rowName)).toEqual(["The New Normal", "Gather", "Loose Ends"]);
+    expect(glanceRows(otherList).map(rowName)).toEqual(["Loose Ends"]);
+
+    const cells = (ids: string[]) =>
+      cellsFor(HQ_DATA.checkins.filter((c) => c.team_id !== null && ids.includes(c.team_id)), SIX_WEEKS, CONFIG);
+    const [organisation, gather, looseEnds] = glanceRows(health);
+    expectRow(organisation, "org", "The New Normal", cells(["org", "ga", "ip", "ip1"]));
+    expectRow(gather, "ga", "Gather", cells(["ga", "ip", "ip1"]));
+    expectRow(looseEnds, "lo", "Loose Ends", cells(["lo"]));
+    expect(link(`/portal/dashboard/lo/${LAST_WEEK}?from=${THIS_WEEK}`, otherList)).not.toBeNull();
+    expect(thisWeekOf(looseEnds).getAttribute("aria-label")).toBe(
+      "Loose Ends · week of 5 Oct 2026. No check-ins." +
+        " The 5 weeks before, oldest first: no check-ins, no check-ins, no check-ins, no check-ins, yellow.",
+    );
 
     // The no-team check-in counts towards this week, but isn't a row here (it stays on Team health).
     expect(stat("Check-ins this week")).toBe("2");
     expect(stat("Check-ins last week")).toBe("2");
     expect(html).not.toContain("No team");
+    expect(link("/portal/dashboard/none/2026-10-05")).toBeNull();
   });
 
   it("says so when the heat-map can't be loaded, and the rest of the page still renders", async () => {
-    viewer("leader");
+    viewer("hq");
     vi.mocked(loadHeatmapData).mockRejectedValue(new Error("Couldn't load check-ins: timeout"));
     await render();
     const health = tile("team-health")!;
     expect(text(health.querySelector('[role="alert"]')!)).toBe("Couldn't load team health just now.");
     expect(text(link("/portal/dashboard", health)!)).toBe("Open Team health");
     expect(document.querySelector('dl[aria-label="This week in numbers"]')).toBeNull();
+    // Nothing else that comes from it, nor anything asked for it.
+    expect(tile("needs-a-look")).toBeNull();
+    expect(tile("checked-in")).toBeNull();
+    expect(asked(WHO_CHECKED_IN)).toEqual([]);
+    expect(asked(PEOPLE_BY_TEAM)).toEqual([]);
     expect(text(tile("checkin")!)).toContain("Record this week's check-in");
     expect(signOutButtons()).toHaveLength(1);
   });
 
-  it("is left out for a leader whose heat-map came back as a member's", async () => {
+  it("is left out, with all that goes with it, for a leader whose heat-map came back as a member's", async () => {
     viewer("leader");
     vi.mocked(loadHeatmapData).mockResolvedValue(MEMBER_DATA);
     const html = await render();
-    expect(tile("team-health")).toBeNull();
+    for (const id of ["team-health", "needs-a-look", "checked-in"]) expect(tile(id)).toBeNull();
+    expect(document.querySelector('dl[aria-label="This week in numbers"]')).toBeNull();
     expect(html).not.toMatch(/status-good|status-warning|status-critical/);
+    expect(asked(WHO_CHECKED_IN)).toEqual([]);
+    expect(asked(PEOPLE_BY_TEAM)).toEqual([]);
   });
 });
 
-// Tiles still to come can't pass for real data: words only, no numbers or links.
-describe("the placeholders", () => {
-  it.each(["leader", "hq"] as const)("say Coming soon, with no numbers and nothing to open, for %s", async (role) => {
-    viewer(role);
+// For hq and leaders of a division or the organisation (src/lib/dashboard/needs-a-look.ts): the
+// smallest boxes with a red check-in this week, red boxes first, each opening that week.
+describe("Needs a look", () => {
+  const spots = () => [...tile("needs-a-look")!.querySelectorAll("li")];
+  // A spot as it reads: where it sits, its name, and how many were red.
+  const spotText = (li: Element) =>
+    [...li.querySelector("a > span")!.children].map((el) => text(el));
+  const IP_LAB_1 =
+    "IP Lab 1 · week of 5 Oct 2026. Red · mean score 3.0. 2 graded check-ins: 0 green, 0 yellow, 2 red";
+
+  it("shows hq every box with someone red this week, the red ones first, named within the organisation", async () => {
+    viewer("hq");
+    vi.mocked(loadHeatmapData).mockResolvedValue(orgData(RED_THIS_WEEK, "hq"));
     await render();
-    const placeholders = [...document.querySelectorAll<HTMLElement>("[data-placeholder]")];
-    expect(placeholders).toHaveLength(2);
-    for (const section of placeholders) {
-      expect(text(section)).toContain("Coming soon");
-      expect(text(section)).not.toMatch(/\d/);
-      expect(section.innerHTML).not.toContain("<a");
-      expect(section.querySelector("a, button, input, [tabindex]")).toBeNull();
-    }
+    const tileEl = tile("needs-a-look")!;
+    expect(text(tileEl)).not.toContain("Nothing red");
+    const [ipLab1, atlas, ...rest] = spots();
+    expect(rest).toEqual([]);
+
+    expect(spotText(ipLab1)).toEqual(["Gather › IP Lab", "IP Lab 1", "2 of 2 graded check-ins red"]);
+    const toIpLab1 = ipLab1.querySelector("a")!;
+    expect(toIpLab1.getAttribute("href")).toBe(`/portal/dashboard/ip1/${THIS_WEEK}`);
+    expect(toIpLab1.getAttribute("aria-label")).toBe(IP_LAB_1);
+    const ip1Cell = cellsFor(RED_THIS_WEEK.filter((c) => c.team_id === "ip1"), [THIS_WEEK], CONFIG)[0];
+    const { title, lines } = describeCell("IP Lab 1", ip1Cell, CONFIG);
+    expect(toIpLab1.getAttribute("aria-label")).toBe(`${title}. ${lines.join(". ")}`);
+
+    // Atlas is green, but someone in it was red.
+    expect(spotText(atlas)).toEqual(["Culture", "Atlas", "1 of 2 graded check-ins red"]);
+    expect(atlas.querySelector("a")!.getAttribute("href")).toBe(`/portal/dashboard/at/${THIS_WEEK}`);
+    expect(atlas.querySelector("a")!.getAttribute("aria-label")).toBe(
+      "Atlas · week of 5 Oct 2026. Green · mean score 17.0. 2 graded check-ins: 1 green, 0 yellow, 1 red",
+    );
+    // Only this week's: Atlas's red three weeks ago isn't listed.
+    expect(tileEl.querySelectorAll("a")).toHaveLength(2);
   });
+
+  it.each(["division", "organisation"] as const)(
+    "shows a leader of the %s the boxes they lead with someone red this week",
+    async (led) => {
+      viewer("leader");
+      vi.mocked(loadHeatmapData).mockResolvedValue(orgData(RED_THIS_WEEK, led));
+      await render();
+      const names = spots().map((li) => spotText(li)[1]);
+      expect(names).toEqual(led === "division" ? ["IP Lab 1"] : ["IP Lab 1", "Atlas"]);
+      const ipLab1 = spots()[0];
+      expect(spotText(ipLab1)).toEqual(["Gather › IP Lab", "IP Lab 1", "2 of 2 graded check-ins red"]);
+      expect(ipLab1.querySelector("a")!.getAttribute("href")).toBe(`/portal/dashboard/ip1/${THIS_WEEK}`);
+      expect(ipLab1.querySelector("a")!.getAttribute("aria-label")).toBe(IP_LAB_1);
+    },
+  );
+
+  it("says nothing is red so far this week when nothing was last week either", async () => {
+    viewer("hq");
+    vi.mocked(loadHeatmapData).mockResolvedValue(
+      orgData(
+        [
+          scored("at", "2026-09-14", [1, 1, 1]), // red, too long ago
+          scored("ip1", LAST_WEEK, [4, 3, 3]), // 12, green
+          scored("at", THIS_WEEK, [3, 3, 3]), // 9, yellow
+        ],
+        "hq",
+      ),
+    );
+    await render();
+    const tileEl = tile("needs-a-look")!;
+    expect(text(tileEl.querySelector("p")!)).toBe("Nothing red so far this week.");
+    expect(text(tileEl)).not.toContain("Last week");
+    expect(tileEl.querySelector("li, a")).toBeNull();
+  });
+
+  it("shows last week's when nothing is red so far this week, each opening last week", async () => {
+    viewer("hq");
+    vi.mocked(loadHeatmapData).mockResolvedValue(orgData(RED_LAST_WEEK, "hq"));
+    await render();
+    const tileEl = tile("needs-a-look")!;
+    expect(text(tileEl.querySelector("p")!)).toBe("Nothing red so far this week. Last week:");
+    const [ipLab1, ...rest] = spots();
+    expect(rest).toEqual([]);
+    expect(spotText(ipLab1)).toEqual(["Gather › IP Lab", "IP Lab 1", "2 of 2 graded check-ins red"]);
+    const to = ipLab1.querySelector("a")!;
+    expect(to.getAttribute("href")).toBe(`/portal/dashboard/ip1/${LAST_WEEK}`);
+    expect(to.getAttribute("aria-label")).toBe(
+      "IP Lab 1 · week of 28 Sept 2026. Red · mean score 3.0. 2 graded check-ins: 0 green, 0 yellow, 2 red",
+    );
+    expect(tileEl.querySelectorAll("a")).toHaveLength(1);
+  });
+
+  it.each([
+    ["a domain", "domain"],
+    ["a team", "team"],
+  ] as const)("isn't there for a leader of %s, even with someone red in it", async (_, led) => {
+    viewer("leader");
+    vi.mocked(loadHeatmapData).mockResolvedValue(orgData(RED_THIS_WEEK, led));
+    const html = await render();
+    // Team health still shows them the red.
+    expect(glanceRows(tile("team-health")!).length).toBeGreaterThan(0);
+    expect(tile("needs-a-look")).toBeNull();
+    expect(html).not.toContain("Needs a look");
+  });
+
+  it("isn't there for a team leader on the fixture's own heat-map either, nor for a member", async () => {
+    viewer("leader");
+    let html = await render();
+    expect(tile("team-health")).not.toBeNull();
+    expect(tile("needs-a-look")).toBeNull();
+    expect(html).not.toContain("Needs a look");
+
+    viewer("member");
+    html = await render();
+    expect(tile("needs-a-look")).toBeNull();
+    expect(html).not.toContain("Needs a look");
+  });
+});
+
+// For leaders and hq: how many of the people in each box on Team health have checked in this week.
+// Counts only, never who.
+describe("Who's checked in", () => {
+  const spots = () => [...(tile("needs-a-look")?.querySelectorAll("li") ?? [])];
+
+  it("shows a leader, for each team they lead, how many of the people placed there have checked in", async () => {
+    viewer("leader");
+    const [ana, ben, chi] = [person(1, "ip1", "Ana Lim"), person(2, "ip1", "Ben Ong"), person(3, "ip2", "Chi Ng")];
+    const me = { ...person(0, "at", NAME), id: MEMBER };
+    people = [ana, ben, chi, me];
+    teamCheckins = [
+      checkinBy(ana, THIS_WEEK),
+      checkinBy(chi, THIS_WEEK),
+      checkinBy(me, THIS_WEEK),
+      checkinBy(ben, LAST_WEEK), // last week's: not this week's count
+    ];
+    const html = await render();
+    expect(text(tile("checked-in")!)).toContain("This week so far. Counts only, never names.");
+    expect(checkedInRows()).toEqual([
+      ["IP Lab 1", "1 of 2 people checked in"],
+      ["IP Lab 2", "1 of 1 people checked in"],
+    ]);
+    for (const name of ["Ana Lim", "Ben Ong", "Chi Ng"]) expect(html).not.toContain(name);
+    expect(tile("checked-in")!.querySelector("a")).toBeNull();
+
+    // People by the teams they lead; check-ins by this week, whose only.
+    const [byTeam, ...more] = asked(PEOPLE_BY_TEAM);
+    expect(more).toEqual([]);
+    expect(byTeam.filters).toEqual([["in", "team_id", ["ip1", "ip2"]]]);
+    expect(asked(WHO_CHECKED_IN).map((q) => q.filters)).toEqual([[["eq", "week_start", THIS_WEEK]]]);
+  });
+
+  it("shows hq the organisation, its divisions and Other, with No one here yet for an empty box", async () => {
+    viewer("hq");
+    const [ana, ben, unplaced] = [person(1, "ip1", "Ana Lim"), person(2, "ga", "Ben Ong"), person(3, null, "Chi Ng")];
+    const me = { ...person(0, "org", NAME), id: MEMBER };
+    people = [ana, ben, unplaced, me];
+    teamCheckins = [checkinBy(ana, THIS_WEEK), checkinBy(me, THIS_WEEK), checkinBy(unplaced, THIS_WEEK)];
+    await render();
+    expect(checkedInRows()).toEqual([
+      ["The New Normal", "2 of 3 people checked in"],
+      ["Gather", "1 of 2 people checked in"],
+      ["Loose Ends", "No one here yet"],
+    ]);
+    // Everyone placed somewhere, read by team, never someone with no team.
+    expect(asked(PEOPLE_BY_TEAM).map((q) => q.filters)).toEqual([[["not", "team_id", ["is", null]]]]);
+  });
+
+  it.each([
+    ["the people", PEOPLE_BY_TEAM],
+    ["this week's check-ins", WHO_CHECKED_IN],
+  ])("says so when %s can't be loaded, and the rest of team health stands", async (_, key) => {
+    viewer("hq");
+    vi.mocked(loadHeatmapData).mockResolvedValue(orgData(RED_THIS_WEEK, "hq"));
+    people = [person(1, "ip1", "Ana Lim")];
+    failing.add(key);
+    await render();
+    const checkedIn = tile("checked-in")!;
+    expect(text(checkedIn.querySelector('[role="alert"]')!)).toBe("Couldn't load who's checked in just now.");
+    expect(checkedIn.querySelector("li")).toBeNull();
+    expect(text(checkedIn)).not.toMatch(/\d/);
+    expect(glanceRows(tile("team-health")!).map(rowName)).toEqual(["The New Normal", "Gather", "Culture"]);
+    expect(spots().length).toBe(2);
+    expect(stat("Check-ins this week")).toBe("5");
+  });
+
+  it.each([false, true])("is never shown to a member (admin: %s)", async (admin) => {
+    viewer("member", { admin });
+    people = [person(1, "ip1", "Ana Lim")];
+    teamCheckins = [checkinBy(people[0] as { id: string }, THIS_WEEK)];
+    const html = await render();
+    expect(tile("checked-in")).toBeNull();
+    expect(html).not.toMatch(/Who(&#x27;|')s checked in|people checked in|No one here yet/);
+    expect(asked(PEOPLE_BY_TEAM)).toEqual([]);
+    expect(asked(WHO_CHECKED_IN)).toEqual([]);
+  });
+
 });
 
 describe("Sign out", () => {

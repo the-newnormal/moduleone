@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, Suspense, use, useEffect, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { releaseSave, trackSave } from "@/app/portal/checkin/pending-save";
+import { currentSave, forgetDeletedTake, releaseSave, trackSave } from "@/app/portal/checkin/pending-save";
 import type { SaveOutcome, Take } from "@/app/portal/checkin/take";
 import { deferred, render, text } from "@/test/dom";
 import { SaveWatch } from "./save-watch";
@@ -43,14 +43,27 @@ function saving() {
 }
 
 // Settles the save and lets everything waiting on it run (pendingSave, then the tile's re-render).
-const settleWith = (save: ReturnType<typeof saving>, outcome: SaveOutcome) =>
+const settleWith = (save: { resolve: (outcome: SaveOutcome) => void }, outcome: SaveOutcome) =>
   act(async () => {
     save.resolve(outcome);
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
+// The recorder as the member leaves it for the portal: its unmount effect starts saving the take
+// (recorder.tsx), so the save only exists once React runs effect cleanups, in the same commit that
+// renders the portal, after SaveWatch has already rendered.
+function LeavingRecorder({ save }: { save: Promise<SaveOutcome> }) {
+  useEffect(
+    () => () => {
+      void trackSave(save);
+    },
+    [save],
+  );
+  return <p>Recording…</p>;
+}
+
 beforeEach(() => {
-  router.refresh.mockClear();
+  router.refresh.mockReset();
 });
 
 // The save module lives as long as the tab; let go of whatever a test left held.
@@ -63,6 +76,7 @@ describe("SaveWatch", () => {
     await render(tile);
     expect(text()).toBe("Record this week's check-in");
     expect(status()).toBeNull();
+    expect(alert()).toBeNull();
     expect(router.refresh).not.toHaveBeenCalled();
   });
 
@@ -73,6 +87,25 @@ describe("SaveWatch", () => {
     expect(text()).not.toContain("Record this week's check-in");
     expect(links()).toEqual([{ text: "Open your check-in", href: "/portal/checkin" }]);
     expect(router.refresh).not.toHaveBeenCalled();
+  });
+
+  // Reading the save while rendering would miss it: the recorder's cleanup hasn't run yet then.
+  it("watches a save the recorder starts as it unmounts, in the same commit that shows the portal", async () => {
+    const save = deferred<SaveOutcome>();
+    const page = await render(<LeavingRecorder save={save.promise} />);
+    expect(currentSave()).toBeNull();
+
+    await page.rerender(tile); // one commit: the recorder goes, the portal's tile comes
+    expect(currentSave()).toBe(save.promise);
+    expect(text(status()!)).toContain("Saving your recording…");
+    expect(text()).not.toContain("Record this week's check-in");
+    expect(text()).not.toContain("Recording…");
+    expect(router.refresh).not.toHaveBeenCalled();
+
+    await settleWith(save, { step: "saved" });
+    expect(router.refresh).toHaveBeenCalledOnce();
+    expect(status()).toBeNull();
+    expect(text()).toBe("Record this week's check-in");
   });
 
   it.each<[string, SaveOutcome]>([
@@ -87,7 +120,49 @@ describe("SaveWatch", () => {
     await settleWith(save, outcome);
     expect(router.refresh).toHaveBeenCalledOnce();
     expect(status()).toBeNull();
+    expect(alert()).toBeNull();
     expect(text()).toBe("Record this week's check-in");
+  });
+
+  // router.refresh() in Next.js updates the router in the transition it's called in, and that
+  // transition waits for the server's new page. Here the refresh swaps in a tile that suspends until
+  // `arrived` resolves, as the new page would. Called outside a transition, the swap would be urgent:
+  // the boundary would fall back to "Loading…" and the old tile would go at once.
+  it("keeps saying it's saving until the refreshed page has arrived", async () => {
+    const arrived = deferred<void>();
+    function RefreshedTile() {
+      use(arrived.promise);
+      return <p>Your draft is saved</p>;
+    }
+    const page = { refresh: () => {} };
+    function Page() {
+      const [refreshed, setRefreshed] = useState(false);
+      useEffect(() => {
+        page.refresh = () => setRefreshed(true);
+      }, []);
+      return (
+        <Suspense fallback={<p>Loading…</p>}>
+          <SaveWatch>{refreshed ? <RefreshedTile /> : <p>Record this week&apos;s check-in</p>}</SaveWatch>
+        </Suspense>
+      );
+    }
+    router.refresh.mockImplementation(() => page.refresh());
+
+    const save = saving();
+    await render(<Page />);
+    await settleWith(save, { step: "saved" });
+    expect(router.refresh).toHaveBeenCalledOnce();
+    // The refresh is under way: still saying so, never the fallback, never the stale tile.
+    expect(text(status()!)).toContain("Saving your recording…");
+    expect(text()).not.toContain("Loading…");
+    expect(text()).not.toContain("Record this week's check-in");
+
+    await act(async () => {
+      arrived.resolve();
+    });
+    expect(router.refresh).toHaveBeenCalledOnce();
+    expect(status()).toBeNull();
+    expect(text()).toBe("Your draft is saved");
   });
 
   it("sends the member back to the check-in when the take failed to save, without refreshing", async () => {
@@ -99,6 +174,18 @@ describe("SaveWatch", () => {
     expect(text(alert()!)).toBe("Your last recording hasn't been saved yet.");
     expect(links()).toEqual([{ text: "Open your check-in to try again", href: "/portal/checkin" }]);
     expect(text()).not.toContain("Record this week's check-in");
+  });
+
+  // The member deleted the draft that save had made before its reply was lost: nothing is at risk.
+  it("refreshes rather than offering a retry when the take that failed was the draft since deleted", async () => {
+    const deletedTake: Take = { ...take, uploadedPath: "m1/deleted-take.webm" };
+    const save = saving();
+    await render(tile);
+    forgetDeletedTake("m1/deleted-take.webm");
+    await settleWith(save, { ...failed, take: deletedTake });
+    expect(alert()).toBeNull();
+    expect(router.refresh).toHaveBeenCalledOnce();
+    expect(text()).toBe("Record this week's check-in");
   });
 
   it("doesn't refresh a page the member has already left", async () => {
