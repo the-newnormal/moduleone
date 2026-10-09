@@ -4,6 +4,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { loadHeatmapData } from "@/lib/dashboard/load";
 import { buildOrg, coverage } from "@/lib/dashboard/org";
+import { teamCounts } from "@/lib/dashboard/summary";
 import {
   formatWeek,
   isWeekStart,
@@ -18,6 +19,7 @@ import { createClient } from "@/lib/supabase/server";
 import { DashboardFrame, Legend } from "./frame";
 import { OrgChart } from "./org-chart";
 import { signInAgain } from "./sign-in";
+import { BandSummary } from "./summary";
 
 export const metadata: Metadata = { title: "Team health · Module One" };
 
@@ -55,7 +57,11 @@ export default async function OrgChartPage({ searchParams }: PageProps<"/portal/
   const next = week < thisWeek ? shiftWeek(week, 1) : null;
 
   return (
-    <DashboardFrame view="org" role={role}>
+    <DashboardFrame
+      view="org"
+      role={role}
+      aside={role && <BandSummary counts={teamCounts(org)} week={week} thisWeek={thisWeek} role={role} />}
+    >
       <nav aria-label="Week" className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
         <p className="mr-1 text-lg font-medium">
           Week of {formatWeek(week, true)}

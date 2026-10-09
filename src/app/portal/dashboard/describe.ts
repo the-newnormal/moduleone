@@ -30,6 +30,6 @@ export function cellWord(cell: HeatmapCell): string {
   return cell.pending > 0 ? "waiting" : "no check-ins";
 }
 
-// A green or yellow mean can hide a red check-in.
-export const hidesRed = (cell: HeatmapCell) =>
-  cell.health !== null && cell.health.band !== "red" && cell.health.bands.red > 0;
+// How many of the week's graded check-ins were red. Boxes print it whatever their colour, since a
+// green or yellow mean can hide red check-ins.
+export const redCount = (cell: HeatmapCell) => cell.health?.bands.red ?? 0;

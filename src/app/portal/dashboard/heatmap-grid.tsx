@@ -1,11 +1,11 @@
-import { Clock, OctagonAlert } from "lucide-react";
+import { Clock } from "lucide-react";
 import Link from "next/link";
 import type { HeatmapGroup, HeatmapRow } from "@/lib/dashboard/heatmap";
 import type { HeatmapCell } from "@/lib/dashboard/org";
 import { formatWeek } from "@/lib/dashboard/weeks";
 import { formatScore, type HealthConfig } from "@/lib/health/health";
-import { BANDS } from "./band";
-import { describeCell, hidesRed } from "./describe";
+import { BANDS, RedCount } from "./band";
+import { describeCell, redCount } from "./describe";
 import { HeatmapTooltip } from "./heatmap-tooltip";
 
 // With a single week there's room to spell the cell out instead of leaving it to the tooltip.
@@ -50,6 +50,8 @@ function Cell({
   // Everything after the band line: the colour counts and anything still waiting.
   const detail = cell.health ? lines.slice(1).join(" · ") : lines[lines.length - 1];
   const band = cell.health ? BANDS[cell.health.band] : null;
+  // How many were red, under the score. A single week already spells it out in `detail`.
+  const reds = detailed ? 0 : redCount(cell);
 
   return (
     <td className={td}>
@@ -58,31 +60,34 @@ function Cell({
         aria-label={`${title}. ${lines.join(". ")}.`}
         data-tip-title={title}
         data-tip-body={lines.join("\n")}
-        className={`relative flex items-center gap-1.5 rounded-md text-sm font-medium tabular-nums outline-offset-2 transition hover:ring-2 hover:ring-foreground/25 focus-visible:outline-2 focus-visible:outline-ring ${size} ${band ? band.tint : "bg-muted"}`}
+        className={`relative flex items-center rounded-md text-sm font-medium tabular-nums outline-offset-2 transition hover:ring-2 hover:ring-foreground/25 focus-visible:outline-2 focus-visible:outline-ring ${reds > 0 ? "flex-col justify-center gap-0.5" : "gap-1.5"} ${size} ${band ? band.tint : "bg-muted"}`}
       >
-        {band ? (
-          <>
-            <band.Icon aria-hidden className={`size-4 shrink-0 ${band.icon}`} strokeWidth={2.25} />
-            {formatScore(cell.health!.score, config)}
-          </>
+        <span className="flex items-center gap-1.5">
+          {band ? (
+            <>
+              <band.Icon aria-hidden className={`size-4 shrink-0 ${band.icon}`} strokeWidth={2.25} />
+              {formatScore(cell.health!.score, config)}
+            </>
+          ) : (
+            <>
+              <Clock aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+              {!detailed && cell.pending}
+            </>
+          )}
+        </span>
+        {reds > 0 ? (
+          // A second line: the count, and the clock beside it rather than against the score.
+          <span className="flex items-center gap-1">
+            <RedCount count={reds} />
+            {cell.pending > 0 && <Clock aria-hidden className="size-3 shrink-0 text-muted-foreground" strokeWidth={2.5} />}
+          </span>
         ) : (
-          <>
-            <Clock aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-            {!detailed && cell.pending}
-          </>
+          band &&
+          cell.pending > 0 && (
+            <Clock aria-hidden className="absolute right-1 bottom-1 size-3 text-muted-foreground" strokeWidth={2.5} />
+          )
         )}
         {detailed && <span className="pr-3 font-normal text-muted-foreground">{detail}</span>}
-        {/* A green or yellow mean can hide a red check-in; flag it in the corner. */}
-        {hidesRed(cell) && (
-          <OctagonAlert
-            aria-hidden
-            className="absolute top-1 right-1 size-3 text-status-critical"
-            strokeWidth={2.5}
-          />
-        )}
-        {band && cell.pending > 0 && (
-          <Clock aria-hidden className="absolute right-1 bottom-1 size-3 text-muted-foreground" strokeWidth={2.5} />
-        )}
       </Link>
     </td>
   );
