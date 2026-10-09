@@ -4,7 +4,8 @@
 --
 -- The divisions, domains and teams come from migration 0003 (the founding structure); this file
 -- puts people in three of its teams, found by code: IP Lab 1 (IP.1, under Gather › IP Lab), Atlas
--- (AT.X, a Culture domain) and Youth Day 1 (YD.1, under Special Projects › Youth Day).
+-- (AT.X, a Culture domain) and Youth Day 1 (YD.1, under Special Projects › Youth Day), and a
+-- division head, Nora Lee, in the Gather division itself (found by kind and name).
 --
 -- Sign in at http://localhost:3000/login as any of these, then open the link from Mailpit
 -- (http://127.0.0.1:54324):

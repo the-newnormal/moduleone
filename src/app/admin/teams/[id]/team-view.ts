@@ -70,13 +70,15 @@ export type Candidate = { id: string; name: string; teamId: string | null; teamN
 // A leader who leads this team through team_leads, or could be made to. inThisTeam: they also sit
 // in this team (a lead row added before they moved here), so they'd still lead it without the row.
 // viaDomain: the nearest node above this one (its domain or division) that they lead too (they sit
-// in it or have a lead row for it), so they'd also still lead this one without the row.
+// in it or have a lead row for it), so they'd also still lead this one without the row; viaOwnTeam:
+// that node is the one they sit in.
 export type LeadPerson = {
   id: string;
   name: string;
   teamName: string | null;
   inThisTeam: boolean;
   viaDomain: string | null;
+  viaOwnTeam: boolean;
 };
 
 // A leader who leads this node because they lead a node above it, its domain or division (they sit
@@ -257,13 +259,17 @@ export function buildTeamView({
     .map((m) => ({ id: m.id, name: m.name, teamId: m.team_id, teamName: nameOfTeam(m.team_id) }))
     .sort((a, b) => Number(a.teamId !== null) - Number(b.teamId !== null) || byName(a, b));
 
-  const asLead = (m: MemberRow): LeadPerson => ({
-    id: m.id,
-    name: m.name,
-    teamName: nameOfTeam(m.team_id),
-    inThisTeam: m.team_id === teamId,
-    viaDomain: m.role === "leader" ? (ledAbove(m)?.name ?? null) : null,
-  });
+  const asLead = (m: MemberRow): LeadPerson => {
+    const via = m.role === "leader" ? ledAbove(m) : undefined;
+    return {
+      id: m.id,
+      name: m.name,
+      teamName: nameOfTeam(m.team_id),
+      inThisTeam: m.team_id === teamId,
+      viaDomain: via?.name ?? null,
+      viaOwnTeam: via !== undefined && via.id === m.team_id,
+    };
+  };
   const leadPeople: LeadPerson[] = [...leadIds]
     .map((id) => memberById.get(id))
     .filter((m): m is MemberRow => m !== undefined)

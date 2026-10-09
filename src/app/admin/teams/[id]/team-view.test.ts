@@ -106,10 +106,16 @@ describe("buildTeamView", () => {
     expect(domain.leadOptions.map((l) => l.name)).not.toContain("Cat Ng");
     // On IP Lab 2, Leo's own lead row is listed (removable), saying he'd still lead it through Gather.
     const team = view("team-ip2", members, leads)!;
-    expect(team.leads.map((l) => [l.name, l.viaDomain])).toEqual([["Leo Tan", "Gather"]]);
+    expect(team.leads.map((l) => [l.name, l.viaDomain, l.viaOwnTeam])).toEqual([["Leo Tan", "Gather", false]]);
+    // Bo sits in Gather; a lead row of his on IP Lab 2 is through the node he sits in.
+    const bo = view("team-ip2", members, [...leads, { team_id: "team-ip2", member_id: "m-bo" }])!;
+    expect(bo.leads.find((l) => l.name === "Bo Teo")).toMatchObject({ viaDomain: "Gather", viaOwnTeam: true });
     expect(team.inheritedLeads.map((l) => l.name)).toEqual(["Bo Teo", "Cat Ng"]);
     // Leo sits in IP Lab 1, so removing him from it keeps him leading it through Gather.
     expect(view("team-ip1", members, leads)!.people.find((p) => p.id === "m-leo")!.leadsDomain).toBe("Gather");
+    // Cat leads both Gather and IP Lab: IP Lab 1 names IP Lab, the nearer.
+    const both = [...leads, { team_id: "dom-ip", member_id: "m-cat" }];
+    expect(view("team-ip1", members, both)!.inheritedLeads.find((l) => l.name === "Cat Ng")!.domainName).toBe("IP Lab");
     // A division has nothing above it.
     expect(view("div-gather", members, leads)!.inheritedLeads).toEqual([]);
   });
@@ -233,7 +239,7 @@ describe("buildTeamView", () => {
   it("separates leaders who sit in the team from team_leads rows", () => {
     const v = view("team-ip1")!;
     expect(v.ownLeaders).toEqual([{ id: "m-leo", name: "Leo Tan", domain: null }]);
-    expect(v.leads).toEqual([{ id: "m-ana", name: "Ana Lee", teamName: "IP Lab 2", inThisTeam: false, viaDomain: null }]);
+    expect(v.leads).toEqual([{ id: "m-ana", name: "Ana Lee", teamName: "IP Lab 2", inThisTeam: false, viaDomain: null, viaOwnTeam: false }]);
   });
 
   it("lists a leader who sits in the team and also leads its domain once, saying both", () => {
@@ -271,8 +277,8 @@ describe("buildTeamView", () => {
     const v = view("team-ip1", MEMBERS, leads)!;
     expect(v.ownLeaders).toEqual([]);
     expect(v.leads).toEqual([
-      { id: "m-ana", name: "Ana Lee", teamName: "IP Lab 2", inThisTeam: false, viaDomain: null },
-      { id: "m-leo", name: "Leo Tan", teamName: "IP Lab 1", inThisTeam: true, viaDomain: null },
+      { id: "m-ana", name: "Ana Lee", teamName: "IP Lab 2", inThisTeam: false, viaDomain: null, viaOwnTeam: false },
+      { id: "m-leo", name: "Leo Tan", teamName: "IP Lab 1", inThisTeam: true, viaDomain: null, viaOwnTeam: false },
     ]);
   });
 
@@ -284,7 +290,7 @@ describe("buildTeamView", () => {
       { id: "m-leo", name: "Leo Tan", domainId: "dom-legacy", domainName: "Legacy" },
     ]);
     expect(v.leadOptions.map((o) => o.name)).toEqual(["Ana Lee", "Cat Ng"]);
-    // A domain inherits nothing (divisions have no leads).
+    // An unplaced domain inherits nothing: there's nothing above it.
     expect(view("dom-legacy")!.inheritedLeads).toEqual([]);
   });
 
@@ -302,8 +308,8 @@ describe("buildTeamView", () => {
 
   it("offers leaders from any team as leads, but not the admin, current leads, or leaders already in it", () => {
     expect(view("team-ip1")!.leadOptions).toEqual([
-      { id: "m-cat", name: "Cat Ng", teamName: null, inThisTeam: false, viaDomain: null },
-      { id: "m-eve", name: "Ève Tan", teamName: "Legacy", inThisTeam: false, viaDomain: null },
+      { id: "m-cat", name: "Cat Ng", teamName: null, inThisTeam: false, viaDomain: null, viaOwnTeam: false },
+      { id: "m-eve", name: "Ève Tan", teamName: "Legacy", inThisTeam: false, viaDomain: null, viaOwnTeam: false },
     ]);
     expect(view("team-ip2")!.leadOptions.map((o) => o.name)).toEqual(["Cat Ng", "Ève Tan"]);
   });

@@ -23,7 +23,7 @@
 -- team. The admin sections add more nodes by name (admins can't choose ids) and look them up with
 -- pg_temp.team().
 begin;
-select plan(309);
+select plan(310);
 
 -- ---------- tree lock ----------
 -- Whether running sql takes the tree lock. It runs in a subtransaction that is rolled back, which
@@ -1074,6 +1074,10 @@ select throws_ok(
 );
 reset role;
 set local role service_role;
+select alike(
+  pg_temp.error_of($$update team_leads set team_id = 'b1000000-0000-4000-8000-000000000035' where team_id = 'b1000000-0000-4000-8000-000000000022' and member_id = 'c1000000-0000-4000-8000-000000000011'$$),
+  '23514: That domain is archived. Restore it first.', 'the server cannot point a lead row at an archived domain either'
+);
 select alike(
   pg_temp.error_of($$update team_leads set member_id = 'c1000000-0000-4000-8000-000000000012' where team_id = 'b1000000-0000-4000-8000-000000000022' and member_id = 'c1000000-0000-4000-8000-000000000011'$$),
   '23514: Only members with the leader role%', 'nor at someone who is not a leader'

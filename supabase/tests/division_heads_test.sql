@@ -5,12 +5,12 @@
 --   DH Division                       DH Other
 --     DH Domain                         DH Other domain  (other)
 --       DH Team  (teammate)
---   admin    role leader, no team, grant admin
+--   admin    role leader, no team, grant admin; at the end placed in DH Division
 --   head     a leader with no team yet, then placed in DH Division
 --   deputy   a leader in DH Other domain, then made a lead of DH Division
 --   plain    a member with no team
 begin;
-select plan(25);
+select plan(28);
 
 create function pg_temp.n(sql text) returns int language plpgsql as $$
 declare result int;
@@ -163,9 +163,27 @@ select is(
   'no error', 'and a check-in, and still becomes a division'
 );
 select is(
+  pg_temp.error_of($$update teams set archived_at = now() where name = 'DH Unplaced'$$),
+  '23514: Move its 1 member out first.', 'a division someone sits in cannot be archived'
+);
+select is(
   pg_temp.error_of($$update teams set kind = 'domain' where name = 'DH Unplaced'$$),
   'no error', 'and back again'
 );
+reset role;
+
+-- ---------- an admin who sits in a division can't move another domain's history into it ----------
+set local role service_role;
+update members set team_id = 'b5000000-0000-4000-8000-000000000001' where id = 'c5000000-0000-4000-8000-000000000001';
+reset role;
+set local role authenticated;
+set local request.jwt.claims to '{"sub": "a5000000-0000-4000-8000-000000000001", "role": "authenticated"}';
+select alike(
+  pg_temp.error_of($$select admin_move_team('b5000000-0000-4000-8000-000000000005', 'b5000000-0000-4000-8000-000000000001', 0)$$),
+  '42501: You lead where this is going%', 'an admin sitting in a division cannot pull a domain with check-ins into it'
+);
+select is(pg_temp.n($$select 1 from checkins where id = 'd5000000-0000-4000-8000-000000000006'$$), 0,
+  'and still cannot see that domain''s check-ins');
 reset role;
 
 select * from finish();

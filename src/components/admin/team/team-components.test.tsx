@@ -247,8 +247,8 @@ describe("EditTeamForm", () => {
 
 describe("LeadsSection", () => {
   const LEADS: LeadPerson[] = [
-    { id: "m-ana", name: "Ana Lee", teamName: "IP Lab 2", inThisTeam: false, viaDomain: null },
-    { id: "m-ian", name: "Ian Goh", teamName: "IP Lab 1", inThisTeam: true, viaDomain: null },
+    { id: "m-ana", name: "Ana Lee", teamName: "IP Lab 2", inThisTeam: false, viaDomain: null, viaOwnTeam: false },
+    { id: "m-ian", name: "Ian Goh", teamName: "IP Lab 1", inThisTeam: true, viaDomain: null, viaOwnTeam: false },
   ];
   const render = (
     team = TEAM,
@@ -278,6 +278,13 @@ describe("LeadsSection", () => {
     const html = render(DOMAIN, [], [], [{ id: "m-nora", name: "Nora Lee", domainId: "div-gather", domainName: "Gather" }]);
     expect(row(html, "Nora Lee")).toBe("Nora Lee Leads Gather , which holds this domain");
     expect(html).toMatch(/<a [^>]*href="\/admin\/teams\/div-gather"[^>]*>Gather<\/a>/);
+  });
+
+  it("says a lead row's owner sits in the node holding it, not that they 'also lead' where they sit", () => {
+    const nora: LeadPerson = { id: "m-nora", name: "Nora Lee", teamName: "Gather", inThisTeam: false, viaDomain: "Gather", viaOwnTeam: true };
+    expect(row(render(DOMAIN, [], [nora]), "Nora Lee")).toBe(
+      "Nora Lee Leader in Gather, which holds this domain Remove as lead (Nora Lee)",
+    );
   });
 
   it("shows leaders in the team without a remove button, and team_leads rows with one", () => {
@@ -313,8 +320,8 @@ describe("LeadsSection", () => {
 describe("AddLeadPanel", () => {
   it("lists leaders with their own team", () => {
     const options: LeadPerson[] = [
-      { id: "m-cat", name: "Cat Ng", teamName: null, inThisTeam: false, viaDomain: null },
-      { id: "m-eve", name: "Eve Tan", teamName: "Legacy", inThisTeam: false, viaDomain: null },
+      { id: "m-cat", name: "Cat Ng", teamName: null, inThisTeam: false, viaDomain: null, viaOwnTeam: false },
+      { id: "m-eve", name: "Eve Tan", teamName: "Legacy", inThisTeam: false, viaDomain: null, viaOwnTeam: false },
     ];
     const html = renderToStaticMarkup(
       <AddLeadPanel team={TEAM} leadOptions={options} addLead={actions.addLead} onDone={() => {}} />,

@@ -32,12 +32,13 @@ type Props = {
 // Where a lead sits themselves.
 function leadWhere(lead: LeadPerson, noun: string): string {
   if (lead.inThisTeam) return `Leader in this ${noun}, also added as a lead`;
+  if (lead.viaOwnTeam) return `Leader in ${lead.teamName}, which holds this ${noun}`;
   const where = lead.teamName ? `Leader in ${lead.teamName}` : "Leader with no team";
   return lead.viaDomain ? `${where}, also leads ${lead.viaDomain}` : where;
 }
 
 // What removing someone's lead row changes: nothing they can see, when they still lead this node
-// by sitting in it or by leading the domain that holds it (leads cover everything under them).
+// by sitting in it or by leading a node that holds it (leads cover everything under them).
 function removeLeadCopy(lead: LeadPerson, team: TeamSummary, noun: string) {
   const keeps = lead.inThisTeam
     ? `they sit in this ${noun}`
@@ -65,9 +66,9 @@ export function leadsExplanation(team: Pick<TeamSummary, "kind">): string {
 }
 
 // "Leads": leaders who sit in this node (they lead it through their role and team, so they're
-// changed under People), leaders of other teams who lead it too (team_leads rows), and for a team,
-// whoever leads the domain it's in (leads cover everything under the led node; changed on the
-// domain's page). Each person once.
+// changed under People), leaders of other teams who lead it too (team_leads rows), and whoever
+// leads a node above it, its domain or division (leads cover everything under the led node;
+// changed on that node's page). Each person once.
 export function LeadsSection({ team, ownLeaders, leads, inheritedLeads, leadOptions, actions }: Props) {
   const headingId = useId();
   const [status, setStatus] = useState("");

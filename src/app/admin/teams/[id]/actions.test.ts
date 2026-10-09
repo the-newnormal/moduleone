@@ -293,8 +293,8 @@ describe("createMember", () => {
     expectNothingWritten();
   });
 
-  it("shows the database's sentence for a division", async () => {
-    const message = "People can only be placed in a domain or a team, not a division.";
+  it("shows the database's sentence for an archived team", async () => {
+    const message = "That team is archived. Restore it first, or pick another.";
     userQueue.members = [dbError("23514", message)];
     await expect(createMember(TEAM, { name: "Ana", role: "member" })).resolves.toEqual({ ok: false, error: message });
     expect(revalidatePath).not.toHaveBeenCalled();
@@ -377,7 +377,6 @@ describe("addLead", () => {
 
   it.each([
     "Only members with the leader role can lead a team. Make them a leader first.",
-    "Leaders lead domains and teams, not divisions.",
     "That team is archived. Restore it first.",
   ])("shows the database's sentence: %s", async (message) => {
     userQueue.team_leads = [dbError("23514", message)];
