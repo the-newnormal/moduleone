@@ -64,7 +64,7 @@ const EMAIL = "mei.wong@example.com";
 
 type Result = { data: unknown; error: unknown };
 type Query = { table: string; calls: [string, ...unknown[]][] };
-const METHODS = ["select", "insert", "update", "delete", "eq", "neq", "is", "in", "limit", "maybeSingle"];
+const METHODS = ["select", "insert", "update", "delete", "eq", "neq", "is", "in", "or", "limit", "maybeSingle"];
 
 function fakeFrom(queued: Record<string, Result[]>, log: Query[]) {
   return vi.fn((table: string) => {
@@ -492,11 +492,24 @@ describe("the organisation node", () => {
     expect(writes()).toEqual([{ table: "members", calls: [["select", "team_id"], ["eq", "id", PERSON], ["maybeSingle"]] }]);
   });
 
-  it("still changes the role of someone elsewhere once there is one", async () => {
+  it("still changes the role of someone elsewhere once there is one, unless they sit in it by then", async () => {
     userQueue.teams = [organisationIs(OTHER)];
     userQueue.members = [{ data: { team_id: TEAM }, error: null }, rows(PERSON)];
     await expect(setRole(PERSON, "leader")).resolves.toEqual({ ok: true, value: null });
-    expect(writes()[1].calls).toEqual([["update", { role: "leader" }], ["eq", "id", PERSON], ["select", "id"]]);
+    expect(writes()[1].calls).toEqual([
+      ["update", { role: "leader" }],
+      ["eq", "id", PERSON],
+      ["or", `team_id.is.null,team_id.neq.${OTHER}`],
+      ["select", "id"],
+    ]);
+  });
+
+  it("changes nothing if they're moved into it between the read and the write", async () => {
+    userQueue.teams = [organisationIs(ORG)];
+    userQueue.members = [{ data: { team_id: null }, error: null }, rows()];
+    await expect(setRole(PERSON, "member")).resolves.toEqual({ ok: false, error: PERSON_CHANGED });
+    expect(writes()[1].calls).toContainEqual(["or", `team_id.is.null,team_id.neq.${ORG}`]);
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 });
 

@@ -153,11 +153,11 @@ export async function setRole(memberId: string, role: string): Promise<ActionRes
     if (org.value.is((sits.data as { team_id: string | null } | null)?.team_id ?? null)) return fail(ORGANISATION_OWNER_ONLY);
   }
 
-  const { data, error } = await admin.value.supabase
-    .from("members")
-    .update({ role })
-    .eq("id", memberId)
-    .select("id");
+  // The same rule in the write itself: someone moved into the organisation since the read above
+  // matches no row, so nothing changes.
+  let update = admin.value.supabase.from("members").update({ role }).eq("id", memberId);
+  if (org.value.id !== null) update = update.or(`team_id.is.null,team_id.neq.${org.value.id}`);
+  const { data, error } = await update.select("id");
   if (error) return fail(toUserMessage(error, "setRole"));
   if (!data || data.length === 0) return fail(PERSON_CHANGED);
 
