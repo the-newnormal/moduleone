@@ -62,7 +62,7 @@ describe("every admin page", () => {
   );
 
   it("is found", () => {
-    expect(pages.sort()).toEqual(["page.tsx", "scoring/page.tsx", "structure/page.tsx", "teams/[id]/page.tsx"]);
+    expect(pages.sort()).toEqual(["costs/page.tsx", "page.tsx", "scoring/page.tsx", "structure/page.tsx", "teams/[id]/page.tsx"]);
   });
 
   it.each(pages)("%s calls requireAdminPage", (file) => {

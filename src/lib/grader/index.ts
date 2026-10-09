@@ -11,17 +11,28 @@ import Anthropic, {
 } from "@anthropic-ai/sdk";
 import { GRADE_JSON_SCHEMA, parseGradeOutput } from "./output";
 import { countWords, GRADER_SYSTEM_PROMPT, transcriptMessage } from "./prompt";
-import { GradingError, type Grade } from "./types";
+import { GradingError, type Grade, type GradeAttempt } from "./types";
 
 export * from "./types";
 
-export const GRADER_MODEL = "claude-opus-5-5";
+// The grading model, read from ANTHROPIC_MODEL when a check-in is graded (never at import time),
+// so it can be switched in the Vercel dashboard without a deploy of new code. Haiku is the cheap
+// default; claude-sonnet-5-5 is the step up if Haiku's reviews turn out too thin.
+export const DEFAULT_GRADER_MODEL = "claude-haiku-5-5";
+
+export function graderModel(env: Record<string, string | undefined> = process.env): string {
+  return env.ANTHROPIC_MODEL?.trim() || DEFAULT_GRADER_MODEL;
+}
+
+// Models that take the server-side refusal fallback ("default" form, Claude API). Claude Haiku 5.5
+// has none: a refusal there is reported as one, and the next attempt tries again.
+const FALLBACK_MODELS = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"]);
 
 // Below this many words there is nothing to grade, and asking Claude would only invent a grade.
 export const MIN_TRANSCRIPT_WORDS = 5;
 
-// Thinking is always on for this model and counts towards max_tokens, so leave room for it as
-// well as the short JSON reply.
+// Thinking is on by default for every model this runs on and counts towards max_tokens, so leave
+// room for it as well as the short JSON reply.
 const MAX_TOKENS = 16_000;
 
 // One time limit for the whole grading call, the SDK's retries included. Four minutes leaves room
@@ -30,17 +41,19 @@ const MAX_TOKENS = 16_000;
 // A try that runs out of time is not asked for again.
 export const GRADER_TIMEOUT_MS = 240_000;
 
-// Claude's safety classifiers can occasionally decline a benign request. With fallbacks on, the
-// API re-runs a declined request on the model Anthropic recommends instead of failing it; the
-// grade then records which model answered. This header goes with the "default" form only.
+// Claude's safety classifiers can occasionally decline a benign request. With fallbacks on (on the
+// models in FALLBACK_MODELS), the API re-runs a declined request on the model Anthropic recommends
+// instead of failing it; the grade then records which model answered. This header goes with the
+// "default" form only.
 const REFUSAL_FALLBACK_BETA = "server-side-fallback-2026-07-01";
 
-// Grades one check-in transcript against the rubric with Claude. Only the transcript is sent.
-// `signal` lets the caller stop sooner than GRADER_TIMEOUT_MS (processCheckin keeps a whole attempt
+// Grades one check-in transcript against the rubric with Claude, in one call that returns the
+// scores, theme and review together. Only the transcript is sent. `model` overrides
+// ANTHROPIC_MODEL (the side-by-side comparison uses it). `signal` lets the caller stop sooner than GRADER_TIMEOUT_MS (processCheckin keeps a whole attempt
 // inside the time its function may run).
 // Throws GradingError: "empty_transcript" (nothing to grade; the API is not called), "refusal",
 // "invalid_output" (the reply was cut off or didn't match the schema) or "api".
-export async function gradeCheckin(input: { transcript: string; signal?: AbortSignal }): Promise<Grade> {
+export async function gradeCheckin(input: { transcript: string; model?: string; signal?: AbortSignal }): Promise<Grade> {
   const transcript = input.transcript.trim();
   if (countWords(transcript) < MIN_TRANSCRIPT_WORDS) {
     throw new GradingError(`The transcript has fewer than ${MIN_TRANSCRIPT_WORDS} words`, {
@@ -59,6 +72,8 @@ export async function gradeCheckin(input: { transcript: string; signal?: AbortSi
       retryable: false,
     });
   }
+  const model = input.model?.trim() || graderModel();
+  const fallback = FALLBACK_MODELS.has(model) ? { betas: [REFUSAL_FALLBACK_BETA], fallbacks: "default" as const } : {};
   const client = new Anthropic({ apiKey, authToken: null, timeout: GRADER_TIMEOUT_MS, maxRetries: 2 });
   // The SDK's timeout is per try; this bounds all the tries together.
   const deadline = AbortSignal.timeout(GRADER_TIMEOUT_MS);
@@ -68,17 +83,19 @@ export async function gradeCheckin(input: { transcript: string; signal?: AbortSi
   try {
     response = await client.beta.messages.create(
       {
-        model: GRADER_MODEL,
+        model,
         max_tokens: MAX_TOKENS,
-        betas: [REFUSAL_FALLBACK_BETA],
-        fallbacks: "default",
-        // No `thinking` field: on this model thinking is always on and effort sets its depth
+        ...fallback,
+        // No `thinking` field: thinking is on by default on these models and effort sets its depth
         // (default medium; grading is a judgement call, so high).
         output_config: {
           effort: "high",
           format: { type: "json_schema", schema: GRADE_JSON_SCHEMA },
         },
-        system: GRADER_SYSTEM_PROMPT,
+        // The rubric is the same on every call and long enough to cache (over the 512-token
+        // minimum), so check-ins graded within a few minutes of each other read it at a fraction
+        // of the price. Nothing that varies goes in the system prompt.
+        system: [{ type: "text", text: GRADER_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
         messages: [{ role: "user", content: transcriptMessage(transcript) }],
       },
       { signal },
@@ -108,7 +125,54 @@ export async function gradeCheckin(input: { transcript: string; signal?: AbortSi
   // Read by block type: thinking blocks (and a fallback marker, if another model took over) come
   // before the text.
   const text = response.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
-  return { ...parseGradeOutput(text), model: response.model };
+  return { ...parseGradeOutput(text), model: response.model, attempts: billedAttempts(response.usage, response.model) };
+}
+
+type Usage = {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number | null;
+  cache_creation_input_tokens: number | null;
+};
+
+const toUsage = (usage: Usage) => ({
+  inputTokens: usage.input_tokens,
+  outputTokens: usage.output_tokens,
+  cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+  cacheWriteTokens: usage.cache_creation_input_tokens ?? 0,
+});
+
+// The top-level usage covers only the attempt that answered. When a refusal fallback ran,
+// usage.iterations lists each model attempt (the declined one, as a `message` entry, and the
+// fallback) with its own model and tokens, so each is priced at its own model's rates.
+// A decline that came before any output (no output tokens) is billed only in the bio,
+// frontier_llm and reasoning_extraction categories, and a fallback response doesn't say which
+// category it was; none of those fits grading a check-in, so such an attempt is left out.
+function billedAttempts(
+  usage: Usage & { iterations?: ({ type: string; model?: string | null } & Partial<Usage>)[] | null },
+  answeredBy: string,
+): GradeAttempt[] {
+  const iterations = usage.iterations ?? [];
+  const fellBack = iterations.some((it) => it.type === "fallback_message");
+  const attempts = iterations.flatMap((it) =>
+    (it.type === "message" || it.type === "fallback_message") &&
+    it.input_tokens !== undefined &&
+    it.output_tokens !== undefined &&
+    !(fellBack && it.type === "message" && it.output_tokens === 0)
+      ? [
+          {
+            model: it.model ?? answeredBy,
+            usage: toUsage({
+              input_tokens: it.input_tokens,
+              output_tokens: it.output_tokens,
+              cache_read_input_tokens: it.cache_read_input_tokens ?? null,
+              cache_creation_input_tokens: it.cache_creation_input_tokens ?? null,
+            }),
+          },
+        ]
+      : [],
+  );
+  return attempts.length ? attempts : [{ model: answeredBy, usage: toUsage(usage) }];
 }
 
 // The SDK's abort and network errors are subclasses of APIError, so they're checked first.

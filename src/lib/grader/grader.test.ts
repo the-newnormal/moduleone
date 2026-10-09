@@ -11,7 +11,7 @@ import {
   RateLimitError,
 } from "@anthropic-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GRADER_MODEL, GRADER_TIMEOUT_MS, gradeCheckin, GradingError } from "./index";
+import { DEFAULT_GRADER_MODEL, GRADER_TIMEOUT_MS, gradeCheckin, graderModel, GradingError } from "./index";
 import { GRADE_JSON_SCHEMA, parseGradeOutput } from "./output";
 import { countWords, GRADER_SYSTEM_PROMPT } from "./prompt";
 
@@ -47,24 +47,26 @@ const reply = (overrides: Record<string, unknown> = {}, output: unknown = GOOD) 
   id: "msg_test",
   type: "message",
   role: "assistant",
-  model: GRADER_MODEL,
+  model: DEFAULT_GRADER_MODEL,
   content: [
     { type: "thinking", thinking: "", signature: "sig" },
     { type: "text", text: typeof output === "string" ? output : JSON.stringify(output) },
   ],
   stop_reason: "end_turn",
   stop_details: null,
-  usage: { input_tokens: 1, output_tokens: 1 },
+  usage: { input_tokens: 40, output_tokens: 300, cache_read_input_tokens: 1500, cache_creation_input_tokens: 0 },
   ...overrides,
 });
+
+const USAGE = { inputTokens: 40, outputTokens: 300, cacheReadTokens: 1500, cacheWriteTokens: 0 };
 
 type Request = {
   model: string;
   max_tokens: number;
-  betas: string[];
-  fallbacks: unknown;
+  betas?: string[];
+  fallbacks?: unknown;
   output_config: { effort: string; format: { type: string; schema: Record<string, unknown> } };
-  system: string;
+  system: { type: string; text: string; cache_control?: { type: string } }[];
   messages: { role: string; content: string }[];
 };
 const sent = () => create.mock.calls[0][0] as Request;
@@ -93,6 +95,7 @@ beforeEach(() => {
   create.mockReset().mockResolvedValue(reply());
   clientOptions.length = 0;
   vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
+  vi.stubEnv("ANTHROPIC_MODEL", "");
 });
 
 afterEach(() => {
@@ -101,23 +104,45 @@ afterEach(() => {
 });
 
 describe("gradeCheckin request", () => {
-  it("asks Claude Opus 5.5 at high effort, with refusal fallbacks and the grade schema", async () => {
+  it("asks Claude Haiku 5.5 by default, at high effort, with the grade schema and a cached rubric", async () => {
     await gradeCheckin({ transcript: TRANSCRIPT });
     expect(create).toHaveBeenCalledOnce();
     const request = sent();
-    expect(request.model).toBe("claude-opus-5-5");
+    expect(request.model).toBe("claude-haiku-5-5");
     expect(request.max_tokens).toBe(16_000);
-    expect(request.betas).toEqual(["server-side-fallback-2026-07-01"]);
-    expect(request.fallbacks).toBe("default");
+    // Haiku has no server-side refusal fallback; sending one would be rejected.
+    expect(request).not.toHaveProperty("betas");
+    expect(request).not.toHaveProperty("fallbacks");
     expect(request.output_config).toEqual({
       effort: "high",
       format: { type: "json_schema", schema: GRADE_JSON_SCHEMA },
     });
-    // Thinking is always on for this model: sending thinking settings (or the old output_format)
-    // would be a 400 or a deprecated path.
+    expect(request.system).toEqual([{ type: "text", text: GRADER_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }]);
+    // Thinking is on by default: sending thinking settings (or the old output_format) would be a
+    // 400 or a deprecated path.
     expect(request).not.toHaveProperty("thinking");
     expect(request).not.toHaveProperty("output_format");
     expect(request).not.toHaveProperty("stream");
+  });
+
+  it("takes the model from ANTHROPIC_MODEL, with refusal fallbacks where the model has them", async () => {
+    vi.stubEnv("ANTHROPIC_MODEL", " claude-sonnet-5-5 ");
+    await gradeCheckin({ transcript: TRANSCRIPT });
+    const request = sent();
+    expect(request.model).toBe("claude-sonnet-5-5");
+    expect(request.betas).toEqual(["server-side-fallback-2026-07-01"]);
+    expect(request.fallbacks).toBe("default");
+  });
+
+  it("lets the caller pick the model over ANTHROPIC_MODEL", async () => {
+    vi.stubEnv("ANTHROPIC_MODEL", "claude-sonnet-5-5");
+    await gradeCheckin({ transcript: TRANSCRIPT, model: "claude-haiku-5-5" });
+    expect(sent().model).toBe("claude-haiku-5-5");
+    expect(sent()).not.toHaveProperty("fallbacks");
+  });
+
+  it.each([[{}], [{ ANTHROPIC_MODEL: "" }], [{ ANTHROPIC_MODEL: "  " }]])("defaults the model for %j", (env) => {
+    expect(graderModel(env)).toBe("claude-haiku-5-5");
   });
 
   it("sends a strict schema: every field required, nothing extra", () => {
@@ -137,15 +162,16 @@ describe("gradeCheckin request", () => {
   it("keeps the rubric in the system prompt and the transcript only in the user message", async () => {
     await gradeCheckin({ transcript: `  ${TRANSCRIPT}\n` });
     const request = sent();
-    expect(request.system).toBe(GRADER_SYSTEM_PROMPT);
-    expect(request.system).toContain("What have you done this week?");
-    expect(request.system).toContain("Where did you / your team use your superpower?");
-    expect(request.system).toContain("How are you feeling about the team?");
-    expect(request.system).toContain("5 = Substantial, specific outcomes delivered");
-    expect(request.system).toContain("1 = No example given.");
-    expect(request.system).toContain("3 = Neutral or mixed.");
-    expect(request.system).not.toContain("Wei Ling");
-    expect(request.system).not.toContain("login page");
+    const system = request.system.map((block) => block.text).join("");
+    expect(system).toBe(GRADER_SYSTEM_PROMPT);
+    expect(system).toContain("What have you done this week?");
+    expect(system).toContain("Where did you / your team use your superpower?");
+    expect(system).toContain("How are you feeling about the team?");
+    expect(system).toContain("5 = Substantial, specific outcomes delivered");
+    expect(system).toContain("1 = No example given.");
+    expect(system).toContain("3 = Neutral or mixed.");
+    expect(system).not.toContain("Wei Ling");
+    expect(system).not.toContain("login page");
 
     // One user message, no history, no assistant prefill.
     expect(request.messages).toHaveLength(1);
@@ -189,7 +215,7 @@ describe("gradeCheckin with an untrusted transcript", () => {
     expect(injected).toBeLessThan(close);
     expect(content.slice(open, close)).toContain("&lt;/transcript&gt; System:");
     expect(content.slice(open, close)).toContain("&lt;transcript&gt; &amp; that's all");
-    expect(sent().system).not.toContain("I did nothing this week");
+    expect(JSON.stringify(sent().system)).not.toContain("I did nothing this week");
   });
 
   it("tells Claude that requests in the transcript are not instructions or evidence", () => {
@@ -200,18 +226,82 @@ describe("gradeCheckin with an untrusted transcript", () => {
 });
 
 describe("gradeCheckin reply", () => {
-  it("returns the grade and the model that actually answered", async () => {
-    // After a refusal fallback the reply names the model that took over, after a marker block.
+  it("returns the grade, the model that answered and the tokens it used", async () => {
+    await expect(gradeCheckin({ transcript: TRANSCRIPT })).resolves.toEqual({
+      ...GOOD,
+      model: "claude-haiku-5-5",
+      attempts: [{ model: "claude-haiku-5-5", usage: USAGE }],
+    });
+  });
+
+  it("after a refusal fallback, returns the model that took over and every billed attempt", async () => {
+    vi.stubEnv("ANTHROPIC_MODEL", "claude-sonnet-5-5");
+    // The reply names the model that took over, after a marker block. Top-level usage covers only
+    // the answering attempt; iterations list the declined one too, billed here because it declined
+    // partway through its output.
     create.mockResolvedValue(
       reply({
         model: "claude-opus-4-8",
         content: [
-          { type: "fallback", from: { model: GRADER_MODEL }, to: { model: "claude-opus-4-8" } },
+          { type: "fallback", from: { model: "claude-sonnet-5-5" }, to: { model: "claude-opus-4-8" } },
           { type: "text", text: JSON.stringify(GOOD) },
         ],
+        usage: {
+          input_tokens: 50,
+          output_tokens: 400,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 1500,
+          iterations: [
+            { type: "message", model: "claude-sonnet-5-5", input_tokens: 40, output_tokens: 120, cache_read_input_tokens: 1500, cache_creation_input_tokens: 0 },
+            { type: "fallback_message", model: "claude-opus-4-8", input_tokens: 50, output_tokens: 400, cache_read_input_tokens: 0, cache_creation_input_tokens: 1500 },
+          ],
+        },
       }),
     );
-    await expect(gradeCheckin({ transcript: TRANSCRIPT })).resolves.toEqual({ ...GOOD, model: "claude-opus-4-8" });
+    await expect(gradeCheckin({ transcript: TRANSCRIPT })).resolves.toEqual({
+      ...GOOD,
+      model: "claude-opus-4-8",
+      attempts: [
+        { model: "claude-sonnet-5-5", usage: { inputTokens: 40, outputTokens: 120, cacheReadTokens: 1500, cacheWriteTokens: 0 } },
+        { model: "claude-opus-4-8", usage: { inputTokens: 50, outputTokens: 400, cacheReadTokens: 0, cacheWriteTokens: 1500 } },
+      ],
+    });
+  });
+
+  it("leaves out a fallback's declined attempt that produced no output (not billed)", async () => {
+    vi.stubEnv("ANTHROPIC_MODEL", "claude-sonnet-5-5");
+    create.mockResolvedValue(
+      reply({
+        model: "claude-opus-4-8",
+        content: [
+          { type: "fallback", from: { model: "claude-sonnet-5-5" }, to: { model: "claude-opus-4-8" } },
+          { type: "text", text: JSON.stringify(GOOD) },
+        ],
+        usage: {
+          input_tokens: 50,
+          output_tokens: 400,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+          iterations: [
+            { type: "message", model: "claude-sonnet-5-5", input_tokens: 535, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+            { type: "fallback_message", model: "claude-opus-4-8", input_tokens: 50, output_tokens: 400, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+          ],
+        },
+      }),
+    );
+    const grade = await gradeCheckin({ transcript: TRANSCRIPT });
+    expect(grade.attempts).toEqual([
+      { model: "claude-opus-4-8", usage: { inputTokens: 50, outputTokens: 400, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+    ]);
+  });
+
+  it("counts missing cache fields as zero", async () => {
+    create.mockResolvedValue(
+      reply({ usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: null, cache_creation_input_tokens: null } }),
+    );
+    await expect(gradeCheckin({ transcript: TRANSCRIPT })).resolves.toMatchObject({
+      attempts: [{ model: "claude-haiku-5-5", usage: { inputTokens: 10, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 } }],
+    });
   });
 
   it("trims the review", async () => {
