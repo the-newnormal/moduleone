@@ -5,7 +5,7 @@ Normal's **team-health tool** — Module 1 of the Normal internal stack.
 A weekly ~5-minute **360 check-in** (voice) scoring **Activity · Excellence · Morale**, transcribed and LLM-graded, rolled into a **Red/Yellow/Green heat-map** across teams and weeks. Built shallow + manual-input-first as a ~3-month stopgap.
 
 ## Stack
-Next.js (App Router) · TypeScript · Tailwind + shadcn/ui · Supabase (Postgres + Auth, RLS) · Vercel. Reviewed by CodeRabbit; Greptile for codebase intel.
+Next.js (App Router) · TypeScript · Tailwind + shadcn/ui · Supabase (Postgres + Auth, RLS) · Vercel. Reviewed by CodeRabbit (`.coderabbit.yaml`) and Qodo (`.pr_agent.toml`).
 
 ## Dev
 ```bash
@@ -47,7 +47,7 @@ An invited person signs in from the invite link first. Until they do, `/login` c
 **Taking someone's login away:** delete the user in Authentication → Users, and remove the member's rows in `member_grants` too. The member row keeps its check-ins and recordings, so Give login won't link a new login to it.
 
 ## Rules
-See `CLAUDE.md` for the engineering contract. Hygiene is non-negotiable: protected `main`, migrations-in-Git, RLS on every table, CI + required Supabase migration check + an approving review before merge (CodeRabbit's counts). Claude merges a PR once CodeRabbit approves it, Greptile scores it 5/5 and CI passes, all on its latest commit. **No direct production changes. No merging past red CI or unticked pre-merge steps.**
+See `CLAUDE.md` for the engineering contract. Hygiene is non-negotiable: protected `main`, migrations-in-Git, RLS on every table, CI + required Supabase migration check + an approving review before merge (CodeRabbit's counts). Claude merges a PR once CodeRabbit approves it, Qodo's review leaves no open "Action required" finding and CI passes, all on its latest commit. **No direct production changes. No merging past red CI or unticked pre-merge steps.**
 
 ### Branch protection
 `main` is protected by the GitHub ruleset in `.github/rulesets/protect-main.json`, with no bypass (admins included):
