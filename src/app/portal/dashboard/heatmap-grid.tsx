@@ -139,6 +139,9 @@ export function HeatmapGrid({
                     className="sticky left-0 z-10 border-t bg-card px-3 pt-2 pb-0.5 text-left font-sans text-xs font-semibold tracking-wide uppercase"
                   >
                     {group.label}
+                    {group.head.archived && (
+                      <span className="ml-1.5 font-normal tracking-normal text-muted-foreground normal-case"> archived</span>
+                    )}
                   </th>
                   {group.head.cells.map((cell) => (
                     <Cell

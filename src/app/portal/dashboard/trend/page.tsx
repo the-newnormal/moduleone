@@ -9,6 +9,7 @@ import { parseWeekCount, recentWeeks, WEEK_COUNTS, weekStartFor } from "@/lib/da
 import { createClient } from "@/lib/supabase/server";
 import { DashboardFrame, Legend } from "../frame";
 import { HeatmapGrid } from "../heatmap-grid";
+import { signInAgain } from "../sign-in";
 
 export const metadata: Metadata = { title: "Team health trend · Module One" };
 
@@ -21,9 +22,10 @@ const CAPTION = {
 export default async function TrendPage({ searchParams }: PageProps<"/portal/dashboard/trend">) {
   const supabase = await createClient();
   const { data } = await supabase.auth.getClaims();
-  if (!data?.claims) redirect("/login?next=/portal/dashboard/trend");
+  const params = await searchParams;
+  if (!data?.claims) redirect(signInAgain("/portal/dashboard/trend", params));
 
-  const weekCount = parseWeekCount((await searchParams).weeks);
+  const weekCount = parseWeekCount(params.weeks);
   const now = new Date();
   const weeks = recentWeeks(now, weekCount);
   const { teams, checkins, config, role, ledTeams } = await loadHeatmapData(supabase, weeks);

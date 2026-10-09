@@ -9,6 +9,7 @@ import { formatWeek, isWeekStart, parseWeekCount, weekStartFor } from "@/lib/das
 import { formatScore, type HealthConfig, healthBand, healthScore, teamWeekHealth } from "@/lib/health/health";
 import { createClient } from "@/lib/supabase/server";
 import { BandBadge } from "../../band";
+import { signInAgain } from "../../sign-in";
 import { RecordingPlayer } from "./recording-player";
 
 export const metadata: Metadata = { title: "Team week · Module One" };
@@ -80,11 +81,12 @@ export default async function TeamWeekPage({
 
   const supabase = await createClient();
   const { data } = await supabase.auth.getClaims();
-  if (!data?.claims) redirect(`/login?next=${encodeURIComponent(`/portal/dashboard/${teamId}/${week}`)}`);
+  const query = await searchParams;
+  if (!data?.claims) redirect(signInAgain(`/portal/dashboard/${teamId}/${week}`, query));
 
   // Opened from the trend grid (which passes its ?weeks=) or the org chart, at this week or, from
   // an earlier week's bar, at the week in ?from=.
-  const { weeks, from } = await searchParams;
+  const { weeks, from } = query;
   const chartWeek = typeof from === "string" && isWeekStart(from) ? from : week;
   const back =
     weeks !== undefined

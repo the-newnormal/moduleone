@@ -286,3 +286,39 @@ describe("the trend grid", () => {
     expect(html).toContain("No colour: you lead only some of the teams under it");
   });
 });
+
+describe("signing in again", () => {
+  it("comes back to the exact page, query included", async () => {
+    vi.mocked(createClient).mockResolvedValue({ auth: { getClaims: async () => ({ data: null }) } } as never);
+    await expect(DashboardPage({ searchParams: Promise.resolve({ week: "2026-09-28" }) } as never)).rejects.toThrow(
+      `NEXT_REDIRECT /login?next=${encodeURIComponent("/portal/dashboard?week=2026-09-28")}`,
+    );
+    await expect(TrendPage({ searchParams: Promise.resolve({ weeks: "4" }) } as never)).rejects.toThrow(
+      `NEXT_REDIRECT /login?next=${encodeURIComponent("/portal/dashboard/trend?weeks=4")}`,
+    );
+    const team = "00000000-0000-4000-8000-0000000000aa";
+    await expect(
+      TeamWeekPage({
+        params: Promise.resolve({ teamId: team, week: "2026-08-17" }),
+        searchParams: Promise.resolve({ from: "2026-09-28" }),
+      } as never),
+    ).rejects.toThrow(`NEXT_REDIRECT /login?next=${encodeURIComponent(`/portal/dashboard/${team}/2026-08-17?from=2026-09-28`)}`);
+  });
+});
+
+describe("an archived division on the trend grid", () => {
+  it("is tagged archived while it has check-ins in range", async () => {
+    vi.mocked(loadHeatmapData).mockResolvedValue({
+      teams: [
+        { ...node("old", "Old Division", "division", null), archived_at: "2026-09-01T00:00:00Z" },
+        { ...node("od", "Old Domain", "domain", "old"), archived_at: "2026-09-01T00:00:00Z" },
+      ],
+      checkins: [checkin("od", "2026-09-28", [3, 3, 3])],
+      config: CONFIG,
+      role: "hq",
+      ledTeams: [],
+    });
+    const html = renderToStaticMarkup(await TrendPage({ searchParams: Promise.resolve({ weeks: "4" }) } as never));
+    expect(html).toMatch(/<th scope="rowgroup"[^>]*>Old Division<span[^>]*> archived<\/span><\/th>/);
+  });
+});

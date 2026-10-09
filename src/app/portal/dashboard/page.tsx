@@ -17,6 +17,7 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import { DashboardFrame, Legend } from "./frame";
 import { OrgChart } from "./org-chart";
+import { signInAgain } from "./sign-in";
 
 export const metadata: Metadata = { title: "Team health · Module One" };
 
@@ -33,9 +34,9 @@ const showable = (week: string) => isWeekStart(shiftWeek(week, 1 - ORG_WEEKS));
 export default async function OrgChartPage({ searchParams }: PageProps<"/portal/dashboard">) {
   const supabase = await createClient();
   const { data } = await supabase.auth.getClaims();
-  if (!data?.claims) redirect("/login?next=/portal/dashboard");
-
   const params = await searchParams;
+  if (!data?.claims) redirect(signInAgain("/portal/dashboard", params));
+
   // The teams × weeks grid was here, at ?weeks=, before it moved to the Trend tab.
   if (params.weeks !== undefined && params.week === undefined) {
     redirect(`/portal/dashboard/trend?weeks=${parseWeekCount(params.weeks)}`);
