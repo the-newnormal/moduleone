@@ -4,7 +4,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { loadLedTeams, loadRole, loadScoringConfig, loadTeamWeek, type TeamWeekCheckin } from "@/lib/dashboard/load";
-import { coverage } from "@/lib/dashboard/org";
+import { coverage, yours } from "@/lib/dashboard/org";
 import { formatWeek, isWeekStart, parseWeekCount, weekStartFor } from "@/lib/dashboard/weeks";
 import { formatScore, type HealthConfig, healthBand, healthScore, teamWeekHealth } from "@/lib/health/health";
 import { createClient } from "@/lib/supabase/server";
@@ -98,17 +98,22 @@ export default async function TeamWeekPage({
   ]);
   // Members never see their grade or the leaders-only review (see ../../page.tsx).
   if (role === "member") redirect("/portal/checkin");
-  const teamWeek = await loadTeamWeek(supabase, teamId === "none" ? null : teamId, week, coverage(role, ledTeams));
+  // Team ids are lowercase everywhere else; a hand-typed uppercase one is the same team.
+  const id = teamId === "none" ? null : teamId.toLowerCase();
+  const covers = coverage(role, ledTeams);
+  const teamWeek = await loadTeamWeek(supabase, id, week, covers);
   const { checkins } = teamWeek;
   // Check-ins from the teams under this one come in sections, a team each, in org-chart order.
-  const sections = checkins.reduce<{ team: string | null; checkins: TeamWeekCheckin[] }[]>((out, checkin) => {
+  type Section = { teamId: string | null; team: string | null; checkins: TeamWeekCheckin[] };
+  const sections = checkins.reduce<Section[]>((out, checkin) => {
     const last = out[out.length - 1];
-    if (last && last.team === checkin.team) last.checkins.push(checkin);
-    else out.push({ team: checkin.team, checkins: [checkin] });
+    if (last && last.teamId === checkin.teamId) last.checkins.push(checkin);
+    else out.push({ teamId: checkin.teamId, team: checkin.team, checkins: [checkin] });
     return out;
   }, []);
   const sectioned = sections.some((section) => section.team !== null);
-  const teamName = teamId === "none" ? "No team" : (teamWeek.teamName ?? "Earlier team");
+  // Outside the teams they cover, a leader reads only their own check-ins (as on the org chart).
+  const teamName = !id ? "No team" : covers(id) ? (teamWeek.teamName ?? "Earlier team") : yours(teamWeek.teamName);
   const cell = teamWeekHealth(checkins, config);
   const waiting = checkins.length - (cell?.graded ?? 0);
 
@@ -143,7 +148,7 @@ export default async function TeamWeekPage({
         </p>
       ) : sectioned ? (
         sections.map((section) => (
-          <section key={section.team ?? ""} aria-label={section.team ?? teamName} className="grid gap-4">
+          <section key={section.teamId ?? "none"} aria-label={section.team ?? teamName} className="grid gap-4">
             <h2 className="font-sans text-xs font-semibold tracking-wide text-muted-foreground uppercase">
               {section.team ?? teamName}
             </h2>

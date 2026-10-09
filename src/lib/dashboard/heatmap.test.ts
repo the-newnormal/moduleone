@@ -80,6 +80,20 @@ describe("heatmapGroups", () => {
     ]);
   });
 
+  it("keys a loose row apart from its team's row in the tree", () => {
+    // A leader's own check-in in an unplaced domain they don't lead, above a team they do.
+    const org: Org = {
+      roots: [node("x", "Unplaced", "domain", [node("x1", "Unplaced 1", "team")], false)],
+      loose: [{ teamId: "x", name: "Your check-ins · Unplaced", archived: false, cells: CELLS }],
+    };
+    const [other] = heatmapGroups(org);
+    expect(other.rows.map((r) => [r.key, r.teamId])).toEqual([
+      ["x", "x"],
+      ["x1", "x1"],
+      ["loose:x", "x"],
+    ]);
+  });
+
   it("returns no groups for an empty org", () => {
     expect(heatmapGroups({ roots: [], loose: [] })).toEqual([]);
   });

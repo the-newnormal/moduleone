@@ -139,7 +139,7 @@ export function HeatmapGrid({
                 </th>
               </tr>
               {group.rows.map((row) => (
-                <tr key={row.teamId ?? "none"}>
+                <tr key={row.key}>
                   <th
                     scope="row"
                     className={`sticky left-0 z-10 max-w-48 truncate bg-card py-0.5 pr-3 text-left ${row.scored ? "font-medium" : "font-normal text-muted-foreground"} ${row.depth > 0 ? "pl-7" : "pl-3"}`}
@@ -159,9 +159,10 @@ export function HeatmapGrid({
                       />
                     ))
                   ) : (
-                    // A domain the viewer doesn't lead, above the teams they do: no colours of its own.
-                    <td colSpan={weeks.length} className="px-3 text-xs text-muted-foreground">
-                      Coloured only for the teams under it that you lead
+                    // A domain the viewer doesn't lead, above the teams they do: no colours of its own
+                    // (the legend says so).
+                    <td colSpan={weeks.length}>
+                      <span className="sr-only">No colour: you lead only some of the teams under it</span>
                     </td>
                   )}
                 </tr>

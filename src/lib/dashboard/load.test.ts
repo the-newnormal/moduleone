@@ -109,11 +109,11 @@ describe("loadTeamWeek", () => {
     const { supabase } = fakeSupabase({ teams: TEAMS, checkins: CHECKINS });
     const week = await loadTeamWeek(supabase, "ip", WEEK, coverage("hq", []));
     expect(week.context).toEqual(["Gather"]);
-    expect(week.checkins.map((c) => [c.team, c.memberName])).toEqual([
-      [null, "Wen"],
-      ["IP Lab 1", "Abe"],
-      ["IP Lab 1", "Xia"],
-      ["IP Lab 2", "Yan"],
+    expect(week.checkins.map((c) => [c.teamId, c.team, c.memberName])).toEqual([
+      ["ip", null, "Wen"],
+      ["ip1", "IP Lab 1", "Abe"],
+      ["ip1", "IP Lab 1", "Xia"],
+      ["ip2", "IP Lab 2", "Yan"],
     ]);
   });
 
@@ -124,6 +124,26 @@ describe("loadTeamWeek", () => {
     const week = await loadTeamWeek(supabase, "ip", WEEK, coverage("leader", ["ip1"]));
     expect(queried).toContainEqual({ table: "checkins", filter: "in", args: ["team_id", ["ip"]] });
     expect(week.checkins.map((c) => c.memberName)).toEqual(["Wen"]);
+  });
+
+  it("asks for a big subtree a batch of teams at a time, so no request's URL grows unbounded", async () => {
+    // A division with 250 teams under one domain, check-ins in the first, a middle and the last.
+    const teams = [
+      team("big", "Big", "division", null),
+      team("dom", "Domain", "domain", "big"),
+      ...Array.from({ length: 250 }, (_, i) => team(`t${String(i).padStart(3, "0")}`, `Team ${i}`, "team", "dom", i)),
+    ];
+    const checkins = [checkin("t000", "Ann"), checkin("t150", "Bea"), checkin("t249", "Cat")];
+    const { supabase, queried } = fakeSupabase({ teams, checkins });
+    const week = await loadTeamWeek(supabase, "big", WEEK, coverage("hq", []));
+    expect(week.checkins.map((c) => [c.teamId, c.memberName])).toEqual([
+      ["t000", "Ann"],
+      ["t150", "Bea"],
+      ["t249", "Cat"],
+    ]);
+    const batches = queried.filter((q) => q.table === "checkins" && q.filter === "in").map((q) => q.args[1] as string[]);
+    expect(batches.map((ids) => ids.length)).toEqual([100, 100, 52]);
+    expect(new Set(batches.flat()).size).toBe(252);
   });
 
   it("reads check-ins made with no team for teamId null", async () => {

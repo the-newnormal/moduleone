@@ -4,7 +4,16 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { loadHeatmapData } from "@/lib/dashboard/load";
 import { buildOrg, coverage } from "@/lib/dashboard/org";
-import { formatWeek, ORG_WEEKS, parseWeek, parseWeekCount, shiftWeek, weekStartFor, weeksEndingAt } from "@/lib/dashboard/weeks";
+import {
+  formatWeek,
+  isWeekStart,
+  ORG_WEEKS,
+  parseWeek,
+  parseWeekCount,
+  shiftWeek,
+  weekStartFor,
+  weeksEndingAt,
+} from "@/lib/dashboard/weeks";
 import { createClient } from "@/lib/supabase/server";
 import { DashboardFrame, Legend } from "./frame";
 import { OrgChart } from "./org-chart";
@@ -15,6 +24,10 @@ const weekHref = (week: string, thisWeek: string) =>
   week === thisWeek ? "/portal/dashboard" : `/portal/dashboard?week=${week}`;
 
 const STEP = "inline-flex min-h-9 items-center gap-1 rounded-md border px-2.5";
+
+// A week the chart can show: its bars reach back ORG_WEEKS - 1 weeks, and every one must be a week
+// the drill-in accepts.
+const showable = (week: string) => isWeekStart(shiftWeek(week, 1 - ORG_WEEKS));
 
 // The org chart, coloured by one week (?week=, this week by default).
 export default async function OrgChartPage({ searchParams }: PageProps<"/portal/dashboard">) {
@@ -29,14 +42,15 @@ export default async function OrgChartPage({ searchParams }: PageProps<"/portal/
   }
 
   const thisWeek = weekStartFor(new Date());
-  const week = parseWeek(params.week, thisWeek);
+  const picked = parseWeek(params.week, thisWeek);
+  const week = showable(picked) ? picked : thisWeek;
   const weeks = weeksEndingAt(week, ORG_WEEKS);
   const { teams, checkins, config, role, ledTeams } = await loadHeatmapData(supabase, weeks);
   // Members never see their grade (the owner's rule, and the privacy notice says so): their only
   // box here would be their own scores. The heat-map is for leaders and hq.
   if (role === "member") redirect("/portal/checkin");
   const org = buildOrg({ teams, checkins, weeks, config, covers: coverage(role, ledTeams) });
-  const previous = shiftWeek(week, -1);
+  const previous = showable(shiftWeek(week, -1)) ? shiftWeek(week, -1) : null;
   const next = week < thisWeek ? shiftWeek(week, 1) : null;
 
   return (
@@ -44,19 +58,26 @@ export default async function OrgChartPage({ searchParams }: PageProps<"/portal/
       <nav aria-label="Week" className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
         <p className="mr-1 text-lg font-medium">
           Week of {formatWeek(week, true)}
-          {week === thisWeek && <span className="ml-2 text-sm font-normal text-muted-foreground">This week</span>}
+          {week === thisWeek && <span className="ml-2 text-sm font-normal text-muted-foreground"> This week</span>}
         </p>
-        <Link href={weekHref(previous, thisWeek)} className={`${STEP} hover:bg-card`}>
-          <ChevronLeft aria-hidden className="size-4" />
-          Previous week
-        </Link>
+        {previous ? (
+          <Link href={weekHref(previous, thisWeek)} className={`${STEP} hover:bg-card`}>
+            <ChevronLeft aria-hidden className="size-4" />
+            Previous week
+          </Link>
+        ) : (
+          <span role="link" aria-disabled="true" className={`${STEP} text-muted-foreground/60`}>
+            <ChevronLeft aria-hidden className="size-4" />
+            Previous week
+          </span>
+        )}
         {next ? (
           <Link href={weekHref(next, thisWeek)} className={`${STEP} hover:bg-card`}>
             Next week
             <ChevronRight aria-hidden className="size-4" />
           </Link>
         ) : (
-          <span aria-disabled="true" className={`${STEP} text-muted-foreground/60`}>
+          <span role="link" aria-disabled="true" className={`${STEP} text-muted-foreground/60`}>
             Next week
             <ChevronRight aria-hidden className="size-4" />
           </span>
@@ -68,7 +89,7 @@ export default async function OrgChartPage({ searchParams }: PageProps<"/portal/
         )}
       </nav>
 
-      <Legend config={config} view="org" />
+      <Legend config={config} view="org" role={role} />
 
       {org.roots.length + org.loose.length === 0 ? (
         <p className="rounded-xl border bg-card p-6 text-muted-foreground">No teams or check-ins to show yet.</p>

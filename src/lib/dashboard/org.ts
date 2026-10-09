@@ -34,14 +34,20 @@ export type OrgNode = {
 };
 
 // Check-ins outside the scored tree, one row per team, over that team's own check-ins: made with
-// no team, in a team the viewer can't see, or (for a leader) their own check-ins from a team they
-// don't lead.
+// no team, or in a team the viewer doesn't cover. RLS lets a leader read only their own check-ins
+// there, so those rows are named as theirs, never as the team's health.
 export type LooseRow = { teamId: string | null; name: string; archived: boolean; cells: HeatmapCell[] };
 
 export type Org = { roots: OrgNode[]; loose: LooseRow[] };
 
+// A React key for a loose row, apart from its team's node in the tree.
+export const looseKey = (row: LooseRow) => `loose:${row.teamId ?? "none"}`;
+
 const NO_TEAM = "No team";
-const UNSEEN_TEAM = "Earlier team";
+const UNSEEN_TEAM = "an earlier team";
+
+// A row of the viewer's own check-ins in a team they don't cover.
+export const yours = (team: string | null) => `Your check-ins · ${team ?? UNSEEN_TEAM}`;
 
 export const isPending = (c: MaybeScores) =>
   c.activity_score === null && c.excellence_score === null && c.morale_score === null;
@@ -129,7 +135,7 @@ export function buildOrg({
     const team = teamId === null ? undefined : byId.get(teamId);
     loose.push({
       teamId,
-      name: teamId === null ? NO_TEAM : (team?.name ?? UNSEEN_TEAM),
+      name: teamId === null ? NO_TEAM : yours(team?.name ?? null),
       archived: team?.archived_at != null,
       cells: cellsFor(rows, weeks, config),
     });

@@ -77,8 +77,9 @@ async function loadCheckins(supabase: SupabaseClient, from: string, to: string):
 export type TeamWeekCheckin = {
   id: string;
   memberName: string | null;
-  // The team it was made in, when that's a team under the page's ("IP Lab › IP Lab 1" on Gather's
-  // page); null when it's the page's own team.
+  teamId: string | null; // the team it was made in
+  // That team's name, when it's a team under the page's ("IP Lab › IP Lab 1" on Gather's page);
+  // null when it's the page's own team.
   team: string | null;
   activity_score: number | null;
   excellence_score: number | null;
@@ -89,6 +90,9 @@ export type TeamWeekCheckin = {
   // recordings grant; Storage decides). It signs a fresh link on every request (./recordings.ts).
   recording: string | null;
 };
+
+// Team ids per request: about 3.7 kB of URL, well inside what PostgREST's gateway accepts.
+const TEAM_BATCH = 100;
 
 // One team's check-ins for one week, for the drill-in page, ordered team by team in org-chart
 // order. As on the heat-map (./org.ts), a team the viewer covers takes in every team under it;
@@ -105,23 +109,32 @@ export async function loadTeamWeek(
   const scope = teamId && covers(teamId) ? subtree(teams, teamId).map((t) => t.id) : [];
   const teamIds = scope.length > 0 ? scope : teamId ? [teamId] : [];
 
-  const checkins = await selectAll((after) => {
-    let query = supabase
-      .from("checkins")
-      .select(
-        "id, team_id, activity_score, excellence_score, morale_score, rubric_review, transcript, audio_path, members(name)",
-      )
-      .eq("week_start", week);
-    query = teamId ? query.in("team_id", teamIds) : query.is("team_id", null);
-    if (after) query = query.gt("id", after);
-    return query.order("id").limit(PAGE_SIZE);
-  });
-  if (checkins.error) throw new Error(`Couldn't load check-ins: ${checkins.error.message}`);
+  // The team filter travels in the request's URL, so a big subtree is asked for a batch at a time.
+  const batches: (string[] | null)[] = [];
+  for (let i = 0; i < teamIds.length; i += TEAM_BATCH) batches.push(teamIds.slice(i, i + TEAM_BATCH));
+  const results = await Promise.all(
+    (teamId ? batches : [null]).map((ids) =>
+      selectAll((after) => {
+        let query = supabase
+          .from("checkins")
+          .select(
+            "id, team_id, activity_score, excellence_score, morale_score, rubric_review, transcript, audio_path, members(name)",
+          )
+          .eq("week_start", week);
+        query = ids ? query.in("team_id", ids) : query.is("team_id", null);
+        if (after) query = query.gt("id", after);
+        return query.order("id").limit(PAGE_SIZE);
+      }),
+    ),
+  );
+  const failed = results.find((r) => r.error)?.error;
+  if (failed) throw new Error(`Couldn't load check-ins: ${failed.message}`);
+  const checkins = results.flatMap((r) => r.data ?? []);
 
   // One request for every recording, to show a player only where the viewer may play.
   const playable = await playableRecordings(
     supabase,
-    checkins.data.flatMap((c) => (c.audio_path ? [c.audio_path] : [])),
+    checkins.flatMap((c) => (c.audio_path ? [c.audio_path] : [])),
   );
 
   // The path from below the page's team down to the check-in's.
@@ -136,13 +149,14 @@ export async function loadTeamWeek(
   };
   const order = new Map(teamIds.map((id, i) => [id, i]));
 
-  const rows = checkins.data
+  const rows = checkins
     .map((c) => {
       // A to-one embed: PostgREST returns an object (or null if the viewer can't see the member).
       const member = c.members as unknown as { name: string } | null;
       const row: TeamWeekCheckin = {
         id: c.id,
         memberName: member?.name ?? null,
+        teamId: c.team_id,
         team: teamLabel(c.team_id),
         activity_score: c.activity_score,
         excellence_score: c.excellence_score,

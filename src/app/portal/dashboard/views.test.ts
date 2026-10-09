@@ -108,7 +108,7 @@ describe("the org chart", () => {
     }
     expect(html).toContain("The 7 weeks before, oldest first: no check-ins, no check-ins, no check-ins, no check-ins, no check-ins, no check-ins, red.");
     // Nothing after this week.
-    expect(html).toMatch(/<span aria-disabled="true"[^>]*>Next week/);
+    expect(html).toMatch(/<span role="link" aria-disabled="true"[^>]*>Next week/);
     expect(html).toContain('href="/portal/dashboard?week=2026-09-28"');
   });
 
@@ -130,6 +130,16 @@ describe("the org chart", () => {
     expect(html).not.toContain(`href="/portal/dashboard/ga/${THIS_WEEK}"`);
     expect(html).toContain("IP Lab");
     expect(html).toContain("Gather");
+  });
+
+  it("stops at the earliest week the app accepts", async () => {
+    heatmapData("hq");
+    // 21 Feb 2000's bars start on 3 Jan 2000, the first week the drill-in opens.
+    const html = await page({ week: "2000-02-21" });
+    expect(html).toMatch(/Week of 21 Feb 2000/);
+    expect(html).toMatch(/<span role="link" aria-disabled="true"[^>]*><svg[^>]*>.*?<\/svg>Previous week/);
+    expect(html).not.toContain("/1999-");
+    expect(await page({ week: "2000-02-14" })).toContain("Week of 5 Oct 2026");
   });
 
   it("sends the trend grid's old address (?weeks=) to the Trend tab", async () => {
@@ -155,6 +165,20 @@ describe("a team's week", () => {
     expect(await drillIn(GATHER, "2026-09-28", { weeks: "4" })).toContain('href="/portal/dashboard/trend?weeks=4"');
   });
 
+  it("reads a hand-typed uppercase team id as the same team", async () => {
+    await drillIn(IP_LAB.toUpperCase(), THIS_WEEK);
+    expect(vi.mocked(loadTeamWeek).mock.calls[0][1]).toBe(IP_LAB);
+  });
+
+  it("titles a team the leader doesn't lead as their own check-ins, not the team's", async () => {
+    vi.mocked(loadRole).mockResolvedValue("leader");
+    vi.mocked(loadLedTeams).mockResolvedValue(["ip1"]);
+    vi.mocked(loadTeamWeek).mockResolvedValue({ teamName: "IP Lab", context: ["Gather"], checkins: [] });
+    expect(await drillIn(IP_LAB, THIS_WEEK)).toContain("<h1 class=\"text-4xl\">Your check-ins · IP Lab</h1>");
+    vi.mocked(loadLedTeams).mockResolvedValue([IP_LAB]);
+    expect(await drillIn(IP_LAB, THIS_WEEK)).toContain("<h1 class=\"text-4xl\">IP Lab</h1>");
+  });
+
   it("loads the check-ins the viewer covers under the team", async () => {
     vi.mocked(loadRole).mockResolvedValue("leader");
     vi.mocked(loadLedTeams).mockResolvedValue(["ip1"]);
@@ -165,9 +189,10 @@ describe("a team's week", () => {
   });
 
   it("puts check-ins from the teams under it in a section each", async () => {
-    const checkin = (id: string, memberName: string, team: string | null) => ({
+    const checkin = (id: string, memberName: string, team: string | null, teamId: string = team ?? IP_LAB) => ({
       id,
       memberName,
+      teamId,
       team,
       activity_score: 3,
       excellence_score: 3,
@@ -187,5 +212,34 @@ describe("a team's week", () => {
       expect.stringContaining(">IP Lab 1</h2>"),
     ]);
     expect(html.match(/<h3[^>]*>[^<]*<\/h3>/g)?.map((h) => h.replace(/<[^>]+>/g, ""))).toEqual(["Wen", "Abe", "Xia"]);
+  });
+});
+
+describe("a team's week, with two teams of the same name under it", () => {
+  it("keeps their check-ins in separate sections", async () => {
+    const checkin = (id: string, memberName: string, teamId: string) => ({
+      id,
+      memberName,
+      teamId,
+      team: "Twins",
+      activity_score: 3,
+      excellence_score: 3,
+      morale_score: 3,
+      rubric_review: null,
+      transcript: null,
+      recording: null,
+    });
+    vi.mocked(loadTeamWeek).mockResolvedValue({
+      teamName: "IP Lab",
+      context: [],
+      checkins: [checkin("a", "Abe", "twin-1"), checkin("b", "Bea", "twin-2")],
+    });
+    const html = renderToStaticMarkup(
+      await TeamWeekPage({
+        params: Promise.resolve({ teamId: "00000000-0000-4000-8000-0000000000bb", week: THIS_WEEK }),
+        searchParams: Promise.resolve({}),
+      } as never),
+    );
+    expect(html.match(/<h2[^>]*>Twins<\/h2>/g)).toHaveLength(2);
   });
 });

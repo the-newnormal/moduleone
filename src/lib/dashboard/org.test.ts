@@ -175,9 +175,10 @@ describe("buildOrg", () => {
       config: RULES,
       covers: coverage("leader", ["ip1"]),
     });
+    // Named as the leader's own check-ins, never as those teams' health.
     expect(org.loose.map((r) => [r.teamId, r.name])).toEqual([
-      ["bq", "Barbeques"],
-      ["gone", "Earlier team"],
+      ["bq", "Your check-ins · Barbeques"],
+      ["gone", "Your check-ins · an earlier team"],
       [null, "No team"],
     ]);
     expect(org.loose[0].cells[0].health).toMatchObject({ score: 9, graded: 1 });
@@ -205,7 +206,7 @@ describe("buildOrg", () => {
       covers: everyone,
     });
     expect(org.roots).toEqual([]);
-    expect(org.loose.map((r) => r.name)).toEqual(["A"]);
+    expect(org.loose.map((r) => r.teamId)).toEqual(["a"]);
   });
 
   it("is empty when the viewer can see no teams or check-ins", () => {

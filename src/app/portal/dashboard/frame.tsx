@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import type { Role } from "@/lib/dashboard/load";
 import { ORG_WEEKS } from "@/lib/dashboard/weeks";
 import type { HealthConfig } from "@/lib/health/health";
-import { BANDS } from "./band";
+import { BANDS, barClass } from "./band";
 
 // What the two views of the heat-map share: the header, the switch between them and the legend.
 // Members are sent to their check-in before any of it renders (see ./page.tsx).
@@ -68,7 +68,13 @@ export function DashboardFrame({ view, role, children }: { view: View; role: Rol
 }
 
 // The org chart's key also explains its bars of recent weeks.
-export function Legend({ config, view }: { config: HealthConfig; view: View }) {
+// A sample bar for the key: just enough of a cell for barClass.
+const sample = (band: "green" | "yellow" | "red" | null, pending = 0) => ({
+  health: band && { band, score: 0, graded: 1, bands: { green: 0, yellow: 0, red: 0 } },
+  pending,
+});
+
+export function Legend({ config, view, role }: { config: HealthConfig; view: View; role: Role | null }) {
   const { green, yellow } = config.thresholds;
   const items = [
     { band: BANDS.green, text: `${green} or more` },
@@ -95,14 +101,20 @@ export function Legend({ config, view }: { config: HealthConfig; view: View }) {
         </li>
         {view === "org" && (
           <li className="flex items-center gap-1.5">
-            <span aria-hidden className="flex h-4 items-end gap-0.5">
-              <span className="h-4 w-1.5 rounded-t-[2px] bg-status-good" />
-              <span className="h-2.5 w-1.5 rounded-t-[2px] bg-status-warning" />
-              <span className="h-1.5 w-1.5 rounded-t-[2px] bg-status-critical" />
+            <span aria-hidden className="flex h-5 items-end gap-0.5">
+              {[sample("green"), sample("yellow"), sample("red"), sample(null, 1), sample(null)].map((cell, i) => (
+                <span key={i} className={`w-2 rounded-t-[2px] ${barClass(cell)}`} />
+              ))}
             </span>
             <span className="text-muted-foreground">
-              the last {ORG_WEEKS} weeks, oldest first: the taller the bar, the better the week
+              the last {ORG_WEEKS} weeks, oldest first: the taller, the better; dashed, waiting for the grader;
+              flat, no check-ins
             </span>
+          </li>
+        )}
+        {role === "leader" && (
+          <li className="text-muted-foreground">
+            A grey name with no colour: you lead only some of the teams under it.
           </li>
         )}
       </ul>

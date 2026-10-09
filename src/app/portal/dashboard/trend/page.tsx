@@ -53,7 +53,7 @@ export default async function TrendPage({ searchParams }: PageProps<"/portal/das
         })}
       </nav>
 
-      <Legend config={config} view="trend" />
+      <Legend config={config} view="trend" role={role} />
 
       {groups.length === 0 || !role ? (
         <p className="rounded-xl border bg-card p-6 text-muted-foreground">

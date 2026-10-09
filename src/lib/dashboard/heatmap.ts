@@ -1,6 +1,7 @@
-import type { HeatmapCell, Org, OrgNode } from "./org";
+import { type HeatmapCell, looseKey, type Org, type OrgNode } from "./org";
 
 export type HeatmapRow = {
+  key: string; // unique in the grid: a team can have both a row in the tree and a loose row
   teamId: string | null; // null: check-ins made while the member had no team
   name: string;
   depth: number; // 1 for a team under a domain, to indent it
@@ -18,6 +19,7 @@ export type HeatmapGroup = { key: string | null; label: string | null; rows: Hea
 export function heatmapGroups({ roots, loose }: Org): HeatmapGroup[] {
   const rows = (node: OrgNode, depth: number): HeatmapRow[] => [
     {
+      key: node.teamId,
       teamId: node.teamId,
       name: node.name,
       depth,
@@ -39,7 +41,7 @@ export function heatmapGroups({ roots, loose }: Org): HeatmapGroup[] {
 
   const other = [
     ...roots.filter((root) => root.kind !== "division").flatMap((root) => rows(root, 0)),
-    ...loose.map((row) => ({ ...row, depth: 0, scored: true })),
+    ...loose.map((row) => ({ ...row, key: looseKey(row), depth: 0, scored: true })),
   ];
   return other.length > 0 ? [...groups, { key: null, label: null, rows: other }] : groups;
 }
