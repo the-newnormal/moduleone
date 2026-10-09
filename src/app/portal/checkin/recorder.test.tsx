@@ -179,8 +179,8 @@ describe("the camera mirror", () => {
 
     await finish();
     expect(video()).toBeNull(); // gone at Finish
+    expect(lens.stop).toHaveBeenCalled(); // and off, before the recorder's stop event comes
     await act(async () => FakeRecorder.last?.onstop?.()); // nothing recorded here
-    expect(lens.stop).toHaveBeenCalled();
     expect(button("Show my camera")).toBeTruthy();
     vi.unstubAllGlobals();
   });
@@ -285,6 +285,20 @@ describe("the camera mirror", () => {
     expect(video()).toBeNull();
     expect(FakeRecorder.last?.state).toBe("recording");
     expect(button("Next question")).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
+
+  it("turns off when Sign out finishes the recording, before the recorder's stop event", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    const lens = fakeTrack();
+    devices(async () => cameraStream(lens), "granted");
+    const { Recorder, finishRecording, currentSave } = await load();
+    await render(<Recorder />);
+    await record();
+    await act(async () => finishRecording()); // what Sign out does first
+    expect(lens.stop).toHaveBeenCalled();
+    expect(video()).toBeNull();
+    expect(currentSave()).not.toBeNull(); // and Sign out waits for the take
     vi.unstubAllGlobals();
   });
 

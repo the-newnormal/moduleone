@@ -268,6 +268,8 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
       const live = media.current;
       if (!live || live.recorder.state === "inactive") return;
       setState({ step: "saving" });
+      closeCamera(camera); // off with the take, not only once the recorder's stop event comes
+      setMirror(null);
       stopAndTrack(live);
     });
   }, [recording]);
@@ -339,6 +341,7 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
     const live = media.current;
     if (!live || live.recorder.state === "inactive") return;
     setState({ step: "saving" });
+    turnCameraOff(); // off with the take, not only once the recorder's stop event comes
     stopAndTrack(live);
   }
 
