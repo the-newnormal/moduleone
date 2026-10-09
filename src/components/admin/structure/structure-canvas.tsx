@@ -41,7 +41,7 @@ import { applyMove, buildTree, moveAnnouncement, type TeamMove } from "@/lib/adm
 import { ArchivedSection, type Report } from "./archived-list";
 import { type Dragged, type DropPlan, type PlacePlan, placeAction, planDrop } from "./canvas-drop";
 import { canvasPeopleOf, itemAt, layoutStructure, personNodeId } from "./canvas-layout";
-import { CanvasContext, type CanvasNode, flowNodes, NODE_TYPES, PERSON_HINT_ID } from "./canvas-nodes";
+import { CanvasContext, type CanvasNode, dragging, flowNodes, NODE_TYPES, PERSON_HINT_ID } from "./canvas-nodes";
 import type { StructureRow } from "./counts";
 import { type EditorDialog, menuButton, nodeSelector, type StructureActions } from "./editor-context";
 import { NodePanel } from "./node-panel";
@@ -220,24 +220,23 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
     return null;
   };
 
-  // The box under the pointer, or null when the pointer is off the visible chart or over the side
-  // panel: a drop only lands where it can be seen. (Release off the chart to drop nowhere.)
+  // The box under the pointer, or null when what's on top there isn't the chart itself (off the
+  // chart, the side panel, the minimap or zoom buttons, the notices): a drop only lands where it can
+  // be seen. (Release off the chart to drop nowhere.)
   const targetAt = (event: MouseEvent | TouchEvent, skip: string) => {
     const at = "changedTouches" in event ? event.changedTouches[0] : event;
-    const box = pane.current?.getBoundingClientRect();
-    if (!at || !box) return null;
+    if (!at) return null;
     const { clientX: x, clientY: y } = at;
-    if (x < box.left || x > box.right || y < box.top || y > box.bottom) return null;
-    const aside = pane.current?.querySelector("aside")?.getBoundingClientRect();
-    if (aside && x >= aside.left && x <= aside.right && y >= aside.top && y <= aside.bottom) return null;
+    const top = document.elementFromPoint(x, y);
+    if (!top?.closest(".react-flow") || top.closest(".react-flow__panel")) return null;
     return itemAt(layout.items, flow.screenToFlowPosition({ x, y }), skip);
   };
 
   // Escape during a drag cancels it: the box goes back and dropping it does nothing.
   const cancelled = useRef(false);
-  const dragging = drag !== null;
+  const inDrag = drag !== null;
   useEffect(() => {
-    if (!dragging) return;
+    if (!inDrag) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       // Before the side panel's own Escape (a window listener too): this one only cancels the drag.
@@ -248,7 +247,7 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [dragging]);
+  }, [inDrag]);
 
   const onNodeDragStart: OnNodeDrag<CanvasNode> = () => {
     cancelled.current = false;
@@ -273,7 +272,11 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
     }
     if (!dragged) return;
     const plan = planDrop(view, layout.items, dragged, targetAt(event as unknown as MouseEvent | TouchEvent, node.id));
-    if (plan?.type === "move") runMove(plan.move);
+    if (plan?.type === "move") {
+      runMove(plan.move);
+      // Where it went may be off the chart's view: focusing it pans there.
+      focusSoon(nodeSelector(plan.move.teamId));
+    }
     else if (plan?.type === "place") place(plan);
     else if (plan?.type === "refuse") report({ tone: "error", text: plan.label });
   };
@@ -299,9 +302,11 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
 
   // ---------- nodes and edges ----------
 
+  // Built once per layout; a drag swaps in only the box being dragged, so the others don't redraw.
+  const placed = useMemo(() => flowNodes(layout.items, { dragged: null, selectedId: panelId }), [layout, panelId]);
   const nodes = useMemo(
-    () => flowNodes(layout.items, { dragged: drag && { id: drag.id, position: drag.position }, selectedId: panelId }),
-    [layout, drag, panelId],
+    () => (drag ? placed.map((n) => (n.id === drag.id ? dragging(n, drag.position) : n)) : placed),
+    [placed, drag],
   );
   const edges = useMemo<Edge[]>(
     () =>
@@ -353,13 +358,12 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
   };
   const dialogRow = dialog && dialog.type !== "create" ? view.find((r) => r.id === dialog.id) : undefined;
 
+  // Changes only when the box under a drag does, not on every pointer move.
+  const overId = drag?.over ?? null;
+  const overOk = drag?.plan?.type === "move" || drag?.plan?.type === "place";
   const context = useMemo(
-    () => ({
-      openDialog,
-      openPanel,
-      over: drag?.over ? { id: drag.over, ok: drag.plan?.type === "move" || drag.plan?.type === "place" } : null,
-    }),
-    [openDialog, openPanel, drag],
+    () => ({ openDialog, openPanel, over: overId ? { id: overId, ok: overOk } : null }),
+    [openDialog, openPanel, overId, overOk],
   );
 
   return (
@@ -461,7 +465,8 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
               Not in the tree
             </h2>
             <p className="text-sm text-muted-foreground">
-              These sit somewhere the chart can&apos;t show. Use Move to… to put each one in its place.
+              These sit somewhere the chart can&apos;t show, with their people. Use Move to… to put each one in
+              its place.
             </p>
             <ul className="grid gap-1">
               {tree.stray.map((row) => (
@@ -469,6 +474,9 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
                   <span className="font-medium">{row.name}</span>
                   <Button variant="ghost" size="sm" data-node-menu={row.id} onClick={() => openDialog({ type: "move", id: row.id })}>
                     <span className="sr-only">{row.name}: </span>Move to…
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => openPanel(row.id)}>
+                    <span className="sr-only">{row.name}: </span>People and leads
                   </Button>
                 </li>
               ))}

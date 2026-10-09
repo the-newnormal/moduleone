@@ -181,9 +181,10 @@ describe("StructureCanvas", () => {
     expect(archived).toContain("Old Domain Domain Was in Unplaced.");
   });
 
-  it("lists nodes the chart can't place, with Move to…", () => {
+  it("lists nodes the chart can't place, with Move to… and their people and leads", () => {
     const out = render([...ROWS, node("lost", "Lost Team", "team", "d-gather", 3)]);
     expect(text(out)).toContain("Not in the tree");
     expect(out).toMatch(/<span class="sr-only">Lost Team: <\/span>Move to…/);
+    expect(out).toMatch(/<span class="sr-only">Lost Team: <\/span>People and leads/);
   });
 });

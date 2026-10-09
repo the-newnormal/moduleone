@@ -318,6 +318,11 @@ export function PersonNodeView({ data }: NodeProps<Extract<CanvasNode, { type: "
   );
 }
 
+// A box as it's being dragged: where the pointer has it, drawn above the rest.
+export function dragging(node: CanvasNode, position: XYPosition): CanvasNode {
+  return { ...node, position, zIndex: 1000 };
+}
+
 // "Mei Wong, leader", "Hana Lim, Master Admin, can't be moved here".
 export function personLabel(person: CanvasPerson): string {
   const role = person.role === "leader" ? ", leader" : person.role === "hq" ? ", Master Admin" : "";
@@ -338,9 +343,8 @@ export function flowNodes(
   items: readonly LayoutItem[],
   { dragged, selectedId }: { dragged: { id: string; position: XYPosition } | null; selectedId: string | null },
 ): CanvasNode[] {
-  return items.map((item): CanvasNode => {
-    const position = dragged?.id === item.id ? dragged.position : { x: item.x, y: item.y };
-    const base = { id: item.id, position, width: item.width, height: item.height, selected: item.id === selectedId };
+  const nodes = items.map((item): CanvasNode => {
+    const base = { id: item.id, position: { x: item.x, y: item.y }, width: item.width, height: item.height, selected: item.id === selectedId };
     switch (item.type) {
       case "node":
         return {
@@ -349,7 +353,7 @@ export function flowNodes(
           data: { row: item.row },
           draggable: item.row.kind !== "organisation",
           ariaLabel: `${item.row.kind} ${item.row.name}`,
-          zIndex: dragged?.id === item.id ? 1000 : 0,
+          zIndex: 0,
         };
       case "unplaced":
         // Not a box you select or move, but its "+" takes clicks (React Flow turns pointer events
@@ -383,8 +387,9 @@ export function flowNodes(
           draggable: item.person.editable,
           ariaLabel: personLabel(item.person),
           domAttributes: { "aria-describedby": PERSON_HINT_ID },
-          zIndex: dragged?.id === item.id ? 1000 : 1,
+          zIndex: 1,
         };
     }
   });
+  return dragged ? nodes.map((n) => (n.id === dragged.id ? dragging(n, dragged.position) : n)) : nodes;
 }
