@@ -35,3 +35,6 @@ export const NO_LOGIN_YET = "This person has no login yet. Use Give login instea
 export const NOT_GIVEN_HERE = "This login wasn't given in Module One, so the project owner looks after it.";
 export const INVITE_USED =
   "This person has already used their invite, so there's nothing to resend. They sign in at the login page.";
+
+// addLead
+export const ORGANISATION_OWNER_ONLY = "Only the project owner decides who leads the organisation.";

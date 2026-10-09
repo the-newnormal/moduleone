@@ -123,6 +123,12 @@ describe("PeopleSection", () => {
     expect(text(html)).not.toMatch(/\bhq\b/);
   });
 
+  it("offers no Add people on the organisation node, and says only the project owner places people there (since 0006)", () => {
+    const html = render({ ...TEAM, kind: "organisation", kindLabel: "Organisation" }, []);
+    expect(text(html)).not.toContain("Add people");
+    expect(text(html)).toContain("Only the project owner places people in the organisation");
+  });
+
   it("says who gave a login and when", () => {
     expect(row(render(), "Mei Wong")).toContain("Login given by Hana Lim on 9 Oct 2026");
   });
@@ -272,8 +278,14 @@ describe("LeadsSection", () => {
     expect(text(render(DOMAIN))).toContain("Leads see the check-ins made in this domain and in its sub-teams.");
     expect(text(render(DIVISION))).toContain("Leads see the check-ins made in this division and in everything in it.");
     expect(text(render({ ...DIVISION, kind: "organisation", kindLabel: "Organisation" }))).toContain(
-      "Leads see every check-in in the organisation.",
+      "Whoever sits in the organisation leads it: they see the check-ins made in it and in every division in it. Only the project owner places people here.",
     );
+  });
+
+  it("offers no Add lead on the organisation node, and says who placed its leaders (since 0006)", () => {
+    const html = render({ ...DIVISION, kind: "organisation", kindLabel: "Organisation" }, [{ id: "m-eli", name: "Eli Chao", domain: null }], []);
+    expect(text(html)).not.toContain("Add lead");
+    expect(row(html, "Eli Chao")).toBe("Eli Chao Placed here by the project owner");
   });
 
   it("speaks of a division as a division", () => {

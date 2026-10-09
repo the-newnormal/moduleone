@@ -21,6 +21,7 @@ import {
   NOT_GIVEN_HERE,
   NOT_IN_TEAM,
   NOT_YOURSELF,
+  ORGANISATION_OWNER_ONLY,
   PERSON_CHANGED,
   PERSON_GONE,
   PICK_ROLE,
@@ -140,6 +141,12 @@ export async function addLead(teamId: string, memberId: string): Promise<ActionR
   if (!admin.ok) return admin;
 
   if (!isUuid(teamId) || !isUuid(memberId)) return fail(BAD_REQUEST);
+
+  // A lead of the organisation node (migration 0006) would see every check-in, which only the
+  // project owner decides.
+  const target = await admin.value.supabase.from("teams").select("kind").eq("id", teamId).maybeSingle();
+  if (target.error) return fail(toUserMessage(target.error, "addLead"));
+  if ((target.data as { kind: string } | null)?.kind === "organisation") return fail(ORGANISATION_OWNER_ONLY);
 
   const { error } = await admin.value.supabase
     .from("team_leads")

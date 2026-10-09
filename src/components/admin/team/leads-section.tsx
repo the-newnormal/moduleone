@@ -59,7 +59,9 @@ function removeLeadCopy(lead: LeadPerson, team: TeamSummary, noun: string) {
 
 // One line on what leading means here.
 export function leadsExplanation(team: Pick<TeamSummary, "kind">): string {
-  if (team.kind === "organisation") return "Leads see every check-in in the organisation.";
+  if (team.kind === "organisation") {
+    return "Whoever sits in the organisation leads it: they see the check-ins made in it and in every division in it. Only the project owner places people here.";
+  }
   if (team.kind === "division") return "Leads see the check-ins made in this division and in everything in it.";
   return team.kind === "domain"
     ? "Leads see the check-ins made in this domain and in its sub-teams."
@@ -83,7 +85,7 @@ export function LeadsSection({ team, ownLeaders, leads, inheritedLeads, leadOpti
         <h2 id={headingId} tabIndex={-1} className="text-2xl outline-none">
           Leads
         </h2>
-        {!team.archived && (
+        {!team.archived && team.kind !== "organisation" && (
           <AddLeadDialog team={team} leadOptions={leadOptions} addLead={actions.addLead} onDone={setStatus} />
         )}
       </div>
@@ -96,7 +98,7 @@ export function LeadsSection({ team, ownLeaders, leads, inheritedLeads, leadOpti
             <li key={leader.id} className="grid gap-1 py-3">
               <p className="font-medium break-words">{leader.name}</p>
               <p className="text-sm text-muted-foreground">
-                Leader in this {noun} (change it under People)
+                {team.kind === "organisation" ? "Placed here by the project owner" : `Leader in this ${noun} (change it under People)`}
                 {leader.domain && (
                   <>
                     . Also leads <DomainLink {...leader.domain} />, which holds this {noun}

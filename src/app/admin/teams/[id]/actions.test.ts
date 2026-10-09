@@ -362,11 +362,29 @@ describe("setRole", () => {
 });
 
 describe("addLead", () => {
+  // The node the lead is for: a team, unless a test says otherwise.
+  beforeEach(() => {
+    userQueue.teams = [{ data: { kind: "team" }, error: null }];
+  });
+
   it("adds a team_leads row", async () => {
     userQueue.team_leads = [{ data: null, error: null }];
     await expect(addLead(TEAM, PERSON)).resolves.toEqual({ ok: true, value: null });
-    expect(userQueries).toEqual([{ table: "team_leads", calls: [["insert", { team_id: TEAM, member_id: PERSON }]] }]);
+    expect(userQueries).toEqual([
+      { table: "teams", calls: [["select", "kind"], ["eq", "id", TEAM], ["maybeSingle"]] },
+      { table: "team_leads", calls: [["insert", { team_id: TEAM, member_id: PERSON }]] },
+    ]);
     expectRevalidated();
+  });
+
+  it("refuses a lead of the organisation node, which only the project owner decides, without writing", async () => {
+    userQueue.teams = [{ data: { kind: "organisation" }, error: null }];
+    await expect(addLead(TEAM, PERSON)).resolves.toEqual({
+      ok: false,
+      error: "Only the project owner decides who leads the organisation.",
+    });
+    expect(userQueries.map((q) => q.table)).toEqual(["teams"]);
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 
   it("is fine when they already lead it", async () => {

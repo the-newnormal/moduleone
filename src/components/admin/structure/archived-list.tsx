@@ -17,7 +17,7 @@ export type Report = (notice: { tone: "done" | "error"; text: string }) => void;
 // archived too (restore those first).
 function where(row: StructureRow, rows: readonly StructureRow[]): string {
   const parents = breadcrumb(row.id, rows).slice(0, -1);
-  if (parents.length === 0) return row.kind === "division" ? "the top level" : "Unplaced";
+  if (parents.length === 0) return row.kind === "domain" || row.kind === "team" ? "Unplaced" : "the top level";
   return parents.map((p) => (p.archived_at ? `${p.name} (archived)` : p.name)).join(" › ");
 }
 

@@ -130,6 +130,20 @@ describe("StructureEditor", () => {
     expect(all(html, /data-node-move="(old[^"]*)"/g)).toEqual([]);
   });
 
+  it("says an archived division or organisation was at the top level, and a domain in Unplaced", () => {
+    const archived = text(
+      render([
+        ...ROWS,
+        node("gone-org", "Old Org", "organisation", null, 9, { archived_at: "2026-10-03T02:00:00Z" }),
+        node("gone-div", "Old Division", "division", null, 9, { archived_at: "2026-10-03T02:00:00Z" }),
+        node("gone-dom", "Old Domain", "domain", null, 9, { archived_at: "2026-10-03T02:00:00Z" }),
+      ]),
+    );
+    expect(archived).toContain("Old Org Organisation Was in the top level.");
+    expect(archived).toContain("Old Division Division Was in the top level.");
+    expect(archived).toContain("Old Domain Domain Was in Unplaced.");
+  });
+
   it("offers adding a division and an unplaced domain", () => {
     expect(html).toMatch(/<button [^>]*data-add="division"[^>]*>.*Add a division<\/button>/);
     expect(html).toMatch(/<button [^>]*data-add="unplaced"[^>]*>.*Add a domain<\/button>/);

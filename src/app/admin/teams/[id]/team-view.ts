@@ -228,11 +228,15 @@ export function buildTeamView({
   const ledAbove = (m: MemberRow) =>
     nodesAbove.find((t) => (m.role === "leader" && m.team_id === t.id) || leadRows.get(t.id)?.has(m.id));
 
+  // Only the project owner places people in the organisation node (migration 0006), and whoever
+  // sits there sees every check-in: its page shows who's there but offers no changes.
+  const ownerOnly = row.kind === "organisation";
+
   const people: Person[] = members
     .filter((m) => m.team_id === teamId)
     .map((m) => {
       const role = asRole(m.role);
-      const editable = isEditableMember({ id: m.id, role }, adminMemberId);
+      const editable = !ownerOnly && isEditableMember({ id: m.id, role }, adminMemberId);
       const hasLogin = m.auth_user_id !== null;
       const giver = m.login_given_by ? (memberById.get(m.login_given_by)?.name ?? null) : null;
       return {
@@ -256,7 +260,7 @@ export function buildTeamView({
     .sort(byName);
 
   const candidates: Candidate[] = members
-    .filter((m) => m.team_id !== teamId && isEditableMember({ id: m.id, role: asRole(m.role) }, adminMemberId))
+    .filter((m) => !ownerOnly && m.team_id !== teamId && isEditableMember({ id: m.id, role: asRole(m.role) }, adminMemberId))
     .map((m) => ({ id: m.id, name: m.name, teamId: m.team_id, teamName: nameOfTeam(m.team_id) }))
     .sort((a, b) => Number(a.teamId !== null) - Number(b.teamId !== null) || byName(a, b));
 
@@ -302,6 +306,7 @@ export function buildTeamView({
   const leadOptions: LeadPerson[] = members
     .filter(
       (m) =>
+        !ownerOnly &&
         m.role === "leader" &&
         m.id !== adminMemberId &&
         !leadIds.has(m.id) &&

@@ -133,6 +133,11 @@ describe("heatmapGroups", () => {
       ]);
     });
 
+    it("keeps the organisation's row for a viewer who covers it even in weeks without check-ins", () => {
+      const organisation = node("tn", "The New Normal", "organisation", divisions());
+      expect(heatmapGroups({ roots: [organisation], loose: [] })[0]).toMatchObject({ label: "The New Normal", rows: [] });
+    });
+
     it("leaves the organisation out for a viewer who doesn't cover it, and still groups their divisions", () => {
       const organisation = node("tn", "The New Normal", "organisation", divisions(), false);
       expect(rows({ roots: [organisation], loose: [] })).toEqual([

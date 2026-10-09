@@ -166,6 +166,10 @@ describe("buildTeamView", () => {
     expect(at("dom-legacy").crumbs.map((c) => c.label)).toEqual(["Unplaced"]);
     // Whoever sits in it leads everything below.
     expect(at("div-gather").inheritedLeads).toEqual([{ id: "m-eli", name: "Eli Chao", domainId: "org", domainName: "The New Normal" }]);
+    // Only the project owner places people there or decides who leads it: nothing to change here.
+    expect(at("org").people.every((p) => !p.editable && !p.canGiveLogin)).toBe(true);
+    expect(at("org").candidates).toEqual([]);
+    expect(at("org").leadOptions).toEqual([]);
   });
 
   it("marks an archived team", () => {

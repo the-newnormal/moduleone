@@ -50,12 +50,15 @@ export function heatmapGroups(org: Org): HeatmapGroup[] {
     head: node.scored ? row(node, 0) : null,
     rows: below,
   });
+  // The organisation's row is always there for a viewer who covers it, like the org chart's box;
+  // a division is left out when it has nothing to show.
   const groups = [
-    ...organisations.map((node) => group(node, [])),
+    ...organisations.filter((node) => node.scored).map((node) => group(node, [])),
     ...roots
       .filter((root) => root.kind === "division")
-      .map((division) => group(division, division.children.flatMap((child) => rows(child, 0)))),
-  ].filter((g) => g.rows.length > 0 || (g.head !== null && hasCheckins(g.head)));
+      .map((division) => group(division, division.children.flatMap((child) => rows(child, 0))))
+      .filter((g) => g.rows.length > 0 || (g.head !== null && hasCheckins(g.head))),
+  ];
 
   const other = [
     ...roots.filter((root) => root.kind !== "division").flatMap((root) => rows(root, 0)),

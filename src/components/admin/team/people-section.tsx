@@ -36,10 +36,16 @@ export function PeopleSection({ team, people, candidates, actions }: Props) {
         <h2 id={headingId} tabIndex={-1} className="text-2xl outline-none">
           People <span className="text-base text-muted-foreground">({people.length})</span>
         </h2>
-        {!team.archived && (
+        {!team.archived && team.kind !== "organisation" && (
           <AddPeopleDialog team={team} candidates={candidates} actions={actions} onDone={setStatus} />
         )}
       </div>
+      {team.kind === "organisation" && (
+        <p className="text-sm text-muted-foreground">
+          Only the project owner places people in the organisation, since whoever sits here sees the check-ins of
+          every division.
+        </p>
+      )}
       {team.archived && (
         <p className="text-sm text-muted-foreground">
           This {noun} is archived, so nobody can be added to it. Restore it on the{" "}
