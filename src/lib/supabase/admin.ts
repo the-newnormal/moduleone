@@ -8,7 +8,11 @@ import { createClient } from "@supabase/supabase-js";
 //   after checking, as the signed-in admin, that it may;
 // - the check-in's server code (src/app/portal/checkin/actions.ts and housekeeping.ts,
 //   src/lib/checkin/process.ts), which writes recordings, drafts, transcripts and scores for the
-//   member it takes from the session, never from the request (members only read; CLAUDE.md).
+//   member it takes from the session, never from the request (members only read; CLAUDE.md);
+// - the Master Admin's delete-recording and reset-check-in actions
+//   (src/app/portal/dashboard/[teamId]/[week]/actions.ts), which only remove from Storage the files
+//   that hq_delete_checkin_recording / hq_reset_checkin (0007) returned after checking, as the
+//   signed-in user, that they are hq.
 // Everything else reads and writes as the signed-in user (./server.ts) so RLS decides.
 //
 // `server-only` makes a build fail if a Client Component ever imports it, and the key has no
