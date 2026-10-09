@@ -10,6 +10,12 @@ export const ROLE_LABELS: Record<Role, string> = {
   hq: "Master Admin",
 };
 
+const ROLES: readonly Role[] = ["member", "leader", "hq"];
+
+// An unexpected role (the database allows only these three) is treated like a Master Admin: shown,
+// never editable.
+export const asRole = (role: string): Role => (ROLES.includes(role as Role) ? (role as Role) : "hq");
+
 export function roleLabel(role: Role): string {
   return ROLE_LABELS[role] ?? "Unknown role";
 }

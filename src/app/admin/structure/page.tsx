@@ -1,6 +1,17 @@
 import type { Metadata } from "next";
+import {
+  addLead,
+  addMember,
+  createMember,
+  giveLogin,
+  removeFromTeam,
+  removeLead,
+  resendInvite,
+  setRole,
+} from "@/app/admin/teams/[id]/actions";
+import { type GrantRow, type LeadRow, MEMBER_COLUMNS, type MemberRow } from "@/app/admin/teams/[id]/team-view";
 import { withCounts } from "@/components/admin/structure/counts";
-import { StructureEditor } from "@/components/admin/structure/structure-editor";
+import { StructureCanvas } from "@/components/admin/structure/structure-canvas";
 import { logError } from "@/lib/admin/errors";
 import { readAll } from "@/lib/admin/read-all";
 import { requireAdminPage } from "@/lib/admin/session";
@@ -9,31 +20,31 @@ import { archiveNode, createNode, moveNode, restoreNode, updateNode } from "./ac
 
 export const metadata: Metadata = { title: "Structure · Admin · Module One" };
 
-// Every division, domain and team (admins see all of them, archived ones too), with how many
-// people sit in each and who leads it, read as the signed-in admin. The editor does the rest.
+// Every division, domain and team (admins see all of them, archived ones too), everyone in them,
+// who leads what and who holds a grant, read as the signed-in admin. The canvas does the rest: the
+// chart, its drags and dialogs, and the side panel with a node's people and leads.
 export default async function StructurePage() {
-  const { supabase } = await requireAdminPage("/admin/structure");
+  const { supabase, memberId } = await requireAdminPage("/admin/structure");
 
   // Read in full, past PostgREST's per-request row limit (readAll).
-  const [teams, members, leads] = await Promise.all([
+  const [teams, members, leads, grants] = await Promise.all([
     readAll((from, to) => supabase.from("teams").select(TEAM_COLUMNS).order("id").range(from, to)),
-    readAll((from, to) =>
-      supabase.from("members").select("id, team_id, role").not("team_id", "is", null).order("id").range(from, to),
-    ),
+    readAll((from, to) => supabase.from("members").select(MEMBER_COLUMNS).order("id").range(from, to)),
     readAll((from, to) =>
       supabase.from("team_leads").select("team_id, member_id").order("team_id").order("member_id").range(from, to),
     ),
+    readAll((from, to) =>
+      supabase.from("member_grants").select("member_id").order("member_id").order("grant_name").range(from, to),
+    ),
   ]);
-  const failed = teams.error ?? members.error ?? leads.error;
-  if (failed || !teams.data || !members.data || !leads.data) {
+  const failed = teams.error ?? members.error ?? leads.error ?? grants.error;
+  if (failed || !teams.data || !members.data || !leads.data || !grants.data) {
     logError("load structure", failed);
     throw new Error("Couldn't load the team structure.");
   }
-  const rows = withCounts(
-    teams.data as unknown as TeamRow[],
-    members.data as { id: string; team_id: string | null; role: string }[],
-    leads.data as { team_id: string; member_id: string }[],
-  );
+  const people = members.data as unknown as MemberRow[];
+  const leadRows = leads.data as unknown as LeadRow[];
+  const rows = withCounts(teams.data as unknown as TeamRow[], people, leadRows);
 
   return (
     <>
@@ -42,11 +53,19 @@ export default async function StructurePage() {
           Structure
         </h1>
         <p className="max-w-3xl text-muted-foreground">
-          Divisions hold domains, and domains hold teams. Drag a row by its handle to move it, or use
-          Move to…. Open a division, domain or team to see and change who&apos;s in it.
+          The organisation as a chart: divisions hold domains, and domains hold teams. Drag a box onto another to
+          restructure, or use its ⋯ menu. Click a box to see and change who&apos;s in it and who leads it.
         </p>
       </header>
-      <StructureEditor rows={rows} actions={{ moveNode, createNode, updateNode, archiveNode, restoreNode }} />
+      <StructureCanvas
+        rows={rows}
+        members={people}
+        leads={leadRows}
+        grants={grants.data as unknown as GrantRow[]}
+        adminMemberId={memberId}
+        actions={{ moveNode, createNode, updateNode, archiveNode, restoreNode }}
+        teamActions={{ addMember, createMember, giveLogin, resendInvite, removeFromTeam, setRole, addLead, removeLead }}
+      />
     </>
   );
 }
