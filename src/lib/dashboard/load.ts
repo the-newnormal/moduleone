@@ -89,6 +89,8 @@ export type TeamWeekCheckin = {
   // Where to play this check-in's recording from, when the viewer may play it (the speaker, or the
   // recordings grant; Storage decides). It signs a fresh link on every request (./recordings.ts).
   recording: string | null;
+  // Whether it has a recording at all, played or not (for a Master Admin's delete control).
+  hasRecording: boolean;
 };
 
 // Team ids per request: about 3.7 kB of URL, well inside what PostgREST's gateway accepts.
@@ -164,6 +166,7 @@ export async function loadTeamWeek(
         rubric_review: c.rubric_review,
         transcript: c.transcript,
         recording: c.audio_path && playable.has(c.audio_path) ? recordingPath(c.id, c.audio_path) : null,
+        hasRecording: c.audio_path !== null,
       };
       return { row, place: order.get(c.team_id ?? "") ?? 0 };
     })

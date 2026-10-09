@@ -10,6 +10,7 @@ import { formatScore, type HealthConfig, healthBand, healthScore, teamWeekHealth
 import { createClient } from "@/lib/supabase/server";
 import { BandBadge } from "../../band";
 import { signInAgain } from "../../sign-in";
+import { CheckinControls } from "./checkin-controls";
 import { RecordingPlayer } from "./recording-player";
 
 export const metadata: Metadata = { title: "Team week · Module One" };
@@ -20,10 +21,13 @@ function CheckinCard({
   checkin,
   config,
   Title,
+  manage,
 }: {
   checkin: TeamWeekCheckin;
   config: HealthConfig;
   Title: "h2" | "h3";
+  // For a Master Admin: whether the week is the current one (a reset check-in can be redone).
+  manage: { currentWeek: boolean } | null;
 }) {
   const { activity_score: a, excellence_score: e, morale_score: m } = checkin;
   const graded = a !== null && e !== null && m !== null;
@@ -66,6 +70,15 @@ function CheckinCard({
             <summary className="cursor-pointer text-muted-foreground">Transcript</summary>
             <p className="mt-2 break-words whitespace-pre-line">{checkin.transcript}</p>
           </details>
+        )}
+        {manage && (
+          <CheckinControls
+            checkinId={checkin.id}
+            memberName={checkin.memberName ?? "this team member"}
+            hasRecording={checkin.hasRecording}
+            graded={graded}
+            currentWeek={manage.currentWeek}
+          />
         )}
       </CardContent>
     </Card>
@@ -120,6 +133,8 @@ export default async function TeamWeekPage({
   const teamName = !id ? "No team" : covers(id) ? (teamWeek.teamName ?? "Earlier team") : yours(teamWeek.teamName);
   const cell = teamWeekHealth(checkins, config);
   const waiting = checkins.length - (cell?.graded ?? 0);
+  // Master Admins may delete a recording or reset a check-in (the database checks again).
+  const manage = role === "hq" ? { currentWeek: week === weekStartFor(new Date()) } : null;
 
   return (
     <main className="mx-auto grid w-full max-w-3xl grid-cols-[minmax(0,1fr)] gap-6 px-4 py-10">
@@ -157,14 +172,14 @@ export default async function TeamWeekPage({
               {section.team ?? teamName}
             </h2>
             {section.checkins.map((checkin) => (
-              <CheckinCard key={checkin.id} checkin={checkin} config={config} Title="h3" />
+              <CheckinCard key={checkin.id} checkin={checkin} config={config} Title="h3" manage={manage} />
             ))}
           </section>
         ))
       ) : (
         <section aria-label="Check-ins" className="grid gap-4">
           {checkins.map((checkin) => (
-            <CheckinCard key={checkin.id} checkin={checkin} config={config} Title="h2" />
+            <CheckinCard key={checkin.id} checkin={checkin} config={config} Title="h2" manage={manage} />
           ))}
         </section>
       )}
