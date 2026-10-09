@@ -59,7 +59,7 @@ declare
   member_removed timestamptz;
 begin
   select m.team_id, m.removed_at into member_team, member_removed
-  from public.members m where m.id = new.member_id;
+  from public.members m where m.id = new.member_id for update;
   if member_removed is not null then
     raise exception using errcode = 'check_violation', message = 'That person was removed from Module One.';
   end if;
