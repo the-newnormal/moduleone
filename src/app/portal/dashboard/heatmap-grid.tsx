@@ -110,7 +110,7 @@ export function HeatmapGrid({
 }) {
   return (
     <HeatmapTooltip>
-      <div data-scroll-to-end className="relative overflow-x-auto rounded-xl border bg-card">
+      <div data-scroll-to-end className="relative overflow-x-auto rounded-xl bg-card">
         <table className="w-full border-separate border-spacing-0 text-sm">
           <caption className="sr-only">{caption}</caption>
           <thead>
@@ -141,7 +141,7 @@ export function HeatmapGrid({
                 <tr>
                   <th
                     scope="rowgroup"
-                    className="sticky left-0 z-10 border-t bg-card px-3 pt-2 pb-0.5 text-left font-sans text-xs font-semibold tracking-wide uppercase"
+                    className="sticky left-0 z-10 border-t bg-card px-3 pt-2 pb-0.5 text-left font-sans text-[15px] font-medium"
                   >
                     {group.label}
                     {group.head.archived && (
@@ -165,7 +165,7 @@ export function HeatmapGrid({
                   <th
                     scope="rowgroup"
                     colSpan={weeks.length + 1}
-                    className="border-t bg-card px-3 pt-3 pb-1 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+                    className="border-t bg-card px-3 pt-3 pb-1 text-left text-xs leading-4 font-medium tracking-[0.02em] text-muted-foreground"
                   >
                     {/* A cell spanning every column can't stick; its label can, so it stays in view on phones. */}
                     <span className="sticky left-3 inline-block">{group.label ?? "Other"}</span>

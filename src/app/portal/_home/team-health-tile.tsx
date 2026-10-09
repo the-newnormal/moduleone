@@ -1,4 +1,4 @@
-import { ArrowRight, Clock, OctagonAlert } from "lucide-react";
+import { ArrowRight, Clock } from "lucide-react";
 import Link from "next/link";
 import { Stat } from "@/components/normal/stat";
 import { Tag } from "@/components/normal/tag";
@@ -7,18 +7,14 @@ import type { HeatmapCell, OrgNode } from "@/lib/dashboard/org";
 import { formatWeek } from "@/lib/dashboard/weeks";
 import { formatScore, type HealthConfig } from "@/lib/health/health";
 import type { TeamHealthGlance } from "@/lib/portal/team-health";
-import { BANDS, BandBadge, barClass, thresholdItems } from "../dashboard/band";
-import { cellWord, describeCell, plural } from "../dashboard/describe";
+import { BANDS, BandBadge, barClass, RedCount, thresholdItems } from "../dashboard/band";
+import { cellWord, describeCell, plural, redCount } from "../dashboard/describe";
 import { HeatmapTooltip } from "../dashboard/heatmap-tooltip";
 import { Bars, drillIn } from "../dashboard/org-chart";
 import { Tile } from "./tile";
 
 type Ok = Extract<TeamHealthGlance, { status: "ok" }>;
 
-// A green or yellow mean with a red check-in in it. Kept here rather than imported, so the portal
-// doesn't depend on how the heat-map pages mark it.
-const someoneRed = (cell: HeatmapCell) =>
-  cell.health !== null && cell.health.band !== "red" && cell.health.bands.red > 0;
 
 // Leaders' and hq's numbers for the week: check-ins so far, last week's, and how many are still
 // waiting for the grader. Counts only, from the teams the viewer covers.
@@ -82,7 +78,7 @@ export function TeamHealthTile({ health }: { health: Exclude<TeamHealthGlance, {
           <div className="grid gap-1">
             <div
               aria-hidden
-              className="hidden grid-cols-[minmax(0,1fr)_5.5rem_10rem] gap-4 border-b px-2 pb-2 text-xs leading-4 font-medium tracking-[0.02em] text-muted-foreground sm:grid"
+              className="hidden grid-cols-[minmax(0,1fr)_5.5rem_12.5rem] gap-4 border-b px-2 pb-2 text-xs leading-4 font-medium tracking-[0.02em] text-muted-foreground sm:grid"
             >
               <span>Team</span>
               <span>Last {weeks.length} weeks</span>
@@ -136,7 +132,7 @@ function GlanceRow({
 }) {
   return (
     <li
-      className={`grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 border-b py-2 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_5.5rem_10rem] ${
+      className={`grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 border-b py-2 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_5.5rem_12.5rem] ${
         indent ? "pr-2 pl-5" : "px-2"
       }`}
     >
@@ -174,7 +170,7 @@ function ThisWeek({ node, config }: { node: OrgNode; config: HealthConfig }) {
       {cell.health ? (
         <>
           <BandBadge band={cell.health.band} score={formatScore(cell.health.score, config)} />
-          {someoneRed(cell) && <OctagonAlert aria-hidden className="size-3 text-status-critical" strokeWidth={2.5} />}
+          {redCount(cell) > 0 && <RedCount count={redCount(cell)} />}
           {cell.pending > 0 && <Clock aria-hidden className="size-3 text-muted-foreground" />}
         </>
       ) : cell.pending > 0 ? (
@@ -214,8 +210,8 @@ function GlanceKey({ thresholds, weeks }: { thresholds: HealthConfig["thresholds
         waiting for the grader
       </li>
       <li className="flex items-center gap-1.5 text-muted-foreground">
-        <OctagonAlert aria-hidden className="size-3 text-status-critical" strokeWidth={2.5} />
-        someone was red
+        <RedCount count={2} />
+        how many of the box&apos;s check-ins were red, whatever its colour
       </li>
       <li className="flex items-center gap-1.5 text-muted-foreground">
         <span aria-hidden className="flex h-5 items-end gap-0.5">

@@ -1,4 +1,3 @@
-import { OctagonAlert } from "lucide-react";
 import Link from "next/link";
 import type { RedSpot } from "@/lib/dashboard/needs-a-look";
 import { formatWeek } from "@/lib/dashboard/weeks";
@@ -75,9 +74,8 @@ function Spot({ spot, config }: { spot: RedSpot; config: HealthConfig }) {
           <span className="truncate text-[15px] leading-[22px] font-medium">{spot.name}</span>
           <span className="text-[13px] leading-[18px] text-muted-foreground">{reds}</span>
         </span>
-        <span aria-hidden className="flex shrink-0 items-center gap-1.5">
+        <span aria-hidden className="flex shrink-0 items-center">
           <BandBadge band={health.band} score={score} />
-          {!spot.red && <OctagonAlert className="size-3 text-status-critical" strokeWidth={2.5} />}
         </span>
       </Link>
     </li>

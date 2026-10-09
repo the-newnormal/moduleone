@@ -90,7 +90,7 @@ function TeamRow({ row, config, heading }: { row: Row; config: HealthConfig; hea
               </span>
             )}
             <Name
-              className={`truncate ${heading ? "font-sans text-xs font-semibold tracking-wide uppercase" : "font-medium"}`}
+              className={`truncate font-medium ${heading ? "font-sans text-[15px]" : ""}`}
             >
               {row.name}
             </Name>
@@ -153,11 +153,11 @@ function Card({
   config: HealthConfig;
 }) {
   return (
-    <section aria-label={label} className="grid grid-cols-[minmax(0,1fr)] gap-1 rounded-xl border bg-card p-2">
+    <section aria-label={label} className="grid grid-cols-[minmax(0,1fr)] gap-1 rounded-xl bg-card p-2">
       {head?.scored ? (
         <TeamRow row={head} config={config} heading />
       ) : (
-        <h2 className="flex min-h-9 items-center px-2.5 font-sans text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+        <h2 className="flex min-h-9 items-center px-2.5 font-sans text-xs leading-4 font-medium tracking-[0.02em] text-muted-foreground">
           {label}
         </h2>
       )}
@@ -194,7 +194,7 @@ export function OrgChart({ org, config }: { org: Org; config: HealthConfig }) {
         {organisations
           .filter((node) => node.scored)
           .map((node) => (
-            <section key={node.teamId} aria-label={node.name} className="grid grid-cols-[minmax(0,1fr)] rounded-xl border bg-card p-2 md:col-span-2">
+            <section key={node.teamId} aria-label={node.name} className="grid grid-cols-[minmax(0,1fr)] rounded-xl bg-card p-2 md:col-span-2">
               <TeamRow row={node} config={config} heading />
             </section>
           ))}

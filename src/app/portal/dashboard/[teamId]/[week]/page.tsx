@@ -33,7 +33,7 @@ function CheckinCard({
     <Card className="gap-4">
       <CardHeader className="grid-cols-[1fr_auto]">
         <CardTitle>
-          <Title className="font-sans text-lg font-semibold">{checkin.memberName ?? "A team member"}</Title>
+          <Title className="font-sans text-xl leading-[26px] font-medium">{checkin.memberName ?? "A team member"}</Title>
         </CardTitle>
         {score !== null ? (
           <BandBadge band={healthBand(score, config)} score={formatScore(score, config)} />
@@ -128,7 +128,7 @@ export default async function TeamWeekPage({
           ← Team health
         </Link>
         {teamWeek.context.length > 0 && (
-          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+          <p className="text-xs leading-4 font-medium tracking-[0.02em] text-muted-foreground">
             {teamWeek.context.join(" › ")}
           </p>
         )}
@@ -147,13 +147,13 @@ export default async function TeamWeekPage({
       </header>
 
       {checkins.length === 0 ? (
-        <p className="rounded-xl border bg-card p-6 text-muted-foreground">
+        <p className="rounded-xl bg-card p-6 text-muted-foreground">
           No check-ins you can see from this team that week.
         </p>
       ) : sectioned ? (
         sections.map((section) => (
           <section key={section.teamId ?? "none"} aria-label={section.team ?? teamName} className="grid gap-4">
-            <h2 className="font-sans text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+            <h2 className="font-sans text-xs leading-4 font-medium tracking-[0.02em] text-muted-foreground">
               {section.team ?? teamName}
             </h2>
             {section.checkins.map((checkin) => (
