@@ -43,7 +43,7 @@ export default async function StructurePage() {
         </h1>
         <p className="max-w-3xl text-muted-foreground">
           Divisions hold domains, and domains hold teams. Drag a row by its handle to move it, or use
-          Move to…. Open a domain or team to see and change who&apos;s in it.
+          Move to…. Open a division, domain or team to see and change who&apos;s in it.
         </p>
       </header>
       <StructureEditor rows={rows} actions={{ moveNode, createNode, updateNode, archiveNode, restoreNode }} />

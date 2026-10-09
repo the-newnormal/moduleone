@@ -13,7 +13,7 @@ type Props = {
   updateNode: TeamActions["updateNode"];
 };
 
-// "Edit" next to the team's name: name, code, a domain's type, and note, in the same form the
+// "Edit" next to the team's name: name, code, a domain's or division's type, and note, in the same form the
 // Structure page uses. (Its place in the tree changes on the Structure page.) Screen readers hear
 // "Saved <name>." afterwards, as on the Structure page.
 export function EditTeamDialog({ team, updateNode }: Props) {
@@ -48,6 +48,10 @@ export function EditTeamDialog({ team, updateNode }: Props) {
   );
 }
 
+// The node's current values as the form shows them, its domain's or division's type included.
+export const savedForm = (team: TeamSummary) =>
+  nodeToForm({ ...team, domain_type: team.domainType, division_type: team.divisionType });
+
 // The dialog's content (exported for tests). Its state resets each time the dialog opens.
 export function EditTeamForm({
   team,
@@ -55,7 +59,7 @@ export function EditTeamForm({
   onPendingChange,
   onSaved,
 }: Props & { onPendingChange?: (pending: boolean) => void; onSaved: (name: string) => void }) {
-  const saved = nodeToForm({ ...team, domain_type: team.domainType, division_type: null });
+  const saved = savedForm(team);
   return (
     <NodeFieldsForm
       kind={team.kind}

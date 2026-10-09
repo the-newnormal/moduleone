@@ -19,6 +19,7 @@ const TEAM: TeamSummary = {
   kindLabel: "Team",
   code: "IP.1",
   domainType: null,
+  divisionType: null,
   typeLabel: null,
   note: null,
   archived: false,
@@ -186,8 +187,8 @@ describe("AddPeopleDialog", () => {
 });
 
 describe("LeadsSection", () => {
-  const OPTIONS: LeadPerson[] = [{ id: "m-cat", name: "Cat Ng", teamName: null, inThisTeam: false, viaDomain: null }];
-  const LEADS: LeadPerson[] = [{ id: "m-ana", name: "Ana Lee", teamName: "IP Lab 2", inThisTeam: false, viaDomain: null }];
+  const OPTIONS: LeadPerson[] = [{ id: "m-cat", name: "Cat Ng", teamName: null, inThisTeam: false, viaDomain: null, viaOwnTeam: false }];
+  const LEADS: LeadPerson[] = [{ id: "m-ana", name: "Ana Lee", teamName: "IP Lab 2", inThisTeam: false, viaDomain: null, viaOwnTeam: false }];
 
   it("can't close Add lead while adding, and shows the refusal when it comes", async () => {
     const answer = deferred<ActionResult>();
@@ -216,8 +217,8 @@ describe("LeadsSection", () => {
   });
 
   it.each([
-    ["sits in it", { inThisTeam: true, viaDomain: null }, "because they sit in this"],
-    ["leads the domain holding it", { inThisTeam: false, viaDomain: "IP Lab" }, "because they also lead IP Lab, which holds it"],
+    ["sits in it", { inThisTeam: true, viaDomain: null, viaOwnTeam: false }, "because they sit in this"],
+    ["leads the domain holding it", { inThisTeam: false, viaDomain: "IP Lab", viaOwnTeam: false }, "because they also lead IP Lab, which holds it"],
   ])("doesn't say a removed lead stops leading the team while they still lead it (%s)", async (_label, where, reason) => {
     const leo: LeadPerson = { id: "m-leo", name: "Leo Tan", teamName: "IP Lab 1", ...where };
     const actions = { addLead: vi.fn(ok), removeLead: vi.fn(ok) };

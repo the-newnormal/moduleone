@@ -30,13 +30,13 @@ export async function generateMetadata({ params }: PageProps<"/admin/teams/[id]"
   const { id } = await params;
   const admin = await adminForMetadata();
   if (!admin || !isUuid(id)) return { title: title("Team") };
-  const { data, error } = await admin.supabase.from("teams").select("name, kind").eq("id", id).maybeSingle();
+  const { data, error } = await admin.supabase.from("teams").select("name").eq("id", id).maybeSingle();
   if (error) logError("team page title", error);
-  const team = data as { name: string; kind: string } | null;
-  return { title: title(team && team.kind !== "division" ? team.name : "Team") };
+  const team = data as { name: string } | null;
+  return { title: title(team ? team.name : "Team") };
 }
 
-// A domain's or team's page ("clicking into the team name"): who is in it, who leads it, and
+// A division's, domain's or team's page ("clicking into the team name"): who is in it, who leads it, and
 // giving people logins. Read as the signed-in admin, who sees every team, member and lead (RLS).
 export default async function TeamPage({ params }: PageProps<"/admin/teams/[id]">) {
   const { id: rawId } = await params;

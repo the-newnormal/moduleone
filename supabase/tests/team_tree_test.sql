@@ -1,6 +1,7 @@
 -- The team tree, team leads and admin_move_team (migration 0003). Run: supabase test db
 -- Builds its own fixtures inside the transaction and rolls back, so it doesn't depend on seed.sql
--- (it does check the founding structure, which 0003 itself loads).
+-- (it does check the founding structure, which 0003 itself loads). Since 0005 a division can hold
+-- people, leads and check-ins like a domain; division_heads_test.sql covers that.
 --
 -- Fixtures (ids b1… teams, c1… members, a1… logins, d1… check-ins):
 --   TT Division 1                       TT Division 2               TT Division 3
@@ -22,7 +23,7 @@
 -- team. The admin sections add more nodes by name (admins can't choose ids) and look them up with
 -- pg_temp.team().
 begin;
-select plan(316);
+select plan(310);
 
 -- ---------- tree lock ----------
 -- Whether running sql takes the tree lock. It runs in a subtransaction that is rolled back, which
@@ -822,10 +823,6 @@ select is(
   pg_temp.changed($$update members set team_id = pg_temp.team('TT New unplaced') where id = 'c1000000-0000-4000-8000-000000000012'$$),
   1, 'admin places plain in an unplaced domain'
 );
-select alike(
-  pg_temp.error_of($$update teams set kind = 'division' where id = pg_temp.team('TT New unplaced')$$),
-  '23514: A division can''t have members. Move its 1 member out first.', 'a domain with members cannot become a division'
-);
 select lives_ok(
   $$insert into teams (name) values ('TT Led unplaced'), ('TT Empty unplaced')$$,
   'admin adds two more unplaced domains'
@@ -833,10 +830,6 @@ select lives_ok(
 select lives_ok(
   $$insert into team_leads (team_id, member_id) values (pg_temp.team('TT Led unplaced'), 'c1000000-0000-4000-8000-000000000011')$$,
   'admin makes lead2 a lead of one of them'
-);
-select alike(
-  pg_temp.error_of($$update teams set kind = 'division' where id = pg_temp.team('TT Led unplaced')$$),
-  '23514: A division can''t have leaders. Remove its 1 leader first.', 'a domain with leaders cannot become a division'
 );
 select lives_ok($$insert into teams (name) values ('TT History unplaced')$$, 'admin adds another unplaced domain');
 select lives_ok(
@@ -853,11 +846,6 @@ set local request.jwt.claims to '{"sub": "a1000000-0000-4000-8000-000000000001",
 select is(
   pg_temp.changed($$update members set team_id = null where name = 'TT historian'$$),
   1, 'who checks in there, then leaves'
-);
-select alike(
-  pg_temp.error_of($$update teams set kind = 'division' where id = pg_temp.team('TT History unplaced')$$),
-  '23514: A division can''t hold check-ins, and 1 was made in this domain. Archive it instead.',
-  'a domain with check-ins cannot become a division, even with nobody in it'
 );
 select is(
   pg_temp.changed($$update teams set kind = 'division' where id = pg_temp.team('TT Empty unplaced')$$),
@@ -962,14 +950,6 @@ select is(pg_temp.n($$select 1 from members where id = 'c1000000-0000-4000-8000-
 
 -- ---------- admin: who can be placed where ----------
 set local request.jwt.claims to '{"sub": "a1000000-0000-4000-8000-000000000001", "role": "authenticated"}';
-select alike(
-  pg_temp.error_of($$insert into members (name, team_id) values ('x', 'b1000000-0000-4000-8000-000000000001')$$),
-  '23514: People can only be placed in a domain or a team, not a division.', 'nobody can be added to a division'
-);
-select alike(
-  pg_temp.error_of($$update members set team_id = 'b1000000-0000-4000-8000-000000000002' where id = 'c1000000-0000-4000-8000-000000000004'$$),
-  '23514: People can only be placed in a domain or a team, not a division.', 'nobody can be moved into a division'
-);
 select alike(
   pg_temp.error_of($$update members set team_id = pg_temp.team('TT Closing team') where id = 'c1000000-0000-4000-8000-000000000014'$$),
   '23514: That team is archived. Restore it first, or pick another.', 'nobody can be moved into an archived team'
@@ -1085,10 +1065,6 @@ select throws_ok(
   '42501', null, 'admin cannot make themselves a lead (they are a leader, so only RLS stops it)'
 );
 select alike(
-  pg_temp.error_of($$insert into team_leads (team_id, member_id) values ('b1000000-0000-4000-8000-000000000001', 'c1000000-0000-4000-8000-000000000011')$$),
-  '23514: Leaders lead domains and teams, not divisions.', 'nobody can lead a division'
-);
-select alike(
   pg_temp.error_of($$insert into team_leads (team_id, member_id) values ('b1000000-0000-4000-8000-000000000035', 'c1000000-0000-4000-8000-000000000011')$$),
   '23514: That domain is archived. Restore it first.', 'nobody can be made a lead of an archived domain'
 );
@@ -1099,8 +1075,8 @@ select throws_ok(
 reset role;
 set local role service_role;
 select alike(
-  pg_temp.error_of($$update team_leads set team_id = 'b1000000-0000-4000-8000-000000000001' where team_id = 'b1000000-0000-4000-8000-000000000022' and member_id = 'c1000000-0000-4000-8000-000000000011'$$),
-  '23514: Leaders lead domains and teams, not divisions.', 'the server cannot point a lead row at a division either'
+  pg_temp.error_of($$update team_leads set team_id = 'b1000000-0000-4000-8000-000000000035' where team_id = 'b1000000-0000-4000-8000-000000000022' and member_id = 'c1000000-0000-4000-8000-000000000011'$$),
+  '23514: That domain is archived. Restore it first.', 'the server cannot point a lead row at an archived domain either'
 );
 select alike(
   pg_temp.error_of($$update team_leads set member_id = 'c1000000-0000-4000-8000-000000000012' where team_id = 'b1000000-0000-4000-8000-000000000022' and member_id = 'c1000000-0000-4000-8000-000000000011'$$),

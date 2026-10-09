@@ -137,19 +137,16 @@ function RowMenu({ row }: { row: StructureRow }) {
   );
 }
 
-// One node's line: handle, name (a link into the team page for domains and teams), code, type,
-// counts and note, then Move to… and the menu.
+// One node's line: handle, name (a link into its team page), code, type, counts and note, then
+// Move to… and the menu.
 export function NodeRow({ row, handle, headingId }: { row: StructureRow; handle?: Handle; headingId?: string }) {
   const { openDialog } = useEditor();
   const type = typeLabel(row);
-  const name =
-    row.kind === "division" ? (
-      row.name
-    ) : (
-      <Link href={`/admin/teams/${row.id}`} className="underline-offset-4 hover:underline">
-        {row.name}
-      </Link>
-    );
+  const name = (
+    <Link href={`/admin/teams/${row.id}`} className="underline-offset-4 hover:underline">
+      {row.name}
+    </Link>
+  );
   const Name = row.kind === "division" ? "h2" : row.kind === "domain" ? "h3" : "p";
 
   return (
@@ -165,12 +162,10 @@ export function NodeRow({ row, handle, headingId }: { row: StructureRow; handle?
           </Name>
           {row.code && <code className="font-mono text-xs text-muted-foreground">{row.code}</code>}
           {type && <Badge variant="secondary">{type}</Badge>}
-          {row.kind !== "division" && (
-            <span className="text-xs text-muted-foreground">
-              {people(row.members)}
-              {row.leads > 0 && ` · ${leads(row.leads)}`}
-            </span>
-          )}
+          <span className="text-xs text-muted-foreground">
+            {people(row.members)}
+            {row.leads > 0 && ` · ${leads(row.leads)}`}
+          </span>
         </div>
         {row.note && <p className="text-sm whitespace-pre-line text-muted-foreground">{row.note}</p>}
       </div>
