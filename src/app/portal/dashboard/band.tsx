@@ -40,8 +40,8 @@ export function BandBadge({ band, score }: { band: Band; score?: string }) {
   );
 }
 
-// "3 red": how many of a box's check-ins were red, printed on the box. Ink rather than red text,
-// which falls under 4.5:1 on the green and yellow tints; the red ring says which colour it counts.
+// "3 red": how many of a box's check-ins were red, printed on the box whatever its colour. A white
+// pill with ink text reads the same on every tint, red included; its red ring says what it counts.
 export function RedCount({ count }: { count: number }) {
   return (
     <span className="shrink-0 rounded-full bg-card px-1.5 text-xs leading-4 font-semibold whitespace-nowrap tabular-nums ring-1 ring-status-critical ring-inset">

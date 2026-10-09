@@ -18,11 +18,12 @@ export function BandSummary({
   thisWeek: string;
   role: Exclude<Role, "member">;
 }) {
+  if (counts.green + counts.yellow + counts.red + counts.ungraded === 0) return null;
   const when = week === thisWeek ? "this week" : `week of ${formatWeek(week)}`;
   return (
     <section aria-labelledby="band-summary" className="grid gap-2 rounded-xl border bg-card px-4 py-3 text-sm">
       <h2 id="band-summary" className="font-sans text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-        {role === "hq" ? "Teams" : "Teams you lead"}, {when}
+        {`${role === "hq" ? "Teams" : "Teams you lead"}, ${when}`}
       </h2>
       <ul className="flex flex-wrap gap-x-5 gap-y-1">
         {ORDER.map((band) => {

@@ -28,15 +28,29 @@ const VIEWS: { view: View; label: string; href: string }[] = [
   { view: "trend", label: "Trend", href: "/portal/dashboard/trend" },
 ];
 
-export function DashboardFrame({ view, role, children }: { view: View; role: Role | null; children: ReactNode }) {
+// `aside` goes at the header's top right (below it on a phone): the tally of colours.
+export function DashboardFrame({
+  view,
+  role,
+  aside,
+  children,
+}: {
+  view: View;
+  role: Role | null;
+  aside?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <main className="mx-auto grid w-full max-w-6xl grid-cols-[minmax(0,1fr)] gap-6 px-4 py-10">
-      <header className="grid gap-2">
-        <Link href="/portal" className="w-fit text-sm text-muted-foreground hover:text-foreground">
-          ← Portal
-        </Link>
-        <h1 className="text-4xl">Team health</h1>
-        {role && role !== "member" && <p className="text-muted-foreground">{BLURB[view][role]}</p>}
+      <header className="flex flex-wrap items-start justify-between gap-x-8 gap-y-4">
+        <div className="grid min-w-0 flex-1 basis-80 gap-2">
+          <Link href="/portal" className="w-fit text-sm text-muted-foreground hover:text-foreground">
+            ← Portal
+          </Link>
+          <h1 className="text-4xl">Team health</h1>
+          {role && role !== "member" && <p className="text-muted-foreground">{BLURB[view][role]}</p>}
+        </div>
+        {aside}
       </header>
 
       {!role ? (
@@ -74,7 +88,18 @@ const sample = (band: "green" | "yellow" | "red" | null, pending = 0) => ({
   pending,
 });
 
-export function Legend({ config, view, role }: { config: HealthConfig; view: View; role: Role | null }) {
+// `redCounts`: whether the boxes carry an "N red" count (a single Trend week writes it out instead).
+export function Legend({
+  config,
+  view,
+  role,
+  redCounts = true,
+}: {
+  config: HealthConfig;
+  view: View;
+  role: Role | null;
+  redCounts?: boolean;
+}) {
   const { green, yellow } = config.thresholds;
   const items = [
     { band: BANDS.green, text: `${green} or more` },
@@ -95,10 +120,14 @@ export function Legend({ config, view, role }: { config: HealthConfig; view: Vie
           <Clock aria-hidden className="size-4 text-muted-foreground" />
           <span className="text-muted-foreground">waiting for the grader</span>
         </li>
-        <li className="flex items-center gap-1.5">
-          <RedCount count={2} />
-          <span className="text-muted-foreground">how many of its check-ins were red, whatever its colour</span>
-        </li>
+        {redCounts && (
+          <li className="flex items-center gap-1.5">
+            <RedCount count={2} />
+            <span className="text-muted-foreground">
+              how many of the {view === "org" ? "box" : "cell"}&apos;s check-ins were red, whatever its colour
+            </span>
+          </li>
+        )}
         {view === "org" && (
           <li className="flex items-center gap-1.5">
             <span aria-hidden className="flex h-5 items-end gap-0.5">

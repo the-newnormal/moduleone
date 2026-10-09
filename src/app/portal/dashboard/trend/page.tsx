@@ -5,11 +5,13 @@ import { redirect } from "next/navigation";
 import { heatmapGroups } from "@/lib/dashboard/heatmap";
 import { loadHeatmapData } from "@/lib/dashboard/load";
 import { buildOrg, coverage } from "@/lib/dashboard/org";
+import { teamCounts } from "@/lib/dashboard/summary";
 import { parseWeekCount, recentWeeks, WEEK_COUNTS, weekStartFor } from "@/lib/dashboard/weeks";
 import { createClient } from "@/lib/supabase/server";
 import { DashboardFrame, Legend } from "../frame";
 import { HeatmapGrid } from "../heatmap-grid";
 import { signInAgain } from "../sign-in";
+import { BandSummary } from "../summary";
 
 export const metadata: Metadata = { title: "Team health trend · Module One" };
 
@@ -31,10 +33,17 @@ export default async function TrendPage({ searchParams }: PageProps<"/portal/das
   const { teams, checkins, config, role, ledTeams } = await loadHeatmapData(supabase, weeks);
   // Members never see their grade (see ../page.tsx).
   if (role === "member") redirect("/portal/checkin");
-  const groups = heatmapGroups(buildOrg({ teams, checkins, weeks, config, covers: coverage(role, ledTeams) }));
+  const org = buildOrg({ teams, checkins, weeks, config, covers: coverage(role, ledTeams) });
+  const groups = heatmapGroups(org);
+  const thisWeek = weekStartFor(now);
 
   return (
-    <DashboardFrame view="trend" role={role}>
+    <DashboardFrame
+      view="trend"
+      role={role}
+      // The tally is of the latest week shown: this one.
+      aside={role && <BandSummary counts={teamCounts(org)} week={thisWeek} thisWeek={thisWeek} role={role} />}
+    >
       <nav aria-label="Weeks shown" className="flex flex-wrap items-center gap-2 text-sm">
         <span className="text-muted-foreground">Show the last</span>
         {WEEK_COUNTS.map((count) => {
@@ -55,7 +64,7 @@ export default async function TrendPage({ searchParams }: PageProps<"/portal/das
         })}
       </nav>
 
-      <Legend config={config} view="trend" role={role} />
+      <Legend config={config} view="trend" role={role} redCounts={weekCount > 1} />
 
       {groups.length === 0 || !role ? (
         <p className="rounded-xl border bg-card p-6 text-muted-foreground">
@@ -66,7 +75,7 @@ export default async function TrendPage({ searchParams }: PageProps<"/portal/das
           key={weekCount} // remount, so a new range opens on the latest week again
           groups={groups}
           weeks={weeks}
-          thisWeek={weekStartFor(now)}
+          thisWeek={thisWeek}
           weeksParam={weekCount}
           caption={CAPTION[role]}
           config={config}

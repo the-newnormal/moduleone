@@ -78,7 +78,12 @@ function Cell({
         {reds > 0 && <RedCount count={reds} />}
         {detailed && <span className="pr-3 font-normal text-muted-foreground">{detail}</span>}
         {band && cell.pending > 0 && (
-          <Clock aria-hidden className="absolute right-1 bottom-1 size-3 text-muted-foreground" strokeWidth={2.5} />
+          // Clear of the count on the second line: top corner then.
+          <Clock
+            aria-hidden
+            className={`absolute right-1 size-3 text-muted-foreground ${reds > 0 ? "top-1" : "bottom-1"}`}
+            strokeWidth={2.5}
+          />
         )}
       </Link>
     </td>

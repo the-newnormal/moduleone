@@ -63,21 +63,24 @@ function TeamRow({ row, config, heading }: { row: Row; config: HealthConfig; hea
         data-tip-body={lines.join("\n")}
         className="flex min-w-0 flex-1 items-center gap-3 self-stretch rounded-sm outline-offset-4 focus-visible:outline-2 focus-visible:outline-ring"
       >
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          {band ? (
-            <band.Icon aria-hidden className={`size-4 shrink-0 ${band.icon}`} strokeWidth={2.25} />
-          ) : cell.pending > 0 ? (
-            <Clock aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-          ) : (
-            <span aria-hidden className="w-4 shrink-0 text-center text-muted-foreground">
-              –
-            </span>
-          )}
-          <Name
-            className={`truncate ${heading ? "font-sans text-xs font-semibold tracking-wide uppercase" : "font-medium"}`}
-          >
-            {row.name}
-          </Name>
+        {/* The name keeps the first line; on a narrow row what follows it wraps beneath. */}
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
+          <div className="flex max-w-full min-w-0 items-center gap-2">
+            {band ? (
+              <band.Icon aria-hidden className={`size-4 shrink-0 ${band.icon}`} strokeWidth={2.25} />
+            ) : cell.pending > 0 ? (
+              <Clock aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+            ) : (
+              <span aria-hidden className="w-4 shrink-0 text-center text-muted-foreground">
+                –
+              </span>
+            )}
+            <Name
+              className={`truncate ${heading ? "font-sans text-xs font-semibold tracking-wide uppercase" : "font-medium"}`}
+            >
+              {row.name}
+            </Name>
+          </div>
           {row.archived && <span className="shrink-0 text-xs text-muted-foreground">archived</span>}
           {redCount(cell) > 0 && <RedCount count={redCount(cell)} />}
           {band && cell.pending > 0 && (
@@ -102,7 +105,7 @@ function TeamRow({ row, config, heading }: { row: Row; config: HealthConfig; hea
 // only a label above the teams they do.
 function Branch({ node, config }: { node: OrgNode; config: HealthConfig }) {
   return (
-    <li className="grid gap-1">
+    <li className="grid grid-cols-[minmax(0,1fr)] gap-1">
       {node.scored ? (
         <TeamRow row={node} config={config} />
       ) : (
@@ -112,7 +115,7 @@ function Branch({ node, config }: { node: OrgNode; config: HealthConfig }) {
         </span>
       )}
       {node.children.length > 0 && (
-        <ul className="ml-4 grid gap-1 border-l pl-2">
+        <ul className="ml-4 grid grid-cols-[minmax(0,1fr)] gap-1 border-l pl-2">
           {node.children.map((child) => (
             <Branch key={child.teamId} node={child} config={config} />
           ))}
@@ -136,7 +139,7 @@ function Card({
   config: HealthConfig;
 }) {
   return (
-    <section aria-label={label} className="grid gap-1 rounded-xl border bg-card p-2">
+    <section aria-label={label} className="grid grid-cols-[minmax(0,1fr)] gap-1 rounded-xl border bg-card p-2">
       {head?.scored ? (
         <TeamRow row={head} config={config} heading />
       ) : (
@@ -145,7 +148,7 @@ function Card({
         </h2>
       )}
       {branches.length + loose.length > 0 ? (
-        <ul className="grid gap-1">
+        <ul className="grid grid-cols-[minmax(0,1fr)] gap-1">
           {branches.map((node) => (
             <Branch key={node.teamId} node={node} config={config} />
           ))}
@@ -162,6 +165,8 @@ function Card({
   );
 }
 
+// Every grid here has minmax(0, 1fr) tracks, so a long name (with its "N red") truncates instead of
+// widening its card past a phone's screen.
 export function OrgChart({ org, config }: { org: Org; config: HealthConfig }) {
   // The organisation node (migration 0006) holds every division: its own box, rolled up over the
   // whole organisation, goes on top for a viewer who covers it, and its divisions get their cards.
@@ -171,11 +176,11 @@ export function OrgChart({ org, config }: { org: Org; config: HealthConfig }) {
   const unplaced = roots.filter((root) => root.kind !== "division");
   return (
     <HeatmapTooltip>
-      <div className="grid items-start gap-4 md:grid-cols-2">
+      <div className="grid grid-cols-[minmax(0,1fr)] items-start gap-4 md:grid-cols-2">
         {organisations
           .filter((node) => node.scored)
           .map((node) => (
-            <section key={node.teamId} aria-label={node.name} className="grid rounded-xl border bg-card p-2 md:col-span-2">
+            <section key={node.teamId} aria-label={node.name} className="grid grid-cols-[minmax(0,1fr)] rounded-xl border bg-card p-2 md:col-span-2">
               <TeamRow row={node} config={config} heading />
             </section>
           ))}
