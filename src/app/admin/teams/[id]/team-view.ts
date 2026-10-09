@@ -265,8 +265,16 @@ export function buildTeamView({
     })
     .sort(byName);
 
+  // Not whoever sits in the organisation either: only the project owner moves them.
+  const organisationId = teams.find((t) => t.kind === "organisation")?.id;
   const candidates: Candidate[] = members
-    .filter((m) => !ownerOnly && m.team_id !== teamId && isEditableMember({ id: m.id, role: asRole(m.role) }, adminMemberId))
+    .filter(
+      (m) =>
+        !ownerOnly &&
+        m.team_id !== teamId &&
+        (organisationId === undefined || m.team_id !== organisationId) &&
+        isEditableMember({ id: m.id, role: asRole(m.role) }, adminMemberId),
+    )
     .map((m) => ({ id: m.id, name: m.name, teamId: m.team_id, teamName: nameOfTeam(m.team_id) }))
     .sort((a, b) => Number(a.teamId !== null) - Number(b.teamId !== null) || byName(a, b));
 

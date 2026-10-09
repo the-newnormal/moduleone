@@ -174,6 +174,9 @@ describe("buildTeamView", () => {
     // Only the project owner places people there or decides who leads it: nothing to change here.
     expect(at("org").people.every((p) => !p.editable && !p.canGiveLogin)).toBe(true);
     expect(at("org").candidates).toEqual([]);
+    // Nor are they offered to move into any other team.
+    expect(at("team-ip2").candidates.map((c) => c.id)).not.toContain("m-eli");
+    expect(at("team-ip2").candidates.length).toBeGreaterThan(0);
     expect(at("org").leadOptions).toEqual([]);
   });
 

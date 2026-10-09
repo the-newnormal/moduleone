@@ -477,6 +477,14 @@ describe("the organisation node", () => {
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
+  it("refuses it whatever the letter case of the ids (Postgres reads uuids case-blind)", async () => {
+    for (const run of [() => addLead(ORG.toUpperCase(), PERSON), () => removeFromTeam(ORG.toUpperCase(), PERSON), () => addMember(OTHER, PERSON, ORG.toUpperCase())]) {
+      userQueue.teams = [organisationIs(ORG)];
+      await expect(run()).resolves.toEqual(REFUSED);
+    }
+    expect(writes()).toEqual([]);
+  });
+
   it("refuses changing the role of someone who sits in it", async () => {
     userQueue.teams = [organisationIs(ORG)];
     userQueue.members = [{ data: { team_id: ORG }, error: null }];
