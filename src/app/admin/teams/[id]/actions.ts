@@ -363,13 +363,24 @@ export async function giveLogin(memberId: string, email: string): Promise<Action
   // Nobody can sign in with it before opening the invite, so it never reads either.
   const late = await lateAccess(service, row.id);
   if (late !== "none") {
-    const { error: unlinkError } = await service
-      .from("members")
-      .update({ auth_user_id: null, login_given_by: null, login_given_at: null })
-      .eq("id", row.id)
-      .eq("auth_user_id", authUserId);
+    const unlink = () =>
+      service
+        .from("members")
+        .update({ auth_user_id: null, login_given_by: null, login_given_at: null })
+        .eq("id", row.id)
+        .eq("auth_user_id", authUserId);
+    let { error: unlinkError } = await unlink();
     if (unlinkError) {
       logError("giveLogin unlink", unlinkError);
+      ({ error: unlinkError } = await unlink());
+    }
+    if (unlinkError) {
+      // Still linked to a row that now holds a grant or a profile: delete the login itself, even
+      // one this invite only re-sent, since leaving it is worse. members.auth_user_id is
+      // `on delete set null`, so that unlinks the row too.
+      logError("giveLogin unlink retry", unlinkError);
+      const { error } = await service.auth.admin.deleteUser(authUserId);
+      if (error) logError("giveLogin cleanup", error);
       return fail(GENERIC_ERROR);
     }
     await discardLogin(service, authUserId, createdHere);

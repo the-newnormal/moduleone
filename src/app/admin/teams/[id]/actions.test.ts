@@ -536,12 +536,24 @@ describe("giveLogin", () => {
     expect(deleteUser).toHaveBeenCalledExactlyOnceWith(NEW_LOGIN);
   });
 
-  it("keeps the login (and says so generically) when undoing the link fails", async () => {
-    loginAllowed(rows(PERSON), dbError("08006", "down"));
+  it("tries the unlink again once if it fails", async () => {
+    loginAllowed(rows(PERSON), dbError("08006", "down"), rows(), rows()); // link, unlink, unlink again, "anyone use it?"
+    serviceQueue.member_grants = [{ data: [{ grant_name: "admin" }], error: null }];
+    await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: HOLDS_GRANTS });
+    expect(serviceQueries.filter((q) => q.table === "members" && q.calls[0][0] === "update")).toHaveLength(3);
+    expect(deleteUser).toHaveBeenCalledExactlyOnceWith(NEW_LOGIN);
+  });
+
+  it.each([
+    ["one this invite made", "2026-10-09T04:30:00.000Z"],
+    ["one it only re-sent", "2026-10-01T00:00:00.000Z"],
+  ])("deletes the login (%s) when the unlink fails twice, which unlinks the row too", async (_label, createdAt) => {
+    loginAllowed(rows(PERSON), dbError("08006", "down"), dbError("08006", "down"));
+    inviteUserByEmail.mockResolvedValue({ data: { user: { id: NEW_LOGIN, created_at: createdAt } }, error: null });
     serviceQueue.member_grants = [{ data: [{ grant_name: "admin" }], error: null }];
     await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
-    expect(deleteUser).not.toHaveBeenCalled();
-    expect(console.error).toHaveBeenCalledWith("giveLogin unlink failed", expect.objectContaining({ code: "08006" }));
+    expect(deleteUser).toHaveBeenCalledExactlyOnceWith(NEW_LOGIN);
+    expect(console.error).toHaveBeenCalledWith("giveLogin unlink retry failed", expect.objectContaining({ code: "08006" }));
   });
 
   it("refuses a member who holds a grant, without using the service role", async () => {
