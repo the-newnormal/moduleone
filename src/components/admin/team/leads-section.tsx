@@ -58,6 +58,7 @@ function removeLeadCopy(lead: LeadPerson, team: TeamSummary, noun: string) {
 
 // One line on what leading means here.
 export function leadsExplanation(team: Pick<TeamSummary, "kind">): string {
+  if (team.kind === "division") return "Leads see the check-ins made in this division and in everything in it.";
   return team.kind === "domain"
     ? "Leads see the check-ins made in this domain and in its sub-teams."
     : "Leads see the check-ins made in this team.";
@@ -70,7 +71,7 @@ export function leadsExplanation(team: Pick<TeamSummary, "kind">): string {
 export function LeadsSection({ team, ownLeaders, leads, inheritedLeads, leadOptions, actions }: Props) {
   const headingId = useId();
   const [status, setStatus] = useState("");
-  const noun = team.kind === "domain" ? "domain" : "team";
+  const noun = team.kind;
   const none = ownLeaders.length === 0 && leads.length === 0 && inheritedLeads.length === 0;
 
   return (
@@ -96,7 +97,7 @@ export function LeadsSection({ team, ownLeaders, leads, inheritedLeads, leadOpti
                 Leader in this {noun} (change it under People)
                 {leader.domain && (
                   <>
-                    . Also leads <DomainLink {...leader.domain} />, which holds this team
+                    . Also leads <DomainLink {...leader.domain} />, which holds this {noun}
                   </>
                 )}
               </p>
@@ -134,7 +135,7 @@ export function LeadsSection({ team, ownLeaders, leads, inheritedLeads, leadOpti
             <li key={lead.id} className="grid gap-1 py-3">
               <p className="font-medium break-words">{lead.name}</p>
               <p className="text-sm text-muted-foreground">
-                Leads <DomainLink id={lead.domainId} name={lead.domainName} />, which holds this team
+                Leads <DomainLink id={lead.domainId} name={lead.domainName} />, which holds this {noun}
               </p>
             </li>
           ))}

@@ -19,6 +19,7 @@ const TEAM: TeamSummary = {
   kindLabel: "Team",
   code: "IP.1",
   domainType: null,
+  divisionType: null,
   typeLabel: null,
   note: null,
   archived: false,

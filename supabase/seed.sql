@@ -18,6 +18,8 @@
 --                       through team_leads) would also see its sub-teams' check-ins
 --   member@example.com  member of IP Lab 1: sees only their own check-ins (none yet this week), their
 --                       teammates, and IP Lab 1, IP Lab and Gather
+--   head@example.com    Nora Lee, head of Gather: a leader who sits in the Gather division itself
+--                       (0005), so her check-ins are Gather's own and she sees every check-in in Gather
 -- (Ben Ong, a leader with no login, sits in the domain Atlas itself, which has no sub-teams.)
 --
 -- Eight weeks of check-ins, ending this week, tell a story on the heat-map under the default scoring
@@ -39,7 +41,8 @@ select
 from (values
   ('5eed0000-0000-4000-8000-000000000001'::uuid, 'hq@example.com'),
   ('5eed0000-0000-4000-8000-000000000002'::uuid, 'leader@example.com'),
-  ('5eed0000-0000-4000-8000-000000000003'::uuid, 'member@example.com')
+  ('5eed0000-0000-4000-8000-000000000003'::uuid, 'member@example.com'),
+  ('5eed0000-0000-4000-8000-000000000004'::uuid, 'head@example.com')
 ) as u (id, email);
 
 insert into auth.identities (provider_id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
@@ -49,7 +52,8 @@ from auth.users
 where id in (
   '5eed0000-0000-4000-8000-000000000001',
   '5eed0000-0000-4000-8000-000000000002',
-  '5eed0000-0000-4000-8000-000000000003'
+  '5eed0000-0000-4000-8000-000000000003',
+  '5eed0000-0000-4000-8000-000000000004'
 );
 
 -- ---------- members ----------
@@ -69,6 +73,11 @@ from (values
   ('3e3b0000-0000-4000-8000-000000000011',       null,                                         'Farah Aziz',  'YD.1', 'member')
 ) as v (id, auth_user_id, name, team_code, role)
 left join teams t on t.code = v.team_code;
+
+-- Nora heads Gather from the division itself (divisions have no code).
+insert into members (id, auth_user_id, name, team_id, role)
+select '3e3b0000-0000-4000-8000-000000000012', '5eed0000-0000-4000-8000-000000000004', 'Nora Lee', t.id, 'leader'
+from teams t where t.kind = 'division' and t.name = 'Gather';
 
 -- Leo also leads IP Lab 2 (in production, admins maintain team_leads in the app).
 insert into team_leads (team_id, member_id)
@@ -131,3 +140,16 @@ where case
   when weeks_ago = 0 then seq % 2 = 1
   else (seq + weeks_ago) % 5 <> 4
 end;
+
+-- Nora's check-ins, made in Gather itself: steady, with every third week missed.
+insert into checkins (
+  member_id, week_start, transcript, activity_score, excellence_score, morale_score, rubric_review
+)
+select
+  '3e3b0000-0000-4000-8000-000000000012',
+  (date_trunc('week', now() at time zone 'Asia/Singapore'))::date - 7 * w,
+  format('Seed check-in from Nora Lee for the week of %s.', (date_trunc('week', now() at time zone 'Asia/Singapore'))::date - 7 * w),
+  4, 4, case when w % 2 = 0 then 4 else 3 end,
+  'Seed data: scores come from supabase/seed.sql, not the grader.'
+from generate_series(0, 7) w
+where w % 3 <> 2;

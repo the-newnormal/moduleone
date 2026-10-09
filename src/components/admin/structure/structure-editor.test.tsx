@@ -59,7 +59,7 @@ describe("StructureEditor", () => {
   const html = render();
 
   it("shows each division as a section, in order, with its domains and their teams", () => {
-    expect(all(html, /<h2 id="division-[^"]+"[^>]*>([^<]+)<\/h2>/g)).toEqual(["Gather", "Culture", "HQ"]);
+    expect(all(html, /<h2 id="division-[^"]+"[^>]*><a [^>]*>([^<]+)<\/a><\/h2>/g)).toEqual(["Gather", "Culture", "HQ"]);
     expect(all(html, /<h3[^>]*><a [^>]*>([^<]+)<\/a><\/h3>/g)).toEqual(["IP Lab", "Barbeques", "Atlas", "Legacy"]);
     expect(all(html, /<ul aria-label="([^"]+)"/g)).toEqual([
       "Domains in Gather",
@@ -73,13 +73,16 @@ describe("StructureEditor", () => {
     expect(words).toContain("No domains yet.");
   });
 
-  it("links domains and teams to their team page, but not divisions", () => {
+  it("links divisions, domains and teams to their team page (people can sit in a division since 0005)", () => {
     expect(all(html, /<a [^>]*href="([^"]+)"/g)).toEqual([
+      "/admin/teams/d-gather",
       "/admin/teams/ip-x",
       "/admin/teams/ip-1",
       "/admin/teams/ip-2",
       "/admin/teams/bq-x",
+      "/admin/teams/d-culture",
       "/admin/teams/at-x",
+      "/admin/teams/d-hq",
       "/admin/teams/legacy",
     ]);
   });

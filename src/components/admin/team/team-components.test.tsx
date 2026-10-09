@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Candidate, InheritedLead, LeadPerson, OwnLeader, Person, TeamSummary } from "@/app/admin/teams/[id]/team-view";
 import { Dialog } from "@/components/ui/dialog";
 import { AddPeoplePanel } from "./add-people-dialog";
-import { EditTeamForm } from "./edit-team-dialog";
+import { EditTeamForm, savedForm } from "./edit-team-dialog";
 import { GiveLoginForm } from "./give-login-dialog";
 import { AddLeadPanel, LeadsSection } from "./leads-section";
 import { PeopleSection } from "./people-section";
@@ -29,6 +29,7 @@ const TEAM: TeamSummary = {
   kindLabel: "Team",
   code: "IP.1",
   domainType: null,
+  divisionType: null,
   typeLabel: null,
   note: null,
   archived: false,
@@ -43,6 +44,18 @@ const DOMAIN: TeamSummary = {
   domainType: "lab",
   typeLabel: "Lab",
   note: "First line\nSecond line",
+};
+
+// Since 0005 someone can sit in a division, so it has a page too.
+const DIVISION: TeamSummary = {
+  ...TEAM,
+  id: "c0000000-0000-4000-8000-000000000003",
+  name: "Gather",
+  kind: "division",
+  kindLabel: "Division",
+  code: null,
+  divisionType: "strategy",
+  typeLabel: "Strategy division",
 };
 
 const person = (id: string, name: string, changes: Partial<Person> = {}): Person => ({
@@ -219,6 +232,13 @@ describe("EditTeamForm", () => {
     expect(html).toContain("First line\nSecond line");
   });
 
+  it("keeps a division's type, so saving it doesn't clear the type", () => {
+    const html = inDialog(<EditTeamForm team={DIVISION} updateNode={actions.updateNode} onSaved={() => {}} />);
+    expect(text(html)).toContain("It stays a division.");
+    expect(savedForm(DIVISION)).toMatchObject({ name: "Gather", type: "strategy" });
+    expect(savedForm(DOMAIN)).toMatchObject({ name: "IP Lab", type: "lab" });
+  });
+
   it("keeps Save off until something changes", () => {
     const html = inDialog(<EditTeamForm team={TEAM} updateNode={actions.updateNode} onSaved={() => {}} />);
     expect(html).toMatch(/<button [^>]*type="submit" disabled="">Save<\/button>/);
@@ -250,6 +270,14 @@ describe("LeadsSection", () => {
   it("explains in one line what leads see, for a team and for a domain", () => {
     expect(text(render())).toContain("Leads see the check-ins made in this team.");
     expect(text(render(DOMAIN))).toContain("Leads see the check-ins made in this domain and in its sub-teams.");
+    expect(text(render(DIVISION))).toContain("Leads see the check-ins made in this division and in everything in it.");
+  });
+
+  it("speaks of a division as a division", () => {
+    expect(text(render(DIVISION, [], []))).toContain("Nobody leads this division yet.");
+    const html = render(DOMAIN, [], [], [{ id: "m-nora", name: "Nora Lee", domainId: "div-gather", domainName: "Gather" }]);
+    expect(row(html, "Nora Lee")).toBe("Nora Lee Leads Gather , which holds this domain");
+    expect(html).toMatch(/<a [^>]*href="\/admin\/teams\/div-gather"[^>]*>Gather<\/a>/);
   });
 
   it("shows leaders in the team without a remove button, and team_leads rows with one", () => {

@@ -45,10 +45,14 @@ describe("the team page's title", () => {
     expect(query.eq).toHaveBeenCalledWith("id", ID);
   });
 
-  it("says just 'Team' for a division, an unknown id or a failed read", async () => {
+  it("names a division's page like any other (people can sit in one since 0005)", async () => {
     signedIn(true);
-    maybeSingle.mockResolvedValue({ data: { name: "Gather", kind: "division" }, error: null });
-    await expect(titleFor(ID)).resolves.toBe("Team · Admin · Module One");
+    maybeSingle.mockResolvedValue({ data: { name: "Gather" }, error: null });
+    await expect(titleFor(ID)).resolves.toBe("Gather · Admin · Module One");
+  });
+
+  it("says just 'Team' for an unknown id or a failed read", async () => {
+    signedIn(true);
     maybeSingle.mockResolvedValue({ data: null, error: null });
     await expect(titleFor(ID)).resolves.toBe("Team · Admin · Module One");
     maybeSingle.mockResolvedValue({ data: null, error: { code: "PGRST000", message: "down" } });

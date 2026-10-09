@@ -16,7 +16,7 @@ pnpm supabase db reset            # apply migrations + seed
 pnpm dev
 ```
 
-`supabase/seed.sql` puts eight weeks of check-ins in three of the founding teams that migration 0003 loads (IP Lab 1, Atlas, Youth Day 1) and creates three logins: `hq@example.com` (hq and admin, with the recordings and Big Five grants), `leader@example.com` and `member@example.com`. Request a link at `/login` and open it from Mailpit at http://127.0.0.1:54324.
+`supabase/seed.sql` puts eight weeks of check-ins in three of the founding teams that migration 0003 loads (IP Lab 1, Atlas, Youth Day 1), plus Gather's head checking in at the division itself, and creates four logins: `hq@example.com` (hq and admin, with the recordings and Big Five grants), `leader@example.com`, `member@example.com` and `head@example.com` (Nora Lee, a leader who sits in the Gather division and so sees all of it). Request a link at `/login` and open it from Mailpit at http://127.0.0.1:54324.
 
 To try **Give login** locally, also set `SUPABASE_SERVICE_ROLE_KEY` (the local secret or service_role key from `pnpm supabase status`) and `NEXT_PUBLIC_SITE_URL=http://localhost:3000` in `.env.local`; the invite arrives in Mailpit.
 
@@ -30,7 +30,7 @@ pnpm supabase test db             # RLS tests in supabase/tests/: who can read a
 
 **Admin grants** (`member_grants`): `admin` edits teams, scoring and other members (not `hq` members, not themselves; only the project owner makes someone `hq`); `recordings` plays anyone's submitted recording (never a draft); `big_five` reads and edits Big Five profiles. Only the project owner adds or removes grants, in the Supabase Table Editor, so no one can promote themselves through the app.
 
-**The admin pages** (`/admin`, linked from the portal for holders of the `admin` grant): the team structure, the scoring settings, and a page per domain or team (open it from the structure) where admins add and remove people, make them leaders or members, choose who else leads it, and give people a login. The app calls the `hq` role "Master Admin"; it has nothing to do with the HQ division.
+**The admin pages** (`/admin`, linked from the portal for holders of the `admin` grant): the team structure, the scoring settings, and a page per division, domain or team (open it from the structure) where admins add and remove people, make them leaders or members, choose who else leads it, and give people a login. Anyone can sit in a division, a domain or a team (since migration 0005, a division's head sits in the division itself, so their check-ins are the division's own), and a leader leads where they sit and everything under it, plus any node they're added as a lead of. The app calls the `hq` role "Master Admin"; it has nothing to do with the HQ division.
 
 ### Before inviting
 "Give login" emails an invite from Supabase Auth, and the link brings the person back to this site signed in. On the hosted project, the owner does this once before the first invite:

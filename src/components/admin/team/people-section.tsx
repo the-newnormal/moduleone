@@ -27,7 +27,7 @@ type Props = {
 export function PeopleSection({ team, people, candidates, actions }: Props) {
   const headingId = useId();
   const [status, setStatus] = useState("");
-  const noun = team.kind === "domain" ? "domain" : "team";
+  const noun = team.kind;
 
   return (
     <section aria-labelledby={headingId} className="grid gap-4 rounded-xl border bg-card p-5">

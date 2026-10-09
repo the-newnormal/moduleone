@@ -6,7 +6,7 @@
 import { formatDate } from "@/lib/admin/format";
 import { isEditableMember, type Role, roleLabel } from "@/lib/admin/roles";
 import { breadcrumb, KIND_LABELS, type TeamRow, typeLabel } from "@/lib/admin/tree";
-import type { DomainType } from "@/lib/admin/validate";
+import type { DivisionType, DomainType, TeamKind } from "@/lib/admin/validate";
 
 // members columns the page reads.
 export const MEMBER_COLUMNS = "id, name, role, team_id, auth_user_id, login_given_by, login_given_at";
@@ -29,17 +29,18 @@ export type GrantRow = { member_id: string };
 export type TeamSummary = {
   id: string;
   name: string;
-  kind: "domain" | "team";
-  kindLabel: string; // "Domain" | "Team"
+  kind: TeamKind;
+  kindLabel: string; // "Division" | "Domain" | "Team"
   code: string | null;
   domainType: DomainType | null;
+  divisionType: DivisionType | null;
   typeLabel: string | null; // "Lab", "IP", "Development domain"
   note: string | null;
   archived: boolean;
 };
 
-// The breadcrumb above the name, top first, without the team itself. A division has no page of
-// its own (href null); a domain links to its page. A domain at the top level shows "Unplaced".
+// The breadcrumb above the name, top first, without the team itself, each linking to its page. A
+// domain at the top level shows "Unplaced".
 export type Crumb = { key: string; label: string; href: string | null };
 
 export type Person = {
@@ -58,8 +59,8 @@ export type Person = {
   canResendInvite: boolean; // editable, with a login given in Module One (it may not be used yet)
   otherLeads: string[]; // names of the teams they also lead (team_leads), lost if made a member
   leadsHere: boolean; // a team_leads row for this team too, so they lead it wherever they sit
-  // For a team: the name of the domain holding it, when they have a lead row there. Leads cover
-  // everything under the led node, so they'd still lead this team from anywhere.
+  // The name of the nearest node above this one (its domain or division) where they have a lead
+  // row. Leads cover everything under the led node, so they'd still lead this one from anywhere.
   leadsDomain: string | null;
 };
 
@@ -68,8 +69,8 @@ export type Candidate = { id: string; name: string; teamId: string | null; teamN
 
 // A leader who leads this team through team_leads, or could be made to. inThisTeam: they also sit
 // in this team (a lead row added before they moved here), so they'd still lead it without the row.
-// viaDomain: for a team, the domain holding it when they lead that domain too (they sit in it or
-// have a lead row for it), so they'd also still lead this team without the row.
+// viaDomain: the nearest node above this one (its domain or division) that they lead too (they sit
+// in it or have a lead row for it), so they'd also still lead this one without the row.
 export type LeadPerson = {
   id: string;
   name: string;
@@ -78,12 +79,13 @@ export type LeadPerson = {
   viaDomain: string | null;
 };
 
-// A leader who leads this team because they lead the domain it sits in (they sit in the domain,
-// or have a lead row for it): leads cover everything under the led node. Changed on the domain's page.
+// A leader who leads this node because they lead a node above it, its domain or division (they sit
+// in it, or have a lead row for it): leads cover everything under the led node. domainId and
+// domainName are the nearest such node; changed on its page.
 export type InheritedLead = { id: string; name: string; domainId: string; domainName: string };
 
-// A leader who sits in this node (changed under People). domain: for a team, the domain holding it
-// when they also have a lead row there (one row says both, so nobody is listed twice).
+// A leader who sits in this node (changed under People). domain: the nearest node above it where
+// they also have a lead row (one row says both, so nobody is listed twice).
 export type OwnLeader = { id: string; name: string; domain: { id: string; name: string } | null };
 
 export type TeamView = {
@@ -93,7 +95,7 @@ export type TeamView = {
   candidates: Candidate[]; // not in this team, not a Master Admin, not the admin; unassigned first
   ownLeaders: OwnLeader[]; // leaders whose own team is this one (and no lead row for it)
   leads: LeadPerson[]; // team_leads rows for this team (removable)
-  inheritedLeads: InheritedLead[]; // for a team: who else leads it through its domain (not removable here)
+  inheritedLeads: InheritedLead[]; // who else leads it through a node above it (not removable here)
   leadOptions: LeadPerson[]; // leaders who could be added as a lead (none who lead it already)
 };
 
@@ -115,8 +117,9 @@ export function loginGivenText(giverName: string | null, givenAt: string | null)
   return null;
 }
 
-// What a leader of this node sees: the node, and for a domain everything under it.
+// What a leader of this node sees: the node and everything under it.
 export function coverage(team: Pick<TeamSummary, "name" | "kind">): string {
+  if (team.kind === "division") return `${team.name} and everything in it`;
   return team.kind === "domain" ? `${team.name} and its sub-teams` : team.name;
 }
 
@@ -139,13 +142,13 @@ export function promoteDescription(person: Who, team: Where): string {
   );
 }
 
-// "Remove from team": a leader stops leading it, unless a lead row here, or on the domain holding
-// it, keeps them leading it.
+// "Remove from team": a leader stops leading it, unless a lead row here, or on a node above it,
+// keeps them leading it.
 export function removeDescription(person: Who, team: Where): string {
   const stays = `${person.name} stays in Module One without a team, and their past check-ins stay with ${team.name}.`;
   if (person.role !== "leader") return stays;
   if (person.leadsHere) return `${stays} They still lead ${team.name}, as an added lead.`;
-  if (person.leadsDomain) return `${stays} They still lead ${person.leadsDomain}, which holds this team.`;
+  if (person.leadsDomain) return `${stays} They still lead ${person.leadsDomain}, which holds this ${team.kind}.`;
   return `${stays} They'll stop seeing the check-ins made in ${coverage(team)}.`;
 }
 
@@ -177,8 +180,7 @@ export function buildTeamView({
   grants?: readonly GrantRow[];
 }): TeamView | null {
   const row = teams.find((t) => t.id === teamId);
-  // Divisions have no team page: nobody sits in one and nobody leads one.
-  if (!row || (row.kind !== "domain" && row.kind !== "team")) return null;
+  if (!row) return null;
 
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
   const memberById = new Map(members.map((m) => [m.id, m]));
@@ -191,18 +193,17 @@ export function buildTeamView({
     kindLabel: KIND_LABELS[row.kind],
     code: row.code,
     domainType: row.kind === "domain" ? row.domain_type : null,
+    divisionType: row.kind === "division" ? row.division_type : null,
     typeLabel: typeLabel(row),
     note: row.note,
     archived: row.archived_at !== null,
   };
 
   const above = breadcrumb(teamId, teams).slice(0, -1);
-  const crumbs: Crumb[] = above.map((t) => ({
-    key: t.id,
-    label: t.name,
-    href: t.kind === "division" ? null : `/admin/teams/${t.id}`,
-  }));
-  if (above[0]?.kind !== "division") crumbs.unshift({ key: "unplaced", label: "Unplaced", href: null });
+  const crumbs: Crumb[] = above.map((t) => ({ key: t.id, label: t.name, href: `/admin/teams/${t.id}` }));
+  if (row.kind !== "division" && above[0]?.kind !== "division") {
+    crumbs.unshift({ key: "unplaced", label: "Unplaced", href: null });
+  }
 
   const leadsOf = new Map<string, string[]>();
   for (const lead of leads) {
@@ -214,10 +215,15 @@ export function buildTeamView({
   const holdsGrants = new Set(grants.map((g) => g.member_id));
   const leadIds = new Set(leads.filter((l) => l.team_id === teamId).map((l) => l.member_id));
 
-  // A team is also led by whoever leads the domain holding it: leaders placed in the domain, and
-  // its lead rows. (Divisions have no leads, and nothing sits under a team.)
-  const domain = row.kind === "team" ? teams.find((t) => t.id === row.parent_id && t.kind === "domain") : undefined;
-  const domainLeadIds = new Set(domain ? leads.filter((l) => l.team_id === domain.id).map((l) => l.member_id) : []);
+  // A node is also led by whoever leads a node above it (its domain, its division): leaders placed
+  // there, and its lead rows. Nearest first, so each person is said to lead through the closest.
+  const nodesAbove = [...above].reverse();
+  const leadRows = new Map<string, Set<string>>();
+  for (const l of leads) leadRows.set(l.team_id, (leadRows.get(l.team_id) ?? new Set()).add(l.member_id));
+  // The nearest node above where they have a lead row; or, counting where they sit, that they lead.
+  const ledAboveByRow = (m: MemberRow) => nodesAbove.find((t) => leadRows.get(t.id)?.has(m.id));
+  const ledAbove = (m: MemberRow) =>
+    nodesAbove.find((t) => (m.role === "leader" && m.team_id === t.id) || leadRows.get(t.id)?.has(m.id));
 
   const people: Person[] = members
     .filter((m) => m.team_id === teamId)
@@ -241,7 +247,7 @@ export function buildTeamView({
         canResendInvite: editable && hasLogin && m.login_given_at !== null,
         otherLeads: [...(leadsOf.get(m.id) ?? [])].sort((a, b) => a.localeCompare(b, "en")),
         leadsHere: leadIds.has(m.id),
-        leadsDomain: domain && role === "leader" && domainLeadIds.has(m.id) ? domain.name : null,
+        leadsDomain: role === "leader" ? (ledAboveByRow(m)?.name ?? null) : null,
       };
     })
     .sort(byName);
@@ -256,7 +262,7 @@ export function buildTeamView({
     name: m.name,
     teamName: nameOfTeam(m.team_id),
     inThisTeam: m.team_id === teamId,
-    viaDomain: domain && (m.team_id === domain.id || domainLeadIds.has(m.id)) ? domain.name : null,
+    viaDomain: m.role === "leader" ? (ledAbove(m)?.name ?? null) : null,
   });
   const leadPeople: LeadPerson[] = [...leadIds]
     .map((id) => memberById.get(id))
@@ -265,33 +271,27 @@ export function buildTeamView({
     .sort(byName);
 
   // Each person once: someone with a lead row here is listed with it (so it can be removed);
-  // someone who sits here and also leads the domain, as sitting here (with the domain said).
+  // someone who sits here and also leads a node above, as sitting here (with that node said).
   const ownLeaders: OwnLeader[] = members
     .filter((m) => m.team_id === teamId && m.role === "leader" && !leadIds.has(m.id))
-    .map((m) => ({
-      id: m.id,
-      name: m.name,
-      domain: domain && domainLeadIds.has(m.id) ? { id: domain.id, name: domain.name } : null,
-    }))
+    .map((m) => {
+      const via = ledAboveByRow(m);
+      return { id: m.id, name: m.name, domain: via ? { id: via.id, name: via.name } : null };
+    })
     .sort(byName);
 
-  const inheritedLeads: InheritedLead[] = domain
-    ? members
-        .filter(
-          (m) =>
-            m.role === "leader" &&
-            !leadIds.has(m.id) &&
-            m.team_id !== teamId &&
-            (m.team_id === domain.id || domainLeadIds.has(m.id)),
-        )
-        .map((m) => ({ id: m.id, name: m.name, domainId: domain.id, domainName: domain.name }))
-        .sort(byName)
-    : [];
+  const inheritedLeads: InheritedLead[] = members
+    .filter((m) => m.role === "leader" && !leadIds.has(m.id) && m.team_id !== teamId)
+    .flatMap((m) => {
+      const via = ledAbove(m);
+      return via ? [{ id: m.id, name: m.name, domainId: via.id, domainName: via.name }] : [];
+    })
+    .sort(byName);
   const inherited = new Set(inheritedLeads.map((l) => l.id));
 
   // Leaders only (the database refuses anyone else), never the admin (RLS refuses that too), and
-  // not someone who already leads this team: through team_leads, by sitting in it, or through
-  // its domain.
+  // not someone who already leads this node: through team_leads, by sitting in it, or through a
+  // node above it.
   const leadOptions: LeadPerson[] = members
     .filter(
       (m) =>
