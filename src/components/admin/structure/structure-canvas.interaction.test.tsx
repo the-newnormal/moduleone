@@ -328,3 +328,80 @@ describe("StructureCanvas", () => {
     expect(text(panelHeading()!)).toBe("IP Lab 1");
   });
 });
+
+describe("Find a person or team", () => {
+  const find = () => labelled<HTMLInputElement>("Find a person or team");
+  // Each option's name and what it is ("IP Lab · Domain"), or the whole text when it has no parts.
+  const options = () =>
+    [...document.querySelectorAll('[role="option"]')].map((el) =>
+      el.children.length === 2 ? `${text(el.children[0])} · ${text(el.children[1])}` : text(el),
+    );
+  const heading = () => text(document.querySelector("aside [data-panel-heading]")!);
+
+  it("lists matching boxes and people, leaving out archived boxes and removed people", async () => {
+    await canvas(actions(), [...WITH_NO_TEAM, member("m-lab", "Labib Old", "old")]);
+    await type(find(), "l");
+    expect(options()).toContain("IP Lab · Domain");
+    expect(options()).toContain("Ana Lee · In IP Lab 1");
+    expect(options()).toContain("Hana Lim · No team");
+    expect(options().join(" ")).not.toContain("Old Lab");
+    expect(options().join(" ")).not.toContain("Olga Day");
+    expect(options().join(" ")).not.toContain("Labib Old");
+    await type(find(), "zzz");
+    expect(options()).toEqual(["No one and nothing by that name."]);
+  });
+
+  it("opens the first match's panel on Enter, and a highlighted one's after the arrow keys", async () => {
+    await canvas();
+    await type(find(), "ip lab");
+    expect(find().getAttribute("aria-expanded")).toBe("true");
+    await press(find(), "Enter");
+    expect(heading()).toBe("IP Lab");
+    // The list closes and the box is cleared for the next search.
+    expect(find().value).toBe("");
+    expect(find().getAttribute("aria-expanded")).toBe("false");
+
+    await type(find(), "ip lab");
+    await press(find(), "ArrowDown");
+    const active = find().getAttribute("aria-activedescendant")!;
+    expect(document.getElementById(active)!.getAttribute("data-match")).toBe("node:ip1");
+    await press(find(), "Enter");
+    expect(heading()).toBe("IP Lab 1");
+  });
+
+  it("opens a person's team panel, or No team's, whether or not people are shown", async () => {
+    await canvas(actions(), WITH_NO_TEAM);
+    await type(find(), "ana");
+    await press(find(), "Enter");
+    expect(heading()).toBe("IP Lab 1");
+    await type(find(), "ben");
+    await press(find(), "Enter");
+    expect(heading()).toBe("No team (2)");
+
+    await click(button("Show people"));
+    await type(find(), "ana");
+    await press(find(), "Enter");
+    expect(heading()).toBe("IP Lab 1");
+  });
+
+  it("picks a match on a click too", async () => {
+    await canvas();
+    await type(find(), "atl");
+    await act(async () => {
+      document
+        .querySelector('[data-match="node:atlas"]')!
+        .dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+    });
+    expect(heading()).toBe("Atlas");
+  });
+
+  it("closes the list on Escape without closing an open panel", async () => {
+    await canvas();
+    await press(box("ip1"), "Enter");
+    expect(heading()).toBe("IP Lab 1");
+    await type(find(), "atl");
+    await press(find(), "Escape");
+    expect(find().getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector("aside")).not.toBeNull();
+  });
+});

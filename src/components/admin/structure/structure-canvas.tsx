@@ -43,8 +43,10 @@ import { ArchivedSection, type Report } from "./archived-list";
 import { type Dragged, type DropPlan, type PlacePlan, placeAction, planDrop } from "./canvas-drop";
 import { canvasPeopleOf, itemAt, layoutStructure, NO_TEAM_ID, personNodeId } from "./canvas-layout";
 import { CanvasContext, type CanvasNode, dragging, flowNodes, NODE_TYPES, PERSON_HINT_ID } from "./canvas-nodes";
+import type { SearchMatch } from "./canvas-search";
 import type { StructureRow } from "./counts";
 import { type EditorDialog, menuButton, nodeSelector, type StructureActions } from "./editor-context";
+import { FindBox } from "./find-box";
 import { NoTeamPanel } from "./no-team-panel";
 import { NodePanel } from "./node-panel";
 import { ArchiveDialog, MoveDialog, NodeFormDialog } from "./node-dialogs";
@@ -158,6 +160,30 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
     if (id === NO_TEAM_ID) focusSoon("[data-no-team-button]", "#structure-heading");
     else if (id) focusSoon(nodeSelector(id), "#structure-heading");
   }, [panelId]);
+
+  // ---------- finding ----------
+
+  // A match from "Find a person or team": pan its box into view, then open its panel. A person's
+  // panel is their node's (or No team's), as when their box is picked; their own box is panned to
+  // only while people are shown, else their node's (No team has no box then). The box is centred
+  // in what the side panel leaves visible: it covers the right of a wide pane (max-w-md, 448px)
+  // and all of a narrow one, where centring in the whole pane is all there is to do.
+  const findOnChart = (match: SearchMatch) => {
+    const target = match.type === "node" ? match.id : showPeople ? personNodeId(match.id) : match.teamId;
+    const item = target === null ? undefined : layout.items.find((i) => i.id === target);
+    const box = pane.current;
+    if (item && box) {
+      const panelWidth = box.clientWidth >= 2 * 448 ? 448 : 0;
+      const zoom = Math.max(flow.getZoom(), 0.8);
+      const cx = item.x + item.width / 2;
+      const cy = item.y + item.height / 2;
+      flow.setViewport(
+        { x: (box.clientWidth - panelWidth) / 2 - cx * zoom, y: box.clientHeight / 2 - cy * zoom, zoom },
+        { duration: 300 },
+      );
+    }
+    openPanel(match.type === "node" ? match.id : (match.teamId ?? NO_TEAM_ID));
+  };
 
   // ---------- moving ----------
 
@@ -391,6 +417,7 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
           <Button variant="outline" data-no-team-button onClick={() => openPanel(NO_TEAM_ID)}>
             No team ({noTeamCount})
           </Button>
+          <FindBox rows={view} members={people} onPick={findOnChart} />
           {saving && <span className="text-sm text-muted-foreground">Saving…</span>}
           {drag?.plan && (
             <span
