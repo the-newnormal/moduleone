@@ -16,6 +16,8 @@ export function SignOutButton() {
   const router = useRouter();
   const [waiting, setWaiting] = useState(false);
   const mounted = useRef(false);
+  // Set when this button resends the form itself, the member's answer given: let that one through.
+  const decided = useRef(false);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -24,6 +26,10 @@ export function SignOutButton() {
   }, []);
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
+    if (decided.current) {
+      decided.current = false;
+      return; // already waited for, or asked about: the form signs out as usual
+    }
     finishRecording(); // a recording still going is finished, so its take is saving now
     if (!currentSave()) {
       // Nothing saving: the form signs out as usual, unless the check-in beside this shows a take
@@ -44,6 +50,7 @@ export function SignOutButton() {
         return;
       }
       releaseSave();
+      decided.current = true;
       form.requestSubmit(); // nothing held now, so the form signs out as usual
     });
   }

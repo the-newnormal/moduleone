@@ -78,6 +78,27 @@ describe("Sign out", () => {
     expect(signOut).toHaveBeenCalledTimes(1);
   });
 
+  it("asks once, not twice, when the save it waited for fails and the check-in shows that take", async () => {
+    const { SignOutButton, trackSave, holdFailedTake, signOut } = await load();
+    const save = deferred<SaveOutcome | null>();
+    void trackSave(save.promise);
+    holdFailedTake(); // the recorder beside it shows the take as it fails
+    // The form really sends itself again here, so a second question would be seen.
+    resent.mockImplementation(function (this: HTMLFormElement) {
+      this.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    const confirm = vi.fn(() => true);
+    Object.defineProperty(window, "confirm", { value: confirm, configurable: true });
+    await render(<SignOutButton />);
+
+    await press();
+    await act(async () =>
+      save.resolve({ step: "failed", take: {} as never, message: "Couldn't save.", updated: false }),
+    );
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(signOut).toHaveBeenCalledTimes(1);
+  });
+
   it("signs out at once when nothing is recording or saving", async () => {
     const { SignOutButton, signOut } = await load();
     await render(<SignOutButton />);
