@@ -21,6 +21,7 @@ import {
   NOT_GIVEN_HERE,
   NOT_IN_TEAM,
   NOT_YOURSELF,
+  ORGANISATION_LOGIN,
   ORGANISATION_OWNER_ONLY,
   PERSON_CHANGED,
   PERSON_GONE,
@@ -308,7 +309,8 @@ async function discardLogin(service: ServiceClient, authUserId: string, createdH
 //   1. the caller is a signed-in admin (nothing below runs otherwise);
 //   2. the input is a uuid and an email address;
 //   3. as the admin (RLS): the member exists, isn't a Master Admin, has no login, isn't the caller,
-//      and holds no grants (a new login would get them; grants are the project owner's);
+//      holds no grants (a new login would get them; grants are the project owner's), and neither
+//      sits in nor leads the organisation node (that sees every check-in; the owner's too);
 //   4. service role: nothing is left on the row from an earlier login (check-ins, a Big Five
 //      profile, recordings), then invite the email (its link goes to Supabase Auth's Site URL +
 //      /auth/callback, which NEXT_PUBLIC_SITE_URL must match; see siteUrl);
@@ -331,11 +333,11 @@ export async function giveLogin(memberId: string, email: string): Promise<Action
   // 3.
   const { data: member, error: loadError } = await supabase
     .from("members")
-    .select("id, role, auth_user_id")
+    .select("id, role, auth_user_id, team_id")
     .eq("id", memberId)
     .maybeSingle();
   if (loadError) return fail(toUserMessage(loadError, "giveLogin load"));
-  const row = member as { id: string; role: string; auth_user_id: string | null } | null;
+  const row = member as { id: string; role: string; auth_user_id: string | null; team_id?: string | null } | null;
   if (!row) return fail(PERSON_GONE);
   if (row.id === adminMemberId) return fail(NOT_YOURSELF);
   if (row.role === "hq") return fail(MASTER_ADMIN_LOGIN);
@@ -344,6 +346,21 @@ export async function giveLogin(memberId: string, email: string): Promise<Action
   const grants = await supabase.from("member_grants").select("grant_name").eq("member_id", memberId).limit(1);
   if (grants.error) return fail(toUserMessage(grants.error, "giveLogin grants"));
   if ((grants.data ?? []).length > 0) return fail(HOLDS_GRANTS);
+  // Whoever sits in the organisation node or leads it sees every check-in, so only the project
+  // owner gives them a login (0006 refuses the link at the database too).
+  const org = await organisation(supabase, "giveLogin");
+  if (!org.ok) return org;
+  if (org.value.id !== null) {
+    if (org.value.is(row.team_id ?? null)) return fail(ORGANISATION_LOGIN);
+    const leadsIt = await supabase
+      .from("team_leads")
+      .select("member_id")
+      .eq("member_id", row.id)
+      .eq("team_id", org.value.id)
+      .limit(1);
+    if (leadsIt.error) return fail(toUserMessage(leadsIt.error, "giveLogin leads"));
+    if ((leadsIt.data ?? []).length > 0) return fail(ORGANISATION_LOGIN);
+  }
 
   // 4.
   const site = siteUrl();
@@ -388,9 +405,11 @@ export async function giveLogin(memberId: string, email: string): Promise<Action
     if (linkError.code === "23505" && (linkError.message ?? "").includes("auth_user_id")) {
       return fail(EMAIL_TAKEN);
     }
-    logError("giveLogin link", linkError);
+    // 0006 refuses it (42501) if the project owner put them in or over the organisation since step 3.
+    const refused = linkError.code === "42501";
+    if (!refused) logError("giveLogin link", linkError);
     await discardLogin(service, authUserId, createdHere);
-    return fail(GENERIC_ERROR);
+    return fail(refused ? toUserMessage(linkError, "giveLogin link") : GENERIC_ERROR);
   }
   if (!linked || linked.length === 0) {
     await discardLogin(service, authUserId, createdHere);

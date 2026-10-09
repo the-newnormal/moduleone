@@ -56,10 +56,12 @@ export type Person = {
   editable: boolean; // false for Master Admins and the admin's own row (RLS refuses those)
   hasLogin: boolean;
   loginGiven: string | null; // "Login given by Hana Lim on 9 Oct 2026", only while they have a login
-  // Give login is offered: editable, no login, and no grants (a new login would get them, so the
-  // project owner gives those; giveLogin refuses them too).
+  // Give login is offered: editable, no login, no grants and doesn't lead the organisation (a new
+  // login would get those, so the project owner gives it; giveLogin refuses them too).
   canGiveLogin: boolean;
-  ownerGivesLogin: boolean; // editable, no login, holds grants
+  // Editable and no login, but the project owner gives it: they hold grants, or lead the
+  // organisation node (either would come with the login).
+  ownerGivesLogin: "grants" | "organisation" | null;
   canResendInvite: boolean; // editable, with a login given in Module One (it may not be used yet)
   otherLeads: string[]; // names of the teams they also lead (team_leads), lost if made a member
   leadsHere: boolean; // a team_leads row for this team too, so they lead it wherever they sit
@@ -222,6 +224,10 @@ export function buildTeamView({
   }
 
   const holdsGrants = new Set(grants.map((g) => g.member_id));
+  const organisationId = teams.find((t) => t.kind === "organisation")?.id;
+  const leadsOrganisation = new Set(leads.filter((l) => l.team_id === organisationId).map((l) => l.member_id));
+  const ownerGivesLogin = (offered: boolean, id: string): Person["ownerGivesLogin"] =>
+    !offered ? null : holdsGrants.has(id) ? "grants" : leadsOrganisation.has(id) ? "organisation" : null;
   const leadIds = new Set(leads.filter((l) => l.team_id === teamId).map((l) => l.member_id));
 
   // A node is also led by whoever leads a node above it (its domain, its division): leaders placed
@@ -255,8 +261,8 @@ export function buildTeamView({
         hasLogin,
         // A login deleted in the Supabase dashboard leaves login_given_* behind; don't show it.
         loginGiven: hasLogin ? loginGivenText(giver, m.login_given_at) : null,
-        canGiveLogin: editable && !hasLogin && !holdsGrants.has(m.id),
-        ownerGivesLogin: editable && !hasLogin && holdsGrants.has(m.id),
+        canGiveLogin: editable && !hasLogin && !holdsGrants.has(m.id) && !leadsOrganisation.has(m.id),
+        ownerGivesLogin: ownerGivesLogin(editable && !hasLogin, m.id),
         canResendInvite: editable && hasLogin && m.login_given_at !== null,
         otherLeads: [...(leadsOf.get(m.id) ?? [])].sort((a, b) => a.localeCompare(b, "en")),
         leadsHere: leadIds.has(m.id),
@@ -266,7 +272,6 @@ export function buildTeamView({
     .sort(byName);
 
   // Not whoever sits in the organisation either: only the project owner moves them.
-  const organisationId = teams.find((t) => t.kind === "organisation")?.id;
   const candidates: Candidate[] = members
     .filter(
       (m) =>

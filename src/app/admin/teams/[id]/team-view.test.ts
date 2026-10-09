@@ -213,12 +213,24 @@ describe("buildTeamView", () => {
     const people = view("team-ip1", MEMBERS, LEADS, [{ member_id: "m-zed" }, { member_id: ADMIN }])!.people;
     const flags = Object.fromEntries(people.map((p) => [p.name, [p.canGiveLogin, p.ownerGivesLogin]]));
     expect(flags).toEqual({
-      "Hana Lim": [false, false], // the admin: has a login, not editable
-      "Leo Tan": [false, false],
-      "Mei Wong": [false, false],
-      "Zed Ong": [false, true],
+      "Hana Lim": [false, null], // the admin: has a login, not editable
+      "Leo Tan": [false, null],
+      "Mei Wong": [false, null],
+      "Zed Ong": [false, "grants"],
     });
-    expect(view("team-ip1")!.people.find((p) => p.id === "m-zed")).toMatchObject({ canGiveLogin: true, ownerGivesLogin: false });
+    expect(view("team-ip1")!.people.find((p) => p.id === "m-zed")).toMatchObject({ canGiveLogin: true, ownerGivesLogin: null });
+  });
+
+  it("leaves Give login to the project owner for someone who leads the organisation (since 0006)", () => {
+    const teams = [node("org", "The New Normal", "organisation", null), ...TEAMS];
+    const zed = buildTeamView({
+      teamId: "team-ip1",
+      adminMemberId: ADMIN,
+      teams,
+      members: MEMBERS,
+      leads: [...LEADS, { team_id: "org", member_id: "m-zed" }],
+    })!.people.find((p) => p.id === "m-zed");
+    expect(zed).toMatchObject({ canGiveLogin: false, ownerGivesLogin: "organisation" });
   });
 
   it("offers Resend invite only on editable rows whose login was given here", () => {
