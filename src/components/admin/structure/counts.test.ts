@@ -12,6 +12,7 @@ const team = (id: string): TeamRow => ({
   code: null,
   sort_order: 0,
   note: null,
+  leader_title: null,
   archived_at: null,
 });
 

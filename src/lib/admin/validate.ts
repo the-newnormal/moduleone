@@ -75,9 +75,10 @@ export function isIndex(value: unknown): value is number {
 // Lengths count code points, as Postgres char_length does (an emoji is one character, not two).
 const length = (s: string) => [...s].length;
 
-// Control characters (newlines, tabs, NUL, …) and invisible format characters (zero-width
-// spaces, direction overrides) don't belong in a one-line name or code.
-const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}]/u;
+// Control characters (newlines, tabs, NUL, …), Unicode's line and paragraph separators (U+2028,
+// U+2029) and invisible format characters (zero-width spaces, direction overrides) don't belong
+// in a one-line name, title or code.
+const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 // In a note, line breaks and tabs are fine; other control and format characters aren't.
 const CONTROL_OR_FORMAT_EXCEPT_BREAKS = /[^\P{Cc}\n\t]|\p{Cf}/u;
 
@@ -108,6 +109,20 @@ export function parseCode(value: unknown): Parsed<string | null> {
     );
   }
   return ok(code);
+}
+
+export const TITLE_MAX = 60;
+
+// What the leaders who sit in a node are called, like President (0006's teams.leader_title):
+// trimmed, one line, at most 60 characters; empty means no title (null).
+export function parseLeaderTitle(value: unknown): Parsed<string | null> {
+  if (value === null || value === undefined) return ok(null);
+  if (typeof value !== "string") return fail("Titles must be text.");
+  const title = value.trim();
+  if (title === "") return ok(null);
+  if (CONTROL_OR_FORMAT.test(title)) return fail("Titles can't contain line breaks or hidden characters.");
+  if (length(title) > TITLE_MAX) return fail(`Titles can be at most ${TITLE_MAX} characters.`);
+  return ok(title);
 }
 
 export const NOTE_MAX = 500;

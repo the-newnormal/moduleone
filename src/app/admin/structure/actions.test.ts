@@ -214,6 +214,7 @@ describe("createNode", () => {
               code: "IP.3",
               domain_type: null,
               division_type: null,
+              leader_title: null,
               note: null,
               sort_order: 2,
             },
@@ -245,6 +246,7 @@ describe("createNode", () => {
         code: null,
         domain_type: null,
         division_type: "strategy",
+        leader_title: null,
         note: "New.",
         sort_order: 6,
       },
@@ -281,7 +283,7 @@ describe("createNode", () => {
     results = [{ data: [], error: null }, { data: { id: NEW_ID }, error: null }];
     await createNode({ kind: "team", parentId: PARENT, name: "X", archived_at: "now", id: NODE, sort_order: 7, division: "HQ" });
     expect(Object.keys(queries[1].calls[0][1] as object).sort()).toEqual(
-      ["code", "division_type", "domain_type", "kind", "name", "note", "parent_id", "sort_order"],
+      ["code", "division_type", "domain_type", "kind", "leader_title", "name", "note", "parent_id", "sort_order"],
     );
   });
 
@@ -335,7 +337,7 @@ describe("updateNode", () => {
         calls: [
           [
             "update",
-            { name: "Atlas", code: "AT.X", domain_type: "development", division_type: null, note: "Moved from HQ." },
+            { name: "Atlas", code: "AT.X", domain_type: "development", division_type: null, leader_title: null, note: "Moved from HQ." },
           ],
           ["eq", "id", NODE],
           ["select", "id"],
@@ -350,7 +352,7 @@ describe("updateNode", () => {
     await updateNode({ id: NODE, name: "Gather", code: "", type: "", note: "", kind: "team", parent_id: null, archived_at: null });
     expect(queries[1].calls[0]).toEqual([
       "update",
-      { name: "Gather", code: null, domain_type: null, division_type: null, note: null },
+      { name: "Gather", code: null, domain_type: null, division_type: null, leader_title: null, note: null },
     ]);
   });
 

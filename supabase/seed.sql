@@ -4,8 +4,9 @@
 --
 -- The divisions, domains and teams come from migration 0003 (the founding structure); this file
 -- puts people in three of its teams, found by code: IP Lab 1 (IP.1, under Gather › IP Lab), Atlas
--- (AT.X, a Culture domain) and Youth Day 1 (YD.1, under Special Projects › Youth Day), and a
--- division head, Nora Lee, in the Gather division itself (found by kind and name).
+-- (AT.X, a Culture domain) and Youth Day 1 (YD.1, under Special Projects › Youth Day), a division
+-- head, Nora Lee, in the Gather division itself (found by kind and name), and Grace Lim above every
+-- division, in the organisation itself (0006).
 --
 -- Sign in at http://localhost:3000/login as any of these, then open the link from Mailpit
 -- (http://127.0.0.1:54324):
@@ -21,7 +22,9 @@
 --                       teammates, and IP Lab 1, IP Lab and Gather
 --   head@example.com    Nora Lee, head of Gather: a leader who sits in the Gather division itself
 --                       (0005), so her check-ins are Gather's own and she sees every check-in in Gather
--- (Ben Ong, a leader with no login, sits in the domain Atlas itself, which has no sub-teams.)
+-- (Ben Ong, a leader with no login, sits in the domain Atlas itself, which has no sub-teams. Grace
+-- Lim, with no login, sits in the organisation, The New Normal, so she leads every division; only
+-- the project owner places people there.)
 --
 -- Eight weeks of check-ins, ending this week, tell a story on the heat-map under the default scoring
 -- settings (scoring_settings): IP Lab 1 stays green apart from a yellow dip, Atlas slides from green
@@ -79,6 +82,12 @@ left join teams t on t.code = v.team_code;
 insert into members (id, auth_user_id, name, team_id, role)
 select '3e3b0000-0000-4000-8000-000000000012', '5eed0000-0000-4000-8000-000000000004', 'Nora Lee', t.id, 'leader'
 from teams t where t.kind = 'division' and t.name = 'Gather';
+
+-- Grace sits above every division, in the organisation itself. Placing her there makes her a
+-- leader (0006); in production only the project owner does this, from the dashboard.
+insert into members (id, name, team_id, role)
+select '3e3b0000-0000-4000-8000-000000000013', 'Grace Lim', t.id, 'member'
+from teams t where t.kind = 'organisation';
 
 -- Leo also leads IP Lab 2 (in production, admins maintain team_leads in the app).
 insert into team_leads (team_id, member_id)
@@ -154,3 +163,16 @@ select
   'Seed data: scores come from supabase/seed.sql, not the grader.'
 from generate_series(0, 7) w
 where w % 3 <> 2;
+
+-- Grace's check-ins, made in the organisation itself: a quiet dip three weeks ago, otherwise steady.
+insert into checkins (
+  member_id, week_start, transcript, activity_score, excellence_score, morale_score, rubric_review
+)
+select
+  '3e3b0000-0000-4000-8000-000000000013',
+  (date_trunc('week', now() at time zone 'Asia/Singapore'))::date - 7 * w,
+  format('Seed check-in from Grace Lim for the week of %s.', (date_trunc('week', now() at time zone 'Asia/Singapore'))::date - 7 * w),
+  case when w = 3 then 3 else 4 end, 4, case when w = 3 then 3 else 4 end,
+  'Seed data: scores come from supabase/seed.sql, not the grader.'
+from generate_series(0, 7) w
+where w <> 5;
