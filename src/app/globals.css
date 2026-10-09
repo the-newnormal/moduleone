@@ -8,9 +8,9 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-  --font-display: var(--font-playfair-display);
+  --font-sans: var(--font-normal-sans);
+  --font-mono: var(--font-normal-mono);
+  --font-display: var(--font-normal-sans);
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
@@ -35,31 +35,53 @@
   --color-status-good: var(--status-good);
   --color-status-warning: var(--status-warning);
   --color-status-critical: var(--status-critical);
+  --color-sun: var(--sun);
+  --color-on-sun: var(--on-sun);
+  --color-sun-soft: var(--sun-soft);
+  --color-warning-ink: var(--warning-ink);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-line-strong: var(--line-strong);
 }
 
-/* Normal theme: navy type on pale blue. */
+/* Normal, the design system for thenewnormal's software (Paper theme): ink on paper, warm stone
+   panels, hairlines, and one warm colour, sun, for the single thing a screen wants you to do. The
+   shadcn names map onto Normal's tokens: surface-000 is the page, surface-100 cards and panels,
+   surface-200 hover and sunken wells, line the hairlines, line-strong control borders. */
 :root {
-  --radius: 0.75rem;
-  --background: oklch(0.972 0.01 240);
-  --foreground: oklch(0.28 0.055 255);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.28 0.055 255);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.28 0.055 255);
-  --primary: oklch(0.38 0.1 250);
-  --primary-foreground: oklch(0.985 0.005 240);
-  --secondary: oklch(0.94 0.02 240);
-  --secondary-foreground: oklch(0.28 0.055 255);
-  --muted: oklch(0.94 0.02 240);
-  --muted-foreground: oklch(0.5 0.04 250);
-  --accent: oklch(0.94 0.02 240);
-  --accent-foreground: oklch(0.28 0.055 255);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.88 0.025 240);
-  --input: oklch(0.88 0.025 240);
-  --ring: oklch(0.38 0.1 250);
+  /* PP Neue Montreal isn't licensed yet; the stacks fall back as Normal specifies. */
+  --font-normal-sans: "PP Neue Montreal", "Neue Montreal", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-normal-mono: "PP Neue Montreal Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  /* Cards come out at radius-l (20px) as rounded-xl, inputs at radius-m (12px) as rounded-md. */
+  --radius: 0.875rem;
+  --background: #ffffff; /* surface-000 */
+  --foreground: #141414; /* ink */
+  --card: #f6f5f1; /* surface-100 */
+  --card-foreground: #141414;
+  --popover: #ffffff;
+  --popover-foreground: #141414;
+  --primary: #141414; /* ink: the primary button */
+  --primary-foreground: #ffffff; /* ink-inverse */
+  --secondary: #ecebe5; /* surface-200 */
+  --secondary-foreground: #141414;
+  --muted: #ecebe5; /* surface-200: sunken wells, on a card or the page */
+  --muted-foreground: #5f5c55; /* ink-muted: 4.5:1 or more on every surface */
+  --accent: #ecebe5; /* surface-200: hover */
+  --accent-foreground: #141414;
+  --destructive: #c8251c; /* danger */
+  --border: #e3e1da; /* line: decorative hairlines only */
+  --input: #86837a; /* line-strong: control borders, 3:1 */
+  --ring: #141414; /* focus */
+  --line-strong: #86837a;
+  --sun: #ffc21a; /* one per screen, never as text on a light ground */
+  --on-sun: #141414;
+  --sun-soft: #fff4cf;
+  --warning-ink: #7a5a00;
+  --success: #00708a; /* teal-blue, so it never reads as the heat-map's green */
+  --success-soft: #e3f1f4;
   /* Heat-map R/Y/G. A status palette: reserved for health, and always shown with an icon and a
-     label, never colour alone (yellow sits below 3:1 on a light surface by design). */
+     label, never colour alone (yellow sits below 3:1 on a light surface by design). It stays
+     outside Normal's palette on purpose: the heat-map is red, yellow and green by definition. */
   --status-good: #0ca30c;
   --status-warning: #fab219;
   --status-critical: #d03b3b;
@@ -72,9 +94,10 @@
   body {
     @apply bg-background text-foreground font-sans;
   }
+  /* Normal has two weights, 400 and 500, and sets headings tight. */
   h1,
   h2,
   h3 {
-    @apply font-display;
+    @apply font-display font-medium tracking-[-0.01em];
   }
 }
