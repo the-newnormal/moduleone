@@ -3,10 +3,28 @@ import type { Band } from "@/lib/health/health";
 
 // How each colour looks everywhere on the dashboard: a distinct icon shape plus a word, so the
 // band never rests on colour alone.
-export const BANDS: Record<Band, { label: string; Icon: LucideIcon; icon: string; tint: string }> = {
-  green: { label: "Green", Icon: CircleCheck, icon: "text-status-good", tint: "bg-status-good/12" },
-  yellow: { label: "Yellow", Icon: TriangleAlert, icon: "text-status-warning", tint: "bg-status-warning/20" },
-  red: { label: "Red", Icon: OctagonAlert, icon: "text-status-critical", tint: "bg-status-critical/12" },
+export const BANDS: Record<Band, { label: string; Icon: LucideIcon; icon: string; tint: string; bar: string }> = {
+  green: {
+    label: "Green",
+    Icon: CircleCheck,
+    icon: "text-status-good",
+    tint: "bg-status-good/12",
+    bar: "bg-status-good",
+  },
+  yellow: {
+    label: "Yellow",
+    Icon: TriangleAlert,
+    icon: "text-status-warning",
+    tint: "bg-status-warning/20",
+    bar: "bg-status-warning",
+  },
+  red: {
+    label: "Red",
+    Icon: OctagonAlert,
+    icon: "text-status-critical",
+    tint: "bg-status-critical/12",
+    bar: "bg-status-critical",
+  },
 };
 
 // `score` comes from formatScore, so the number never contradicts the colour.

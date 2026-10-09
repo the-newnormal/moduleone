@@ -1,10 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadHeatmapData, loadRole, loadScoringConfig, loadTeamWeek } from "@/lib/dashboard/load";
+import { loadHeatmapData, loadLedTeams, loadRole, loadScoringConfig, loadTeamWeek } from "@/lib/dashboard/load";
 import { createClient } from "@/lib/supabase/server";
 import PortalPage from "../page";
 import TeamWeekPage from "./[teamId]/[week]/page";
 import DashboardPage from "./page";
+import TrendPage from "./trend/page";
 
 // Members never see their grade: the heat-map and its drill-in show scores, colours and the
 // leaders-only review, so a member is sent to their check-in, and the portal doesn't offer them.
@@ -22,6 +23,7 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/dashboard/load", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/dashboard/load")>()),
   loadHeatmapData: vi.fn(),
+  loadLedTeams: vi.fn(),
   loadRole: vi.fn(),
   loadScoringConfig: vi.fn(),
   loadTeamWeek: vi.fn(),
@@ -44,9 +46,9 @@ beforeEach(() => {
     checkins: [],
     config: CONFIG,
     role: "member",
-    ownTeam: null,
     ledTeams: [],
   } as never);
+  vi.mocked(loadLedTeams).mockResolvedValue([]);
   vi.mocked(loadScoringConfig).mockResolvedValue(CONFIG);
   vi.mocked(loadTeamWeek).mockResolvedValue({ checkins: [], teamName: "Team", context: [] } as never);
   vi.mocked(loadRole).mockResolvedValue("member");
@@ -59,13 +61,20 @@ describe("a member", () => {
     );
   });
 
-  it("is sent from a team's week to their check-in", async () => {
+  it("is sent from the trend grid to their check-in", async () => {
+    await expect(TrendPage({ searchParams: Promise.resolve({}) } as never)).rejects.toThrow(
+      "NEXT_REDIRECT /portal/checkin",
+    );
+  });
+
+  it("is sent from a team's week to their check-in, before any check-in loads", async () => {
     await expect(
       TeamWeekPage({
         params: Promise.resolve({ teamId: "none", week: "2026-10-05" }),
         searchParams: Promise.resolve({}),
       } as never),
     ).rejects.toThrow("NEXT_REDIRECT /portal/checkin");
+    expect(loadTeamWeek).not.toHaveBeenCalled();
   });
 
   it("isn't offered Team health on the portal", async () => {

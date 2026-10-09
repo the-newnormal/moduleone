@@ -12,12 +12,19 @@ export function weekStartFor(instant: Date): string {
   return new Date(monday).toISOString().slice(0, 10);
 }
 
+// The week `n` weeks after `week` (before it, when n is negative).
+export function shiftWeek(week: string, n: number): string {
+  return new Date(Date.parse(`${week}T00:00:00Z`) + n * 7 * DAY_MS).toISOString().slice(0, 10);
+}
+
+// `count` weeks, oldest first, ending with `last`.
+export function weeksEndingAt(last: string, count: number): string[] {
+  return Array.from({ length: count }, (_, i) => shiftWeek(last, i - (count - 1)));
+}
+
 // The last `count` weeks, oldest first, ending with the week `now` falls in.
 export function recentWeeks(now: Date, count: number): string[] {
-  const latest = Date.parse(`${weekStartFor(now)}T00:00:00Z`);
-  return Array.from({ length: count }, (_, i) =>
-    new Date(latest - (count - 1 - i) * 7 * DAY_MS).toISOString().slice(0, 10),
-  );
+  return weeksEndingAt(weekStartFor(now), count);
 }
 
 // True for a real calendar date (YYYY-MM-DD) that is a Monday, in a sane range (Postgres rejects
@@ -45,7 +52,16 @@ export const WEEK_COUNTS = [1, 4, 8, 12] as const;
 export type WeekCount = (typeof WEEK_COUNTS)[number];
 export const DEFAULT_WEEK_COUNT: WeekCount = 8;
 
+// How many weeks the org chart's bars show, ending with the week it's coloured by.
+export const ORG_WEEKS = 8;
+
 export function parseWeekCount(raw: string | string[] | undefined): WeekCount {
   const value = Number(Array.isArray(raw) ? raw[0] : raw);
   return (WEEK_COUNTS as readonly number[]).includes(value) ? (value as WeekCount) : DEFAULT_WEEK_COUNT;
+}
+
+// The org chart's ?week=: a week up to `latest` (this week); anything else is `latest`.
+export function parseWeek(raw: string | string[] | undefined, latest: string): string {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return value && isWeekStart(value) && value <= latest ? value : latest;
 }
