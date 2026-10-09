@@ -134,7 +134,7 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
     // fix grades the check-in.
     return fail(`grading_${error.reason}`, error, { giveBackAttempt: error.reason === "api" && !error.retryable });
   }
-  const { error: gradeError } = await admin
+  const { data: graded, error: gradeError } = await admin
     .from("checkins")
     .update({
       activity_score: grade.activity,
@@ -148,8 +148,11 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
     })
     .eq("id", checkinId)
     .is("graded_at", null)
+    .select("id")
     .abortSignal(AbortSignal.timeout(SAVE_MS));
   if (gradeError) return fail("save_grade_failed", gradeError);
+  // No row: a Master Admin reset the check-in meanwhile (0007), or another attempt graded it.
+  if (!graded || graded.length === 0) return "skipped";
   return "graded";
 }
 

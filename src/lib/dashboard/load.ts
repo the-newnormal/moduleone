@@ -89,6 +89,10 @@ export type TeamWeekCheckin = {
   // Where to play this check-in's recording from, when the viewer may play it (the speaker, or the
   // recordings grant; Storage decides). It signs a fresh link on every request (./recordings.ts).
   recording: string | null;
+  // Whether it has a recording at all, played or not (for a Master Admin's delete control).
+  hasRecording: boolean;
+  // Submitted through the app and not graded yet: the grader still needs the recording.
+  awaitingGrader: boolean;
 };
 
 // Team ids per request: about 3.7 kB of URL, well inside what PostgREST's gateway accepts.
@@ -118,7 +122,7 @@ export async function loadTeamWeek(
         let query = supabase
           .from("checkins")
           .select(
-            "id, team_id, activity_score, excellence_score, morale_score, rubric_review, transcript, audio_path, members(name)",
+            "id, team_id, activity_score, excellence_score, morale_score, rubric_review, transcript, audio_path, submitted_at, graded_at, members(name)",
           )
           .eq("week_start", week);
         query = ids ? query.in("team_id", ids) : query.is("team_id", null);
@@ -164,6 +168,8 @@ export async function loadTeamWeek(
         rubric_review: c.rubric_review,
         transcript: c.transcript,
         recording: c.audio_path && playable.has(c.audio_path) ? recordingPath(c.id, c.audio_path) : null,
+        hasRecording: c.audio_path !== null,
+        awaitingGrader: c.submitted_at !== null && c.graded_at === null,
       };
       return { row, place: order.get(c.team_id ?? "") ?? 0 };
     })

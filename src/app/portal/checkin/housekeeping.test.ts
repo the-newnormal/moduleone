@@ -6,6 +6,7 @@ import {
   needsProcessing,
   orphanedFiles,
   processPendingCheckins,
+  removeResetRecordings,
   tidyMemberAudio,
   type ProcessingState,
 } from "./housekeeping";
@@ -328,5 +329,105 @@ describe("deleteExpiredRecordings", () => {
       throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
     });
     expect(await deleteExpiredRecordings()).toBeNull();
+  });
+});
+
+describe("removeResetRecordings", () => {
+  const A = `${MEMBER}/2026-10-05-a.webm`;
+  const B = `${MEMBER}/2026-10-05-b.webm`;
+  type Call = { table: string; op: string; args: unknown[] };
+  let calls: Call[];
+  let pending: { data: unknown; error: unknown };
+  let inUse: Record<string, string[]>;
+  let stampError: unknown;
+  const remove = vi.fn();
+
+  // Every chain is recorded and awaitable; reads of checkins and checkin_drafts find `inUse`.
+  function from(table: string) {
+    const chain = (op: string, result: () => unknown) => {
+      const builder: Record<string, unknown> = {};
+      for (const method of ["select", "is", "neq", "order", "limit", "in", "eq", "update"]) {
+        builder[method] = (...args: unknown[]) => (calls.push({ table, op: method, args }), builder);
+      }
+      builder.then = (resolve: (r: unknown) => void) => resolve(result());
+      calls.push({ table, op, args: [] });
+      return builder;
+    };
+    if (table === "checkin_resets") {
+      return {
+        select: (...args: unknown[]) => (calls.push({ table, op: "select", args }), chain("read", () => pending)),
+        update: (...args: unknown[]) => (calls.push({ table, op: "update", args }), chain("write", () => ({ error: stampError }))),
+      };
+    }
+    return {
+      select: () => chain("read", () => ({ data: (inUse[table] ?? []).map((audio_path) => ({ audio_path })), error: null })),
+    };
+  }
+
+  beforeEach(() => {
+    calls = [];
+    pending = {
+      data: [
+        { id: "r1", audio_paths: [A] },
+        { id: "r2", audio_paths: [A, B] },
+      ],
+      error: null,
+    };
+    inUse = {};
+    stampError = null;
+    remove.mockReset().mockResolvedValue({ data: [], error: null });
+    vi.mocked(createServiceRoleClient).mockReturnValue({ from, storage: { from: () => ({ remove }) } } as never);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("removes the files of unstamped deletes and resets, then stamps them", async () => {
+    await expect(removeResetRecordings()).resolves.toEqual({ removed: 2 });
+    expect(remove).toHaveBeenCalledExactlyOnceWith([A, B]);
+    expect(calls).toContainEqual({ table: "checkin_resets", op: "is", args: ["files_removed_at", null] });
+    expect(calls).toContainEqual({ table: "checkin_resets", op: "update", args: [{ files_removed_at: expect.any(String) }] });
+    expect(calls).toContainEqual({ table: "checkin_resets", op: "in", args: ["id", ["r1", "r2"]] });
+  });
+
+  it("never removes a file a check-in or draft points at, and still stamps its row so the queue moves on", async () => {
+    inUse = { checkin_drafts: [B] };
+    await expect(removeResetRecordings()).resolves.toEqual({ removed: 1 });
+    expect(remove).toHaveBeenCalledExactlyOnceWith([A]);
+    expect(calls).toContainEqual({ table: "checkin_resets", op: "in", args: ["id", ["r1", "r2"]] });
+  });
+
+  it("removes nothing, but stamps the rows, when every file is in use", async () => {
+    inUse = { checkins: [A, B] };
+    await expect(removeResetRecordings()).resolves.toEqual({ removed: 0 });
+    expect(remove).not.toHaveBeenCalled();
+    expect(calls).toContainEqual({ table: "checkin_resets", op: "in", args: ["id", ["r1", "r2"]] });
+  });
+
+  it("asks for a small batch, so its file filters stay well inside URL limits", async () => {
+    await removeResetRecordings();
+    expect(calls).toContainEqual({ table: "checkin_resets", op: "limit", args: [20] });
+  });
+
+  it("does nothing when nothing is pending", async () => {
+    pending = { data: [], error: null };
+    await expect(removeResetRecordings()).resolves.toEqual({ removed: 0 });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("leaves the rows unstamped when Storage refuses, for the next run", async () => {
+    remove.mockResolvedValue({ data: null, error: { name: "StorageError" } });
+    await expect(removeResetRecordings()).resolves.toBeNull();
+    expect(calls.some((call) => call.op === "update")).toBe(false);
+  });
+
+  it("reports a failed read or stamp, and never throws", async () => {
+    pending = { data: null, error: { code: "57014" } };
+    await expect(removeResetRecordings()).resolves.toBeNull();
+    pending = { data: [{ id: "r1", audio_paths: [A] }], error: null };
+    stampError = { code: "57014" };
+    await expect(removeResetRecordings()).resolves.toBeNull();
+    vi.mocked(createServiceRoleClient).mockImplementation(() => {
+      throw new Error("no key");
+    });
+    await expect(removeResetRecordings()).resolves.toBeNull();
   });
 });
