@@ -53,12 +53,29 @@ describe("Sign out", () => {
 
     await press();
     expect(finish).toHaveBeenCalledTimes(1);
+    // Named in full; the short "Saving…" shows on narrower screens, where the bar has less room.
     expect(button("Saving your check-in…").disabled).toBe(true);
     expect(signOut).not.toHaveBeenCalled();
     expect(resent).not.toHaveBeenCalled();
 
     await act(async () => save.resolve({ step: "saved" }));
     expect(resent).toHaveBeenCalledTimes(1); // now nothing is held, so it signs out as usual
+  });
+
+  it("asks before signing out while the check-in shows a take whose save failed", async () => {
+    const { SignOutButton, holdFailedTake, signOut } = await load();
+    holdFailedTake();
+    await render(<SignOutButton />);
+    const confirm = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true);
+    Object.defineProperty(window, "confirm", { value: confirm, configurable: true });
+
+    await press(); // "stay and try again"
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(signOut).not.toHaveBeenCalled();
+
+    await press(); // "sign out anyway"
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(signOut).toHaveBeenCalledTimes(1);
   });
 
   it("signs out at once when nothing is recording or saving", async () => {

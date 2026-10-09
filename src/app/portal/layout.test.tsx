@@ -5,7 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import PortalLayout from "./layout";
 
 // Every portal page sits under the app bar: the logomark, the nav (only what the viewer may open,
-// the page they're on marked) and Sign out. It sticks to the top as the page scrolls.
+// the page they're on marked) and Sign out. It stays at the top as the page scrolls.
 
 let pathname = "/portal";
 vi.mock("next/navigation", () => ({
@@ -42,9 +42,9 @@ const nav = (html: string) =>
   );
 
 describe("PortalLayout", () => {
-  it("puts the sticky app bar above the page, with one Sign out", async () => {
+  it("puts the app bar, fixed to the top with a spacer in its place, above the page, with one Sign out", async () => {
     const html = await layout();
-    expect(html).toMatch(/^<header class="sticky top-0[^"]*">/);
+    expect(html).toMatch(/^<header class="fixed inset-x-0 top-0[^"]*">[\s\S]*<\/header><div aria-hidden="true" class="h-\(--app-bar-h\)[^"]*"><\/div><main>/);
     expect(html.indexOf("<header")).toBeLessThan(html.indexOf("the page"));
     expect(html.split(">Sign out<")).toHaveLength(2);
     expect(html).toContain('href="/portal"');

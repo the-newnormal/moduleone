@@ -46,7 +46,7 @@ describe("AdminLayout", () => {
           : { data: "a0000000-0000-4000-8000-000000000001", error: null },
     );
     const html = renderToStaticMarkup(await layout());
-    expect(html).toMatch(/<header class="sticky top-0[^"]*">/);
+    expect(html).toMatch(/<header class="fixed inset-x-0 top-0[^"]*">[\s\S]*<\/header><div aria-hidden="true" class="h-\(--app-bar-h\)/);
     expect(html).toContain('<nav aria-label="Main"');
     // Admin's own page redirects to Structure, so Admin is marked as the section, not the page.
     expect(html).toMatch(/<a aria-current="true"[^>]*href="\/admin"[^>]*>Admin<\/a>/);

@@ -298,3 +298,17 @@ describe("finishRecording", () => {
     expect(second).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("failedTakeShown", () => {
+  it("is true while any recorder shows a failed take, and each release counts once", async () => {
+    const { holdFailedTake, failedTakeShown } = await load();
+    expect(failedTakeShown()).toBe(false);
+    const first = holdFailedTake();
+    const second = holdFailedTake();
+    first();
+    first(); // releasing twice doesn't drop the other's hold
+    expect(failedTakeShown()).toBe(true);
+    second();
+    expect(failedTakeShown()).toBe(false);
+  });
+});

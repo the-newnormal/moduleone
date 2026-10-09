@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { currentSave, finishRecording, pendingSave, releaseSave } from "./checkin/pending-save";
+import { currentSave, failedTakeShown, finishRecording, pendingSave, releaseSave } from "./checkin/pending-save";
 import { signOut } from "./actions";
 
 // Signs out, but not while a check-in take is still saving in this tab (the member left the
@@ -25,7 +25,12 @@ export function SignOutButton() {
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     finishRecording(); // a recording still going is finished, so its take is saving now
-    if (!currentSave()) return; // nothing saving: the form signs out as usual
+    if (!currentSave()) {
+      // Nothing saving: the form signs out as usual, unless the check-in beside this shows a take
+      // whose save failed, and the member would rather stay and try again.
+      if (failedTakeShown() && !window.confirm(UNSAVED)) event.preventDefault();
+      return;
+    }
     event.preventDefault();
     const form = event.currentTarget;
     // Waited for outside a transition: an async transition open this long would hold up every
@@ -45,8 +50,16 @@ export function SignOutButton() {
 
   return (
     <form action={signOut} onSubmit={onSubmit}>
-      <Button type="submit" variant="outline" disabled={waiting}>
-        {waiting ? "Saving your check-in…" : "Sign out"}
+      {/* The full words fit beside the tabs only on wide screens; the name is always the full words. */}
+      <Button type="submit" variant="outline" disabled={waiting} aria-label={waiting ? "Saving your check-in…" : undefined}>
+        {waiting ? (
+          <>
+            <span className="lg:hidden">Saving…</span>
+            <span className="max-lg:hidden">Saving your check-in…</span>
+          </>
+        ) : (
+          "Sign out"
+        )}
       </Button>
     </form>
   );

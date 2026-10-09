@@ -9,7 +9,7 @@ import { QUESTIONS } from "@/lib/checkin/week";
 import { createClient } from "@/lib/supabase/client";
 import { prepareRecording, saveDraft } from "./actions";
 import { formatClock } from "./format";
-import { currentSave, holdRecording, releaseSave, trackSave, wasDeleted } from "./pending-save";
+import { currentSave, holdFailedTake, holdRecording, releaseSave, trackSave, wasDeleted } from "./pending-save";
 import { saveTake, type ReadyToUpload, type SaveOutcome, type Take } from "./take";
 
 // Opus in WebM where the browser has it (Chrome, Edge, Firefox), AAC in MP4 on Safari. Speech at
@@ -200,6 +200,10 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
       live.recorder.stop(); // onstop collects the take and saves it
     });
   }, [recording]);
+
+  // A failed take shown here (with Try again) is safe only in this page: Sign out asks first.
+  const failedShown = state.step === "failed" && !state.updated;
+  useEffect(() => (failedShown ? holdFailedTake() : undefined), [failedShown]);
 
   // Move keyboard and screen-reader focus to each step's main button as the steps change, since
   // the button that was pressed has usually gone. Not on first load, when nothing has happened

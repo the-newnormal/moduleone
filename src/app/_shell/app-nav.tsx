@@ -14,8 +14,18 @@ export function currentItem(items: readonly NavItem[], pathname: string): NavIte
   return item?.id ?? null;
 }
 
-// Keeps a tab in the row's view, for when the row scrolls sideways.
-const reveal = (tab: HTMLElement | null) => tab?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+// Keeps a tab in its row's view, with room for the focus ring, for when the row scrolls sideways.
+// Only the row scrolls: scrollIntoView would move the page too, since its scroll padding (for this
+// bar) counts the bar's own tabs as hidden.
+function reveal(tab: HTMLElement | null) {
+  const row = tab?.closest("ul");
+  if (!tab || !row) return;
+  const ring = 4;
+  const { left, right } = tab.getBoundingClientRect();
+  const view = row.getBoundingClientRect();
+  if (left - ring < view.left) row.scrollLeft -= view.left - (left - ring);
+  else if (right + ring > view.right) row.scrollLeft += right + ring - view.right;
+}
 
 // Pills, the current one filled with ink: "page" on the item's own page, "true" on a page under it.
 // Below md they take a row of their own under the logomark and Sign out, and never wrap (that would
@@ -30,7 +40,7 @@ export function AppNav({ items }: { items: readonly NavItem[] }) {
 
   return (
     <nav aria-label="Main" className="order-last w-full md:order-none md:mr-auto md:w-auto">
-      <ul className="-m-1 flex scroll-px-1 gap-0.5 overflow-x-auto p-1 min-[360px]:gap-1">
+      <ul className="-m-1 flex gap-0.5 overflow-x-auto p-1 min-[360px]:gap-1">
         {items.map((item) => {
           const isCurrent = item.id === current;
           return (

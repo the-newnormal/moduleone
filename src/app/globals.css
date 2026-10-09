@@ -51,7 +51,7 @@
    shadcn names map onto Normal's tokens: surface-000 is the page, surface-100 cards and panels,
    surface-200 hover and sunken wells, line the hairlines, line-strong control borders. */
 /* The app bar's height (src/app/_shell/app-bar.tsx: two rows of 40px below md, one from md up),
-   for what scrolls or sticks beneath it. */
+   which also sizes the spacer holding its place, for what scrolls or sticks beneath it. */
 :root {
   --app-bar-h: 105px;
 }
@@ -108,7 +108,8 @@
   :focus-visible {
     @apply outline-2 outline-offset-2 outline-ring;
   }
-  /* The app bar sticks to the top: scroll a focused element or an anchor clear of it, not under it. */
+  /* The app bar is fixed to the top: a focused element or an anchor scrolls into view clear of it,
+     not under it. */
   html {
     scroll-padding-top: calc(var(--app-bar-h) + 1rem);
   }
