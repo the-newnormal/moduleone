@@ -22,16 +22,18 @@ export type TeamRow = {
   code: string | null;
   sort_order: number;
   note: string | null;
+  leader_title?: string | null;
   archived_at: string | null;
 };
 
 // For supabase.from("teams").select(TEAM_COLUMNS).
 export const TEAM_COLUMNS =
-  "id, name, parent_id, kind, domain_type, division_type, code, sort_order, note, archived_at";
+  "id, name, parent_id, kind, domain_type, division_type, code, sort_order, note, leader_title, archived_at";
 
 // ---------- labels ----------
 
 export const KIND_LABELS: Record<TeamKind, string> = {
+  organisation: "Organisation",
   division: "Division",
   domain: "Domain",
   team: "Team",
@@ -109,7 +111,10 @@ export function buildTree<T extends TeamRow>(rows: readonly T[]): TeamTree<T> {
   });
 
   const top = activeChildren(rows, null);
-  const divisions = top
+  const organisation = top.find((r) => r.kind === "organisation");
+  if (organisation) place(organisation);
+  const divisionRows = organisation ? activeChildren(rows, organisation.id) : top;
+  const divisions = divisionRows
     .filter((r) => r.kind === "division")
     .map((row) => ({
       row: place(row),
@@ -169,7 +174,8 @@ export function breadcrumb<T extends Pick<TeamRow, "id" | "parent_id">>(
 // What may hold each kind: a division sits at the top level (null); a domain at the top level
 // (unplaced) or in a division; a team in a domain.
 const PARENT_KINDS: Record<TeamKind, readonly (TeamKind | null)[]> = {
-  division: [null],
+  organisation: [],
+  division: [null, "organisation"],
   domain: [null, "division"],
   team: ["domain"],
 };
@@ -269,7 +275,7 @@ export type MoveOption = {
 // whole top level, as admin_move_team does). Empty for an unknown or archived node.
 export function moveOptions(rows: readonly TeamRow[], nodeId: string): MoveOption[] {
   const node = rows.find((r) => r.id === nodeId);
-  if (!node || node.archived_at !== null) return [];
+  if (!node || node.archived_at !== null || node.kind === "organisation") return [];
 
   const tree = buildTree(rows);
   const option = (parentId: string | null, label: string): MoveOption => {

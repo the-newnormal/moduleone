@@ -19,7 +19,7 @@ export function asRecord(value: unknown): Record<string, unknown> {
 
 // ---------- enums (the database's check constraints) ----------
 
-export const TEAM_KINDS = ["division", "domain", "team"] as const;
+export const TEAM_KINDS = ["organisation", "division", "domain", "team"] as const;
 export type TeamKind = (typeof TEAM_KINDS)[number];
 
 export const DOMAIN_TYPES = ["development", "ip", "lab"] as const;

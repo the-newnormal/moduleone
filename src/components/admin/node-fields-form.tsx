@@ -14,7 +14,7 @@ import { ActionError } from "./action-error";
 
 const NO_TYPE = "none"; // Radix Select items can't have an empty value
 
-const FIELDS: readonly NodeField[] = ["name", "code", "type", "note"];
+const FIELDS: readonly NodeField[] = ["name", "code", "type", "note", "leaderTitle"];
 
 // The form for adding or editing a division, domain or team, as a dialog's content: name, code
 // (upper-cased as you type), type (domains and divisions) and note, checked as you type with the
@@ -191,6 +191,20 @@ export function NodeFieldsForm<T>({
           </span>
         </p>
         {fieldError("note")}
+      </div>
+
+      <div className="grid gap-1.5">
+        <Label htmlFor={`${id}-leaderTitle`}>Leader title</Label>
+        <Input
+          id={`${id}-leaderTitle`}
+          value={form.leaderTitle}
+          placeholder="Optional"
+          aria-invalid={shown("leaderTitle") ? true : undefined}
+          aria-describedby={describedBy("leaderTitle")}
+          onChange={(e) => edit("leaderTitle", e.target.value)}
+          onBlur={() => touch("leaderTitle")}
+        />
+        {fieldError("leaderTitle")}
       </div>
 
       <ActionError message={error} />

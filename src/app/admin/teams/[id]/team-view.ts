@@ -36,6 +36,7 @@ export type TeamSummary = {
   divisionType: DivisionType | null;
   typeLabel: string | null; // "Lab", "IP", "Development domain"
   note: string | null;
+  leaderTitle: string | null;
   archived: boolean;
 };
 
@@ -198,6 +199,7 @@ export function buildTeamView({
     divisionType: row.kind === "division" ? row.division_type : null,
     typeLabel: typeLabel(row),
     note: row.note,
+    leaderTitle: row.leader_title ?? null,
     archived: row.archived_at !== null,
   };
 

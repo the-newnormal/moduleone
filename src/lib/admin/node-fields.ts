@@ -1,4 +1,4 @@
-// The fields an admin types for a division, domain or team: name, code, type and note. The add
+// The fields an admin types for a node: name, code, type, note and leader title. The add
 // and edit forms (on the Structure page, and Edit on a team's page) check them as you type, and
 // the createNode and updateNode server actions check them again before writing (the same
 // functions, so the messages match). Kind and position aren't here: a node's kind is fixed once
@@ -19,12 +19,12 @@ import {
   type TeamKind,
 } from "./validate";
 
-export type NodeField = "name" | "code" | "type" | "note";
+export type NodeField = "name" | "code" | "type" | "note" | "leaderTitle";
 
 // The form as typed. `type` is a domain or division type, or "" for none.
 export type NodeForm = Record<NodeField, string>;
 
-export const EMPTY_NODE_FORM: NodeForm = { name: "", code: "", type: "", note: "" };
+export const EMPTY_NODE_FORM: NodeForm = { name: "", code: "", type: "", note: "", leaderTitle: "" };
 
 // What the createNode and updateNode server actions take (src/app/admin/structure/actions.ts).
 export type CreateNodeInput = NodeForm & { kind: TeamKind; parentId: string | null };
@@ -37,6 +37,7 @@ export type NodeFields = {
   domain_type: DomainType | null;
   division_type: DivisionType | null;
   note: string | null;
+  leader_title: string | null;
 };
 
 export type NodeFieldErrors = Partial<Record<NodeField, string>>;
@@ -56,13 +57,14 @@ export function typeOptions(kind: TeamKind): { value: string; label: string }[] 
 
 // A row's current values as form text, for Edit.
 export function nodeToForm(
-  row: Pick<TeamRow, "name" | "code" | "kind" | "domain_type" | "division_type" | "note">,
+  row: Pick<TeamRow, "name" | "code" | "kind" | "domain_type" | "division_type" | "note" | "leader_title">,
 ): NodeForm {
   return {
     name: row.name,
     code: row.code ?? "",
     type: (row.kind === "domain" ? row.domain_type : row.kind === "division" ? row.division_type : null) ?? "",
     note: row.note ?? "",
+    leaderTitle: row.leader_title ?? "",
   };
 }
 
@@ -89,13 +91,24 @@ export function parseNodeFields(kind: TeamKind, input: unknown): ParsedNodeField
 
   const note = parseNote(form.note);
   if (!note.ok) errors.note = note.error;
+  const leaderTitle = isEmpty(form.leaderTitle) ? { ok: true as const, value: null } : parseName(form.leaderTitle);
+  if (!leaderTitle.ok) errors.leaderTitle = leaderTitle.error;
+  else if (leaderTitle.value !== null && [...leaderTitle.value].length > 60)
+    errors.leaderTitle = "Leader titles can be at most 60 characters.";
 
-  const first = errors.name ?? errors.code ?? errors.type ?? errors.note;
+  const first = errors.name ?? errors.code ?? errors.type ?? errors.note ?? errors.leaderTitle;
   if (first !== undefined || !name.ok || !code.ok || !note.ok) {
     return { ok: false, errors, error: first ?? "Check the form." };
   }
   return {
     ok: true,
-    value: { name: name.value, code: code.value, domain_type, division_type, note: note.value },
+    value: {
+      name: name.value,
+      code: code.value,
+      domain_type,
+      division_type,
+      note: note.value,
+      leader_title: leaderTitle.value,
+    },
   };
 }
