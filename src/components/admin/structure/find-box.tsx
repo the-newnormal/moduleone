@@ -22,8 +22,11 @@ export function FindBox({
   const id = useId();
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(0);
+  const [chosen, setChosen] = useState(0);
   const matches = useMemo(() => findMatches(query, rows, members), [query, rows, members]);
+  // The highlighted match. The chart's data can change under an open list (a save re-renders the
+  // page), leaving fewer matches: then the first one is highlighted.
+  const active = chosen < matches.length ? chosen : 0;
   const showing = open && query.trim() !== "";
   const optionId = (i: number) => `${id}-option-${i}`;
 
@@ -53,7 +56,7 @@ export function FindBox({
         value={query}
         onChange={(event) => {
           setQuery(event.target.value);
-          setActive(0);
+          setChosen(0);
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
@@ -65,14 +68,16 @@ export function FindBox({
             event.preventDefault();
             setOpen(true);
             const step = event.key === "ArrowDown" ? 1 : -1;
-            setActive((i) => (i + step + matches.length) % matches.length);
+            setChosen((active + step + matches.length) % matches.length);
           } else if (event.key === "Enter") {
-            const match = matches[active] ?? matches[0];
+            const match = matches[active];
             if (!showing || !match) return;
             event.preventDefault();
             pick(match);
           } else if (event.key === "Escape" && showing) {
-            // Only closes the list; the side panel's own Escape isn't for this.
+            // Only closes the list, keeping what was typed (a search input clears itself on Escape
+            // otherwise); the side panel's own Escape isn't for this.
+            event.preventDefault();
             event.stopPropagation();
             setOpen(false);
           }
@@ -103,7 +108,7 @@ export function FindBox({
                 event.preventDefault();
                 pick(match);
               }}
-              onPointerEnter={() => setActive(i)}
+              onPointerEnter={() => setChosen(i)}
             >
               <span className="truncate font-medium">{match.name}</span>
               <span className="shrink-0 text-xs text-muted-foreground">{match.detail}</span>

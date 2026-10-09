@@ -13,6 +13,20 @@ export type SearchMatch =
 
 export const MAX_MATCHES = 8;
 
+// The side panel's width when the pane is wider (node-panel and no-team-panel: w-full max-w-md).
+export const PANEL_WIDTH = 448;
+
+// Where across the pane (from its left edge, in screen pixels) to put the centre of a found box
+// of boxWidth screen pixels, with the side panel open on the right: the middle of what the panel
+// leaves visible; when that strip is too narrow for the box, the box's left edge 16px in, so as
+// much of it as possible shows; when the panel covers the whole pane, the pane's middle.
+export function findCentreX(paneWidth: number, boxWidth: number): number {
+  const visible = paneWidth - Math.min(PANEL_WIDTH, paneWidth);
+  if (visible >= boxWidth + 32) return visible / 2;
+  if (visible > 0) return 16 + boxWidth / 2;
+  return paneWidth / 2;
+}
+
 // Lower case, accents dropped, runs of spaces as one.
 const fold = (value: string) =>
   value

@@ -400,8 +400,26 @@ describe("Find a person or team", () => {
     await press(box("ip1"), "Enter");
     expect(heading()).toBe("IP Lab 1");
     await type(find(), "atl");
+    let escape: KeyboardEvent | undefined;
+    find().addEventListener("keydown", (event) => (escape = event), { once: true });
     await press(find(), "Escape");
     expect(find().getAttribute("aria-expanded")).toBe("false");
     expect(document.querySelector("aside")).not.toBeNull();
+    // What was typed stays (the browser's own Escape would clear a search input).
+    expect(escape?.defaultPrevented).toBe(true);
+    expect(find().value).toBe("atl");
+  });
+
+  it("falls back to the first match when the highlighted one goes away under an open list", async () => {
+    const shown = await canvas(actions(), WITH_NO_TEAM);
+    await type(find(), "an");
+    expect(options()).toEqual(["Ana Lee · In IP Lab 1", "Hana Lim · No team"]);
+    await press(find(), "ArrowDown");
+    expect(document.getElementById(find().getAttribute("aria-activedescendant")!)!.getAttribute("data-match")).toBe("person:m-hana");
+    // A save re-renders the page without Hana.
+    await shown.rerender(page(actions(), WITH_NO_TEAM.filter((m) => m.id !== "m-hana")));
+    expect(document.getElementById(find().getAttribute("aria-activedescendant")!)!.getAttribute("data-match")).toBe("person:m-ana");
+    await press(find(), "Enter");
+    expect(heading()).toBe("IP Lab 1");
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MemberRow } from "@/app/admin/teams/[id]/team-view";
 import type { TeamRow } from "@/lib/admin/tree";
-import { findMatches } from "./canvas-search";
+import { findCentreX, findMatches } from "./canvas-search";
 import type { StructureRow } from "./counts";
 
 const node = (id: string, name: string, kind: TeamRow["kind"], extra: Partial<StructureRow> = {}): StructureRow => ({
@@ -88,5 +88,23 @@ describe("findMatches", () => {
 
   it("returns at most the limit", () => {
     expect(names("a", 2)).toHaveLength(2);
+  });
+});
+
+describe("findCentreX", () => {
+  it("centres a found box in what the side panel (448px on the right) leaves visible", () => {
+    expect(findCentreX(1200, 232)).toBe((1200 - 448) / 2);
+    // Narrower than twice the panel: the panel still takes its 448px.
+    expect(findCentreX(800, 232)).toBe((800 - 448) / 2);
+  });
+
+  it("puts the box at the left edge when the strip is too narrow for it, so most of it shows", () => {
+    // 152px left beside the panel: the box's left edge 16px in (centre 16 + 116), not the pane's
+    // middle (300), which is under the panel.
+    expect(findCentreX(600, 232)).toBe(132);
+  });
+
+  it("centres in the whole pane when the panel covers all of it", () => {
+    expect(findCentreX(400, 232)).toBe(200);
   });
 });
