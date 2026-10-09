@@ -1,52 +1,35 @@
 import { Clock, OctagonAlert } from "lucide-react";
 import Link from "next/link";
-import type { HeatmapCell, HeatmapGroup, HeatmapRow } from "@/lib/dashboard/heatmap";
+import type { HeatmapGroup, HeatmapRow } from "@/lib/dashboard/heatmap";
+import type { HeatmapCell } from "@/lib/dashboard/org";
 import { formatWeek } from "@/lib/dashboard/weeks";
 import { formatScore, type HealthConfig } from "@/lib/health/health";
 import { BANDS } from "./band";
+import { describeCell, hidesRed } from "./describe";
 import { HeatmapTooltip } from "./heatmap-tooltip";
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-
-// The tooltip and the cell's accessible name say the same thing, with the number the cell shows.
-function describe(row: HeatmapRow, cell: HeatmapCell, config: HealthConfig) {
-  const title = `${row.name} · week of ${formatWeek(cell.week, true)}`;
-  const lines: string[] = [];
-  if (cell.health) {
-    const { band, score, graded, bands } = cell.health;
-    lines.push(`${BANDS[band].label} · mean score ${formatScore(score, config)}`);
-    lines.push(
-      `${plural(graded, "graded check-in")}: ${bands.green} green, ${bands.yellow} yellow, ${bands.red} red`,
-    );
-  } else {
-    lines.push("Nothing graded yet");
-  }
-  if (cell.pending > 0) lines.push(`${cell.pending} waiting for the grader`);
-  return { title, lines };
-}
-
 // With a single week there's room to spell the cell out instead of leaving it to the tooltip.
-// A member's row holds only their own check-in, so it names the colour rather than counting one.
 function Cell({
   row,
   cell,
   weeksParam,
   config,
   detailed,
-  own,
+  edge = false,
 }: {
   row: HeatmapRow;
   cell: HeatmapCell;
   weeksParam: number;
   config: HealthConfig;
   detailed: boolean;
-  own: boolean;
+  edge?: boolean; // the first row of a group, under its rule
 }) {
   const size = detailed ? "min-h-11 justify-start px-3 py-2 text-left" : "h-11 justify-center";
+  const td = edge ? "border-t px-0.5 pt-2 pb-0.5" : "p-0.5";
 
   if (!cell.health && cell.pending === 0) {
     return (
-      <td className="p-0.5">
+      <td className={td}>
         <span
           className={`flex items-center rounded-md ${detailed ? "text-muted-foreground" : "text-muted-foreground/60"} ${size}`}
         >
@@ -63,21 +46,13 @@ function Cell({
     );
   }
 
-  const { title, lines } = describe(row, cell, config);
+  const { title, lines } = describeCell(row.name, cell, config);
   // Everything after the band line: the colour counts and anything still waiting.
-  const detail = own
-    ? cell.health
-      ? BANDS[cell.health.band].label
-      : "Waiting for the grader"
-    : cell.health
-      ? lines.slice(1).join(" · ")
-      : lines[lines.length - 1];
+  const detail = cell.health ? lines.slice(1).join(" · ") : lines[lines.length - 1];
   const band = cell.health ? BANDS[cell.health.band] : null;
-  // A green or yellow mean can hide a red check-in; flag it in the corner.
-  const hiddenRed = cell.health && cell.health.band !== "red" && cell.health.bands.red > 0;
 
   return (
-    <td className="p-0.5">
+    <td className={td}>
       <Link
         href={`/portal/dashboard/${row.teamId ?? "none"}/${cell.week}?weeks=${weeksParam}`}
         aria-label={`${title}. ${lines.join(". ")}.`}
@@ -97,7 +72,8 @@ function Cell({
           </>
         )}
         {detailed && <span className="pr-3 font-normal text-muted-foreground">{detail}</span>}
-        {hiddenRed && (
+        {/* A green or yellow mean can hide a red check-in; flag it in the corner. */}
+        {hidesRed(cell) && (
           <OctagonAlert
             aria-hidden
             className="absolute top-1 right-1 size-3 text-status-critical"
@@ -119,7 +95,6 @@ export function HeatmapGrid({
   weeksParam,
   caption,
   config,
-  own = false,
 }: {
   groups: HeatmapGroup[];
   weeks: readonly string[];
@@ -127,7 +102,6 @@ export function HeatmapGrid({
   weeksParam: number;
   caption: string;
   config: HealthConfig;
-  own?: boolean; // a member's grid: every row is their own check-ins
 }) {
   return (
     <HeatmapTooltip>
@@ -157,36 +131,69 @@ export function HeatmapGrid({
           </thead>
           {groups.map((group) => (
             <tbody key={group.key ?? "other"}>
-              <tr>
-                <th
-                  scope="rowgroup"
-                  colSpan={weeks.length + 1}
-                  className="border-t bg-card px-3 pt-3 pb-1 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
-                >
-                  {/* A cell spanning every column can't stick; its label can, so it stays in view on phones. */}
-                  <span className="sticky left-3 inline-block">{group.label ?? "Other"}</span>
-                </th>
-              </tr>
-              {group.rows.map((row) => (
-                <tr key={row.teamId ?? "none"}>
+              {group.head ? (
+                // The division's own row: everything in it, week by week.
+                <tr>
                   <th
-                    scope="row"
-                    className={`sticky left-0 z-10 max-w-48 truncate bg-card py-0.5 pr-3 text-left font-medium ${row.depth > 0 ? "pl-7" : "pl-3"}`}
+                    scope="rowgroup"
+                    className="sticky left-0 z-10 border-t bg-card px-3 pt-2 pb-0.5 text-left font-sans text-xs font-semibold tracking-wide uppercase"
                   >
-                    {row.name}
-                    {row.archived && <span className="ml-1.5 text-xs font-normal text-muted-foreground">archived</span>}
+                    {group.label}
+                    {group.head.archived && (
+                      <span className="ml-1.5 font-normal tracking-normal text-muted-foreground normal-case"> archived</span>
+                    )}
                   </th>
-                  {row.cells.map((cell) => (
+                  {group.head.cells.map((cell) => (
                     <Cell
                       key={cell.week}
-                      row={row}
+                      row={group.head!}
                       cell={cell}
                       weeksParam={weeksParam}
                       config={config}
                       detailed={weeks.length === 1}
-                      own={own}
+                      edge
                     />
                   ))}
+                </tr>
+              ) : (
+                <tr>
+                  <th
+                    scope="rowgroup"
+                    colSpan={weeks.length + 1}
+                    className="border-t bg-card px-3 pt-3 pb-1 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+                  >
+                    {/* A cell spanning every column can't stick; its label can, so it stays in view on phones. */}
+                    <span className="sticky left-3 inline-block">{group.label ?? "Other"}</span>
+                  </th>
+                </tr>
+              )}
+              {group.rows.map((row) => (
+                <tr key={row.key}>
+                  <th
+                    scope="row"
+                    className={`sticky left-0 z-10 max-w-48 truncate bg-card py-0.5 pr-3 text-left ${row.scored ? "font-medium" : "font-normal text-muted-foreground"} ${row.depth > 0 ? "pl-7" : "pl-3"}`}
+                  >
+                    {row.name}
+                    {row.archived && <span className="ml-1.5 text-xs font-normal text-muted-foreground">archived</span>}
+                  </th>
+                  {row.scored ? (
+                    row.cells.map((cell) => (
+                      <Cell
+                        key={cell.week}
+                        row={row}
+                        cell={cell}
+                        weeksParam={weeksParam}
+                        config={config}
+                        detailed={weeks.length === 1}
+                      />
+                    ))
+                  ) : (
+                    // A domain the viewer doesn't lead, above the teams they do: no colours of its own
+                    // (the legend says so).
+                    <td colSpan={weeks.length}>
+                      <span className="sr-only">No colour: you lead only some of the teams under it</span>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

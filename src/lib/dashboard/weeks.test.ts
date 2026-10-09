@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { formatWeek, isWeekStart, parseWeekCount, recentWeeks, weekStartFor } from "./weeks";
+import {
+  formatWeek,
+  isWeekStart,
+  parseWeek,
+  parseWeekCount,
+  recentWeeks,
+  shiftWeek,
+  weekStartFor,
+  weeksEndingAt,
+} from "./weeks";
 
 describe("weekStartFor", () => {
   it("returns the Monday of the Singapore week", () => {
@@ -67,5 +76,34 @@ describe("parseWeekCount", () => {
     ["abc", 8],
   ] as const)("%s → %s", (raw, expected) => {
     expect(parseWeekCount(raw as string | string[] | undefined)).toBe(expected);
+  });
+});
+
+describe("shiftWeek and weeksEndingAt", () => {
+  it("steps whole weeks, across months and years", () => {
+    expect(shiftWeek("2026-10-05", -1)).toBe("2026-09-28");
+    expect(shiftWeek("2025-12-29", 1)).toBe("2026-01-05");
+    expect(shiftWeek("2026-10-05", 0)).toBe("2026-10-05");
+  });
+
+  it("lists the weeks ending with the given one, oldest first", () => {
+    expect(weeksEndingAt("2026-10-05", 3)).toEqual(["2026-09-21", "2026-09-28", "2026-10-05"]);
+    expect(weeksEndingAt("2026-10-05", 1)).toEqual(["2026-10-05"]);
+  });
+});
+
+describe("parseWeek", () => {
+  const latest = "2026-10-05";
+
+  it("takes a Monday up to the latest week", () => {
+    expect(parseWeek("2026-09-28", latest)).toBe("2026-09-28");
+    expect(parseWeek("2026-10-05", latest)).toBe("2026-10-05");
+    expect(parseWeek(["2026-09-21", "2026-09-28"], latest)).toBe("2026-09-21");
+  });
+
+  it("falls back to the latest week for anything else, the future included", () => {
+    for (const raw of [undefined, "", "2026-10-12", "2026-09-29", "soon", "2026-02-30"]) {
+      expect(parseWeek(raw, latest)).toBe(latest);
+    }
   });
 });
