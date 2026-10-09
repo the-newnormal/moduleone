@@ -551,8 +551,9 @@ export type Removal = {
   // removed: kept, marked removed, because something refers to them (check-ins and the like, or a
   // login now or before); deleted: they had nothing, so the row is gone.
   outcome: "removed" | "deleted";
-  // Their login couldn't be deleted. It no longer opens anything (it belongs to no member), but its
-  // address stays taken until the project owner deletes it (members.removed_login_id says which).
+  // Their login wasn't fully cleaned up: it couldn't be deleted, or a row given it meanwhile
+  // couldn't be unlinked. It opens nothing either way (it belongs to no member, or is deleted), and
+  // members.removed_login_id still names it, for the project owner to finish.
   loginKept: boolean;
 };
 

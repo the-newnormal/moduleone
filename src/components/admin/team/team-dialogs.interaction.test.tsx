@@ -242,10 +242,10 @@ describe("PeopleSection: Remove from Module One", () => {
       "Removed Ada Ng from Module One. They had nothing recorded, so they're deleted completely.",
     ],
     [
-      "kept, but their login couldn't be deleted",
+      "kept, but their login couldn't be fully cleaned up",
       { outcome: "removed", loginKept: true },
-      "Removed Ada Ng from Module One. Anything they recorded stays. Their login couldn't be deleted: it opens nothing " +
-        "now, but its address can't be used again until the project owner deletes it in Supabase.",
+      "Removed Ada Ng from Module One. Anything they recorded stays. Their login couldn't be fully cleaned up: it opens " +
+        "nothing now, and the project owner can finish in Supabase.",
     ],
   ] as const)("says what removing did (%s)", async (_label, removal, message) => {
     const actions = peopleActions({ removePerson: vi.fn(async (): Promise<ActionResult<Removal>> => ({ ok: true, value: removal })) });

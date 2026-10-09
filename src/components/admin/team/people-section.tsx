@@ -93,7 +93,7 @@ export function removedMessage(name: string, { outcome, loginKept }: Removal): s
       ? `Removed ${name} from Module One. They had nothing recorded, so they're deleted completely.`
       : `Removed ${name} from Module One. Anything they recorded stays.`;
   return loginKept
-    ? `${done} Their login couldn't be deleted: it opens nothing now, but its address can't be used again until the project owner deletes it in Supabase.`
+    ? `${done} Their login couldn't be fully cleaned up: it opens nothing now, and the project owner can finish in Supabase.`
     : done;
 }
 
