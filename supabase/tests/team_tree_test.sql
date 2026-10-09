@@ -365,8 +365,8 @@ select is(
   pg_temp.column_privs('authenticated', 'public.teams'),
   array['archived_at:update', 'code:insert', 'code:update', 'division:insert', 'division:update',
         'division_type:insert', 'division_type:update', 'domain_type:insert', 'domain_type:update',
-        'kind:insert', 'kind:update', 'name:insert', 'name:update', 'note:insert', 'note:update',
-        'parent_id:insert', 'parent_id:update', 'sort_order:insert', 'sort_order:update'],
+        'kind:insert', 'kind:update', 'leader_title:insert', 'leader_title:update', 'name:insert', 'name:update',
+        'note:insert', 'note:update', 'parent_id:insert', 'parent_id:update', 'sort_order:insert', 'sort_order:update'],
   'signed-in users can write exactly these teams columns (RLS limits it to admins); not id, created_at, or archived_at on insert'
 );
 select is(
