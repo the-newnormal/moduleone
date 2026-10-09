@@ -44,7 +44,7 @@ export function NoTeamPanel({
       {people.length === 0 ? (
         <p className="text-muted-foreground">Everyone is in a team.</p>
       ) : (
-        <ul className="divide-y">
+        <ul className="@container divide-y">
           {people.map((person) => (
             <PersonRow
               key={person.id}

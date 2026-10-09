@@ -3,9 +3,9 @@ import { dirname, join, posix, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-// The service-role client (./admin.ts) bypasses RLS, so only the "Give login" and "Resend invite"
-// server actions and the check-in's server code (which writes for the member it takes from the
-// session) may use it. This scans every source file under src/ and fails if anything else imports
+// The service-role client (./admin.ts) bypasses RLS, so only the team page's login actions (Give
+// login, Resend invite, Change email, and Remove from Module One's login deletion) and the check-in's
+// server code (which writes for the member it takes from the session) may use it. This scans every source file under src/ and fails if anything else imports
 // it, mocks it, or reads the service key itself. To use it somewhere new, that has to be a reviewed
 // change to ALLOWED below.
 
@@ -16,7 +16,7 @@ const ALLOWED = new Set([
   "src/lib/supabase/admin.ts",
   "src/lib/supabase/admin.test.ts",
   "src/lib/supabase/admin-imports.test.ts",
-  "src/app/admin/teams/[id]/actions.ts", // giveLogin and resendInvite
+  "src/app/admin/teams/[id]/actions.ts", // giveLogin, resendInvite, changeEmail, removePerson
   "src/app/admin/teams/[id]/actions.test.ts",
   "src/app/portal/checkin/actions.ts", // recording, drafts and submitting a check-in
   "src/app/portal/checkin/actions.test.ts",

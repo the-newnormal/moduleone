@@ -65,7 +65,8 @@ export function PeopleSection({ team, people, candidates, actions }: Props) {
       {people.length === 0 ? (
         <p className="text-muted-foreground">Nobody is in this {noun} yet.</p>
       ) : (
-        <ul className="divide-y">
+        // Rows lay out by the list's width, not the window's: the Structure side panel is narrow.
+        <ul className="@container divide-y">
           {people.map((person) => (
             <PersonRow
               key={person.id}
@@ -119,7 +120,7 @@ export function PersonRow({
   const editable = person.editable && team !== null;
 
   return (
-    <li className="grid gap-3 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+    <li className="grid gap-3 py-3 @3xl:grid-cols-[minmax(0,1fr)_auto] @3xl:items-center">
       <div className="grid min-w-0 gap-1">
         <p className="font-medium break-words">
           {name}
@@ -147,7 +148,7 @@ export function PersonRow({
       </div>
 
       {(editable || person.canGiveLogin || person.canResendInvite || person.canChangeEmail || person.canRemove) && (
-        <div className="flex flex-wrap gap-2 sm:justify-end">
+        <div className="flex flex-wrap gap-2 @3xl:justify-end">
           {person.canGiveLogin && (
             <GiveLoginDialog person={person} giveLogin={actions.giveLogin} onDone={onDone} focusAfter={heading} />
           )}
