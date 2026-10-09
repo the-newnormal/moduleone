@@ -130,6 +130,13 @@ describe("seesNeedsALook", () => {
     expect(seesNeedsALook("leader", TEAMS, ledIds("ip1", "cu"))).toBe(true);
   });
 
+  it("isn't for a former lead of a division that has since been archived", () => {
+    // team_leads rows stay when a division is archived (0006), so app_led_team_ids still lists it.
+    const old = { ...node("old", "Old Division", "division", "org"), archived_at: "2026-09-01T00:00:00Z" };
+    expect(seesNeedsALook("leader", [...TEAMS, old], ["old", ...ledIds("ip1")])).toBe(false);
+    expect(seesNeedsALook("leader", [...TEAMS, { ...old, archived_at: null }], ["old", ...ledIds("ip1")])).toBe(true);
+  });
+
   it("isn't for a leader who leads nothing", () => {
     expect(seesNeedsALook("leader", TEAMS, [])).toBe(false);
   });
@@ -178,9 +185,19 @@ describe("redSpots", () => {
     ]);
   });
 
-  it("names only the smaller box when both a team and the domain above it have someone red", () => {
-    // The rule as written: a box is listed only when no box under it is.
+  it("names a domain too when red check-ins were made in it directly, as well as the red team under it", () => {
+    // IP Lab 1's red is in IP Lab 1's spot; the domain's own red is in no box under it.
     const org = orgFor(HQ, [checkin("ip", THIS_WEEK, LOW), checkin("ip1", THIS_WEEK, RED)]);
+    expect(read(redSpots(org.roots, THIS_WEEK)).map((s) => s.teamId).sort()).toEqual(["ip", "ip1"]);
+  });
+
+  it("names a division head's own red check-in at the division even when a team under it is red too", () => {
+    const org = orgFor(HQ, [checkin("ga", THIS_WEEK, RED), checkin("ip1", THIS_WEEK, RED)]);
+    expect(read(redSpots(org.roots, THIS_WEEK)).map((s) => s.teamId).sort()).toEqual(["ga", "ip1"]);
+  });
+
+  it("doesn't name the boxes above a red team when their only reds are that team's", () => {
+    const org = orgFor(HQ, [checkin("ip1", THIS_WEEK, LOW), checkin("ip1", THIS_WEEK, RED), checkin("ip2", THIS_WEEK, GREEN)]);
     expect(read(redSpots(org.roots, THIS_WEEK)).map((s) => s.teamId)).toEqual(["ip1"]);
   });
 

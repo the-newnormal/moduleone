@@ -21,7 +21,7 @@ export function PortalHeader({
     <header className="grid gap-10 sm:gap-12">
       <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-4 border-b pb-4">
         <div className="flex items-baseline gap-3">
-          <Link href="/portal" className="text-xl leading-[26px] font-medium tracking-[-0.01em]">
+          <Link href="/portal" className="rounded-sm text-xl leading-[26px] font-medium tracking-[-0.01em]">
             Normal
           </Link>
           <span className="text-[13px] leading-[18px] text-muted-foreground">Module One</span>
@@ -57,7 +57,7 @@ function PortalNav({ items }: { items: NavItem[] }) {
               <Link
                 href={item.href}
                 aria-current={current ? "page" : undefined}
-                className={`inline-flex h-10 items-center rounded-full px-3 text-sm sm:px-4 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
+                className={`inline-flex h-10 items-center rounded-full px-3 text-[15px] font-medium sm:px-4 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
                   current ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-accent"
                 }`}
               >

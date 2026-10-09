@@ -9,10 +9,11 @@ import { processCheckin } from "@/lib/checkin/process";
 import { loadHeatmapData, loadRole, loadScoringConfig, type Role } from "@/lib/dashboard/load";
 import { type CheckinRow, cellsFor, type HeatmapCell } from "@/lib/dashboard/org";
 import type { TeamNode } from "@/lib/dashboard/tree";
-import type { HealthConfig } from "@/lib/health/health";
+import { formatScore, type HealthConfig } from "@/lib/health/health";
 import { createClient } from "@/lib/supabase/server";
 import { text } from "@/test/dom";
 import { tidyMemberAudio } from "./checkin/housekeeping";
+import { BANDS } from "./dashboard/band";
 import { cellWord, describeCell } from "./dashboard/describe";
 import PortalPage from "./page";
 
@@ -342,11 +343,18 @@ const rowName = (li: Element) => text(li.firstElementChild!);
 // A row's bars (one link per week, for the pointer) and its link for this week so far.
 const barsOf = (li: Element) => li.querySelector('span[aria-hidden="true"]')!;
 const thisWeekOf = (li: Element) => [...li.children].find((el) => el.matches("a[aria-label]")) as HTMLAnchorElement;
-// What the org chart says of a box's six weeks when this week's link is read out.
+// What this week's link says of a box's six weeks: first what it shows (so it can be named by
+// voice), then what the org chart says of the week and the five before it.
 function readOut(name: string, cells: HeatmapCell[]) {
-  const { title, lines } = describeCell(name, cells[cells.length - 1], CONFIG);
+  const cell = cells[cells.length - 1];
+  const { title, lines } = describeCell(name, cell, CONFIG);
+  const shown = cell.health
+    ? `${BANDS[cell.health.band].label} ${formatScore(cell.health.score, CONFIG)}`
+    : cell.pending > 0
+      ? "waiting"
+      : "no check-ins";
   const earlier = cells.slice(0, -1).map(cellWord).join(", ");
-  return `${title}. ${lines.join(". ")}. The 5 weeks before, oldest first: ${earlier}.`;
+  return `${shown}, ${title}. ${lines.join(". ")}. The 5 weeks before, oldest first: ${earlier}.`;
 }
 // Who's checked in, as [box, count] per row.
 const checkedInRows = () =>
@@ -728,18 +736,16 @@ describe("the portal's imports", () => {
 });
 
 describe("Team health", () => {
-  // Every row: six bars, oldest first, each opening its own week (the earlier ones keep this week to
-  // come back to), out of the tab order and hidden from screen readers; then this week so far, the
-  // way in from the keyboard, which reads the five weeks before out.
+  // Every row: six bars, oldest first, hidden from screen readers and drawn only (on the portal they
+  // open nothing: too small to tap; earlier weeks open from the org chart), each with its tooltip;
+  // then this week so far, the one link, which reads the five weeks before out.
   function expectRow(li: Element, teamId: string, name: string, cells: HeatmapCell[]) {
     expect(cells.map((c) => c.week)).toEqual(SIX_WEEKS);
     expect(rowName(li)).toBe(name);
-    const bars = [...barsOf(li).querySelectorAll("a")];
-    expect(bars.map((a) => a.getAttribute("href"))).toEqual(
-      SIX_WEEKS.map((week) => `/portal/dashboard/${teamId}/${week}${week === THIS_WEEK ? "" : `?from=${THIS_WEEK}`}`),
-    );
+    expect(barsOf(li).querySelector("a")).toBeNull();
+    const bars = [...barsOf(li).querySelectorAll("[data-tip-title]")];
+    expect(bars).toHaveLength(SIX_WEEKS.length);
     bars.forEach((a, i) => {
-      expect(a.getAttribute("tabindex")).toBe("-1");
       expect(a.getAttribute("data-tip-title")).toBe(describeCell(name, cells[i], CONFIG).title);
       expect(a.getAttribute("data-tip-body")).toBe(describeCell(name, cells[i], CONFIG).lines.join("\n"));
     });
@@ -772,11 +778,11 @@ describe("Team health", () => {
       expectRow(rows[i], teamId, name, cells);
     }
     expect(thisWeekOf(rows[0]).getAttribute("aria-label")).toBe(
-      "IP Lab 1 · week of 5 Oct 2026. Red · mean score 4.0. 1 graded check-in: 0 green, 0 yellow, 1 red." +
+      "Red 4.0, IP Lab 1 · week of 5 Oct 2026. Red · mean score 4.0. 1 graded check-in: 0 green, 0 yellow, 1 red." +
         " The 5 weeks before, oldest first: no check-ins, no check-ins, no check-ins, no check-ins, green.",
     );
     expect(thisWeekOf(rows[1]).getAttribute("aria-label")).toBe(
-      "IP Lab 2 · week of 5 Oct 2026. Nothing graded yet. 1 waiting for the grader." +
+      "waiting, IP Lab 2 · week of 5 Oct 2026. Nothing graded yet. 1 waiting for the grader." +
         " The 5 weeks before, oldest first: no check-ins, no check-ins, no check-ins, no check-ins, no check-ins.",
     );
 
@@ -807,9 +813,9 @@ describe("Team health", () => {
     expectRow(organisation, "org", "The New Normal", cells(["org", "ga", "ip", "ip1"]));
     expectRow(gather, "ga", "Gather", cells(["ga", "ip", "ip1"]));
     expectRow(looseEnds, "lo", "Loose Ends", cells(["lo"]));
-    expect(link(`/portal/dashboard/lo/${LAST_WEEK}?from=${THIS_WEEK}`, otherList)).not.toBeNull();
+    expect(link(`/portal/dashboard/lo/${THIS_WEEK}`, otherList)).not.toBeNull();
     expect(thisWeekOf(looseEnds).getAttribute("aria-label")).toBe(
-      "Loose Ends · week of 5 Oct 2026. No check-ins." +
+      "no check-ins, Loose Ends · week of 5 Oct 2026. No check-ins." +
         " The 5 weeks before, oldest first: no check-ins, no check-ins, no check-ins, no check-ins, yellow.",
     );
 
@@ -856,8 +862,9 @@ describe("Needs a look", () => {
   // A spot as it reads: where it sits, its name, and how many were red.
   const spotText = (li: Element) =>
     [...li.querySelector("a > span")!.children].map((el) => text(el));
+  // What the link shows, in screen order, then the week and its counts.
   const IP_LAB_1 =
-    "IP Lab 1 · week of 5 Oct 2026. Red · mean score 3.0. 2 graded check-ins: 0 green, 0 yellow, 2 red";
+    "Gather › IP Lab › IP Lab 1, 2 of 2 graded check-ins red, Red 3.0. Week of 5 Oct 2026. 2 graded check-ins: 0 green, 0 yellow, 2 red";
 
   it("shows hq every box with someone red this week, the red ones first, named within the organisation", async () => {
     viewer("hq");
@@ -873,14 +880,14 @@ describe("Needs a look", () => {
     expect(toIpLab1.getAttribute("href")).toBe(`/portal/dashboard/ip1/${THIS_WEEK}`);
     expect(toIpLab1.getAttribute("aria-label")).toBe(IP_LAB_1);
     const ip1Cell = cellsFor(RED_THIS_WEEK.filter((c) => c.team_id === "ip1"), [THIS_WEEK], CONFIG)[0];
-    const { title, lines } = describeCell("IP Lab 1", ip1Cell, CONFIG);
-    expect(toIpLab1.getAttribute("aria-label")).toBe(`${title}. ${lines.join(". ")}`);
+    const { lines } = describeCell("IP Lab 1", ip1Cell, CONFIG);
+    expect(toIpLab1.getAttribute("aria-label")).toContain(lines.slice(1).join(". "));
 
     // Atlas is green, but someone in it was red.
     expect(spotText(atlas)).toEqual(["Culture", "Atlas", "1 of 2 graded check-ins red"]);
     expect(atlas.querySelector("a")!.getAttribute("href")).toBe(`/portal/dashboard/at/${THIS_WEEK}`);
     expect(atlas.querySelector("a")!.getAttribute("aria-label")).toBe(
-      "Atlas · week of 5 Oct 2026. Green · mean score 17.0. 2 graded check-ins: 1 green, 0 yellow, 1 red",
+      "Culture › Atlas, 1 of 2 graded check-ins red, Green 17.0. Week of 5 Oct 2026. 2 graded check-ins: 1 green, 0 yellow, 1 red",
     );
     // Only this week's: Atlas's red three weeks ago isn't listed.
     expect(tileEl.querySelectorAll("a")).toHaveLength(2);
@@ -932,7 +939,7 @@ describe("Needs a look", () => {
     const to = ipLab1.querySelector("a")!;
     expect(to.getAttribute("href")).toBe(`/portal/dashboard/ip1/${LAST_WEEK}`);
     expect(to.getAttribute("aria-label")).toBe(
-      "IP Lab 1 · week of 28 Sept 2026. Red · mean score 3.0. 2 graded check-ins: 0 green, 0 yellow, 2 red",
+      "Gather › IP Lab › IP Lab 1, 2 of 2 graded check-ins red, Red 3.0. Week of 28 Sept 2026. 2 graded check-ins: 0 green, 0 yellow, 2 red",
     );
     expect(tileEl.querySelectorAll("a")).toHaveLength(1);
   });
@@ -983,8 +990,8 @@ describe("Who's checked in", () => {
     const html = await render();
     expect(text(tile("checked-in")!)).toContain("This week so far. Counts only, never names.");
     expect(checkedInRows()).toEqual([
-      ["IP Lab 1", "1 of 2 people checked in"],
-      ["IP Lab 2", "1 of 1 people checked in"],
+      ["IP Lab 1", "1 of 2 checked in"],
+      ["IP Lab 2", "1 of 1 checked in"],
     ]);
     for (const name of ["Ana Lim", "Ben Ong", "Chi Ng"]) expect(html).not.toContain(name);
     expect(tile("checked-in")!.querySelector("a")).toBeNull();
@@ -1004,8 +1011,8 @@ describe("Who's checked in", () => {
     teamCheckins = [checkinBy(ana, THIS_WEEK), checkinBy(me, THIS_WEEK), checkinBy(unplaced, THIS_WEEK)];
     await render();
     expect(checkedInRows()).toEqual([
-      ["The New Normal", "2 of 3 people checked in"],
-      ["Gather", "1 of 2 people checked in"],
+      ["The New Normal", "2 of 3 checked in"],
+      ["Gather", "1 of 2 checked in"],
       ["Loose Ends", "No one here yet"],
     ]);
     // Everyone placed somewhere, read by team, never someone with no team.

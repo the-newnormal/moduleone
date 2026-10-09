@@ -43,10 +43,10 @@ export function SaveWatch({ children }: { children: ReactNode }) {
     return (
       <div className="grid gap-3">
         <p role="status" className="flex items-center gap-2 text-[15px] leading-[22px]">
-          <LoaderCircle aria-hidden className="size-4 motion-safe:animate-spin" />
+          <LoaderCircle aria-hidden strokeWidth={1.5} className="size-4 motion-safe:animate-spin" />
           Saving your recording… This page updates when it&apos;s saved.
         </p>
-        <Link href="/portal/checkin" className="w-fit text-sm font-medium underline underline-offset-4">
+        <Link href="/portal/checkin" className="inline-flex min-h-10 w-fit items-center rounded-sm text-[15px] font-medium underline underline-offset-4">
           Open your check-in
         </Link>
       </div>

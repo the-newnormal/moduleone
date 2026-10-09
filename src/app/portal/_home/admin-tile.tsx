@@ -33,7 +33,7 @@ export function AdminTile({ thresholds }: { thresholds: HealthConfig["thresholds
                 <span className="text-[15px] leading-[22px] font-medium">{label}</span>
                 <span className="text-[13px] leading-[18px] text-muted-foreground">{hint}</span>
               </span>
-              <ChevronRight aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+              <ChevronRight aria-hidden strokeWidth={1.5} className="size-4 shrink-0 text-muted-foreground" />
             </Link>
           </li>
         ))}

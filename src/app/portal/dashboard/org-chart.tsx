@@ -13,7 +13,9 @@ import { HeatmapTooltip } from "./heatmap-tooltip";
 
 export const drillIn = (teamId: string | null, week: string) => `/portal/dashboard/${teamId ?? "none"}/${week}`;
 
-export function Bars({ row, config }: { row: Row; config: HealthConfig }) {
+// `links` false draws the bars only (the portal, where bars this small would be poor tap targets;
+// earlier weeks open from the org chart), still with their tooltips.
+export function Bars({ row, config, links = true }: { row: Row; config: HealthConfig; links?: boolean }) {
   const viewing = row.cells[row.cells.length - 1].week;
   return (
     // For the eye and the pointer: each bar opens its own week. The row's link reads the weeks out
@@ -21,6 +23,18 @@ export function Bars({ row, config }: { row: Row; config: HealthConfig }) {
     <span aria-hidden className="flex h-5 shrink-0 items-end gap-0.5">
       {row.cells.map((cell) => {
         const { title, lines } = describeCell(row.name, cell, config);
+        if (!links) {
+          return (
+            <span
+              key={cell.week}
+              data-tip-title={title}
+              data-tip-body={lines.join("\n")}
+              className="flex h-full w-2 items-end sm:w-2.5"
+            >
+              <span className={`w-full rounded-t-[2px] ${barClass(cell)}`} />
+            </span>
+          );
+        }
         return (
           <Link
             key={cell.week}

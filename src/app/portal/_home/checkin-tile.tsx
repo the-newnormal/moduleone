@@ -25,7 +25,7 @@ export function CheckinTile({ week, thisWeek }: { week: MyWeek; thisWeek: string
           <p role="alert" className="text-[15px] leading-[22px]">
             Couldn&apos;t load your check-in. Refresh the page to try again.
           </p>
-          <Link href="/portal/checkin" className="w-fit text-sm font-medium underline underline-offset-4">
+          <Link href="/portal/checkin" className="inline-flex min-h-10 w-fit items-center rounded-sm text-[15px] font-medium underline underline-offset-4">
             Open your check-in
           </Link>
         </div>
@@ -39,7 +39,7 @@ export function CheckinTile({ week, thisWeek }: { week: MyWeek; thisWeek: string
               action={
                 <Button asChild variant="accent" className="h-12 w-full px-6 text-[15px] has-[>svg]:px-6 sm:h-10 sm:w-fit">
                   <Link href="/portal/checkin">
-                    <Mic aria-hidden />
+                    <Mic aria-hidden strokeWidth={1.5} />
                     Start check-in
                   </Link>
                 </Button>

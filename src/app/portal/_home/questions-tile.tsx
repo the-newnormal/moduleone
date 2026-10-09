@@ -23,9 +23,9 @@ export function QuestionsTile() {
       </ol>
       <p className="text-[13px] leading-[18px] text-muted-foreground">The recorder shows them one at a time.</p>
       <details className="group border-t pt-3">
-        <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between gap-2 rounded-md text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
+        <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between gap-2 rounded-md text-[15px] font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
           How your recording is used
-          <ChevronDown aria-hidden className="size-4 transition-transform group-open:rotate-180" />
+          <ChevronDown aria-hidden strokeWidth={1.5} className="size-4 motion-safe:transition-transform group-open:rotate-180" />
         </summary>
         <dl className="grid gap-3 pt-2 text-[13px] leading-[18px]">
           {noticeSections().map((section) => (

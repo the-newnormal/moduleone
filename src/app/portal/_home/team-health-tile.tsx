@@ -40,7 +40,7 @@ export const OpenTeamHealth = () => (
   <Button asChild variant="outline" className="h-10 w-fit px-5 text-[15px] has-[>svg]:px-5">
     <Link href="/portal/dashboard">
       Open Team health
-      <ArrowRight aria-hidden />
+      <ArrowRight aria-hidden strokeWidth={1.5} />
     </Link>
   </Button>
 );
@@ -77,7 +77,7 @@ export function TeamHealthTile({ health }: { health: Exclude<TeamHealthGlance, {
           <div className="grid gap-1">
             <div
               aria-hidden
-              className="hidden grid-cols-[minmax(0,1fr)_auto_10rem] gap-4 border-b px-2 pb-2 text-xs leading-4 font-medium tracking-[0.02em] text-muted-foreground sm:grid"
+              className="hidden grid-cols-[minmax(0,1fr)_5.5rem_10rem] gap-4 border-b px-2 pb-2 text-xs leading-4 font-medium tracking-[0.02em] text-muted-foreground sm:grid"
             >
               <span>Team</span>
               <span>Last {weeks.length} weeks</span>
@@ -131,7 +131,7 @@ function GlanceRow({
 }) {
   return (
     <li
-      className={`grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 border-b py-2 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_auto_10rem] ${
+      className={`grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 border-b py-2 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_5.5rem_10rem] ${
         indent ? "pr-2 pl-5" : "px-2"
       }`}
     >
@@ -139,7 +139,7 @@ function GlanceRow({
         {node.name}
         {node.archived && <span className="text-muted-foreground"> (archived)</span>}
       </span>
-      <Bars row={node} config={config} />
+      <Bars row={node} config={config} links={false} />
       <ThisWeek node={node} config={config} />
     </li>
   );
@@ -149,11 +149,17 @@ function ThisWeek({ node, config }: { node: OrgNode; config: HealthConfig }) {
   const cell: HeatmapCell = node.cells[node.cells.length - 1];
   const { title, lines } = describeCell(node.name, cell, config);
   const earlier = node.cells.slice(0, -1).map(cellWord);
+  // What the link shows, first, so it can be named by voice; then the rest of the week.
+  const shown = cell.health
+    ? `${BANDS[cell.health.band].label} ${formatScore(cell.health.score, config)}`
+    : cell.pending > 0
+      ? "waiting"
+      : "no check-ins";
   return (
     <Link
       href={drillIn(node.teamId, cell.week)}
       prefetch={false}
-      aria-label={`${title}${node.archived ? " (archived)" : ""}. ${lines.join(". ")}.${
+      aria-label={`${shown}, ${title}${node.archived ? " (archived)" : ""}. ${lines.join(". ")}.${
         earlier.length > 0 ? ` The ${plural(earlier.length, "week")} before, oldest first: ${earlier.join(", ")}.` : ""
       }`}
       data-tip-title={title}
@@ -172,7 +178,7 @@ function ThisWeek({ node, config }: { node: OrgNode; config: HealthConfig }) {
           <span className="text-muted-foreground">waiting</span>
         </>
       ) : (
-        <span className="text-muted-foreground">– no check-ins</span>
+        <span className="text-muted-foreground">no check-ins</span>
       )}
     </Link>
   );

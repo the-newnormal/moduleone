@@ -27,11 +27,13 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
+  /* Normal's radii exactly: radius-s for checkboxes and chips, radius-m for inputs and alerts,
+     radius-l for cards, sheets and dialogs. */
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-xl: 20px;
+  --radius-2xl: 28px;
   --color-status-good: var(--status-good);
   --color-status-warning: var(--status-warning);
   --color-status-critical: var(--status-critical);
@@ -52,8 +54,7 @@
   /* PP Neue Montreal isn't licensed yet; the stacks fall back as Normal specifies. */
   --font-normal-sans: "PP Neue Montreal", "Neue Montreal", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-normal-mono: "PP Neue Montreal Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
-  /* Cards come out at radius-l (20px) as rounded-xl, inputs at radius-m (12px) as rounded-md. */
-  --radius: 0.875rem;
+  --radius: 0.875rem; /* shadcn's base; the radius scale itself is set in @theme above */
   --background: #ffffff; /* surface-000 */
   --foreground: #141414; /* ink */
   --card: #f6f5f1; /* surface-100 */
@@ -90,6 +91,11 @@
 @layer base {
   * {
     @apply border-border outline-ring/50;
+  }
+  /* Normal's focus ring, on every focusable element: 2px solid ink, 2px off. An element that
+     draws its own (or none, with outline-none) overrides this from the utilities layer. */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-ring;
   }
   body {
     @apply bg-background text-foreground font-sans;

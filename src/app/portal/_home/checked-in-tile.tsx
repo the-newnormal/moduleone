@@ -28,7 +28,7 @@ export function CheckedInTile({ rows, glance }: { rows: CheckedInRow[] | "failed
               key={row.teamId}
               className={`grid gap-1.5 ${summary && row.teamId !== summary && !other.has(row.teamId) ? "pl-3" : ""}`}
             >
-              <div className="flex items-baseline justify-between gap-3 text-[15px] leading-[22px]">
+              <div className="flex min-w-0 items-baseline justify-between gap-3 text-[15px] leading-[22px]">
                 <span className={`truncate ${row.teamId === summary ? "font-medium" : ""}`}>{row.name}</span>
                 <span className="shrink-0 text-[13px] leading-[18px] text-muted-foreground">
                   {row.people === 0 ? (
@@ -37,7 +37,7 @@ export function CheckedInTile({ rows, glance }: { rows: CheckedInRow[] | "failed
                     <>
                       <span className="font-mono text-foreground tabular-nums">{row.checkedIn}</span> of{" "}
                       <span className="font-mono tabular-nums">{row.people}</span>
-                      <span className="sr-only"> people checked in</span>
+                      <span className="sr-only"> checked in</span>
                     </>
                   )}
                 </span>

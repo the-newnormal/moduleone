@@ -34,7 +34,7 @@ export function WeeksTile({ strip }: { strip: WeekStrip | null }) {
                 const current = i === strip.cells.length - 1;
                 return (
                   <li key={cell.week} className={`flex aspect-square items-center justify-center rounded-md ${box}`}>
-                    {Icon && <Icon aria-hidden className="size-4" strokeWidth={1.75} />}
+                    {Icon && <Icon aria-hidden className="size-4" strokeWidth={1.5} />}
                     <span className="sr-only">
                       Week of {formatWeek(cell.week)}
                       {current && " (this week)"}: {said}

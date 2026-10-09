@@ -4,8 +4,10 @@ import { subtree, type TeamNode } from "./tree";
 export type CheckedInRow = { teamId: string; name: string; people: number; checkedIn: number };
 
 // How many of the people now placed in each box (the team and every team under it) have checked
-// in this week. Counts only: never who. A person counts where they sit now, wherever their
-// check-in was made, so someone who moved mid-week counts once, in their new team.
+// in this week. Counts only: never who. A person counts where they sit now, and once. Note that a
+// leader reads only check-ins made in the teams they lead (RLS), so someone who moved into one of
+// them mid-week after checking in elsewhere shows as not checked in to that leader until next
+// week; hq reads every check-in, so sees them as checked in.
 export function checkedInCounts(
   nodes: readonly OrgNode[],
   teams: readonly TeamNode[],
