@@ -985,7 +985,7 @@ describe("resendInvite", () => {
     expect(inviteUserByEmail).not.toHaveBeenCalled();
   }
 
-  it("re-sends the invite to the address of a login given here and not used yet, changing nothing", async () => {
+  it("re-sends the invite to the address of a login given here and not used yet, and refreshes the rows that say when it went out", async () => {
     userQueue.members = [invited()];
     await expect(resendInvite(PERSON)).resolves.toEqual({ ok: true, value: null });
     expect(userQueries).toEqual([
@@ -998,10 +998,10 @@ describe("resendInvite", () => {
     expect(inviteUserByEmail).toHaveBeenCalledExactlyOnceWith(EMAIL, {
       redirectTo: `${SITE}/auth/callback?next=/portal`,
     });
-    // No member row is written, no login deleted, nothing to refresh.
+    // No member row is written and no login deleted, but each row shows when its invite went out.
     expect(serviceFrom).not.toHaveBeenCalled();
     expect(deleteUser).not.toHaveBeenCalled();
-    expect(revalidatePath).not.toHaveBeenCalled();
+    expectRevalidated();
   });
 
   it("checks the member as the admin before any service-role call", async () => {
@@ -1088,6 +1088,17 @@ describe("resendInvite", () => {
     inviteUserByEmail.mockResolvedValue({ data: { user: null }, error: { ...error, name: "AuthApiError", message: EMAIL } });
     await expect(resendInvite(PERSON)).resolves.toEqual({ ok: false, error: message });
     expect(deleteUser).not.toHaveBeenCalled();
+  });
+
+  it("refreshes nothing when no invite went out: a used login, a failed invite, or one for another login", async () => {
+    userQueue.members = [invited(), invited(), invited()];
+    getUserById.mockResolvedValueOnce(authUser({ last_sign_in_at: "2026-10-09T04:00:00Z" }));
+    await expect(resendInvite(PERSON)).resolves.toEqual({ ok: false, error: INVITE_USED });
+    inviteUserByEmail.mockResolvedValueOnce({ data: { user: null }, error: { name: "AuthApiError", status: 500, code: "unexpected_failure" } });
+    await expect(resendInvite(PERSON)).resolves.toMatchObject({ ok: false });
+    inviteUserByEmail.mockResolvedValueOnce(otherLogin("2026-10-01T00:00:00.000Z"));
+    await expect(resendInvite(PERSON)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 
   it("says 'something went wrong' if the invite comes back for another login, and deletes nothing", async () => {

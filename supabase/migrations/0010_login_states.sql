@@ -1,10 +1,11 @@
 -- 0010: who can sign in, for the admin pages.
 --
 -- Each person's row on the admin pages says whether their login has been used, not just whether
--- they have one: "Invited, not used yet" (with when the invite went out), "Can sign in, hasn't
--- yet" (a login set up ready to use that nobody has signed in with), or "Active" (with when they
--- last signed in). Without it an admin only found out an invite went unused by pressing Resend
--- invite.
+-- they have one. For each linked login this returns its state: 'invited' (nobody has used it yet,
+-- with when the invite went out), 'ready' (set up ready to use, but nobody has signed in with it)
+-- or 'active' (with when it was last signed in with). The labels admins see are in loginStatusText
+-- (src/app/admin/teams/[id]/team-view.ts). Without this an admin only found out an invite went
+-- unused by pressing Resend invite.
 --
 -- Those facts live in auth.users, which admins can't read, and the app keeps the service-role key
 -- to the few actions that need it. So admin_login_states is SECURITY DEFINER: it checks the
@@ -18,7 +19,7 @@ create function admin_login_states()
   returns table (member_id uuid, state text, invited_at timestamptz, last_sign_in_at timestamptz)
   language plpgsql stable security definer set search_path = '' as $$
 begin
-  if not public.app_has_grant('admin') then
+  if not coalesce(public.app_has_grant('admin'), false) then
     raise exception using errcode = 'insufficient_privilege', message = 'Only admins can see who has signed in.';
   end if;
 

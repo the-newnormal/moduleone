@@ -635,14 +635,14 @@ describe("buildTeamView", () => {
     }
   });
 
-  it("doesn't say when an invite went out when that isn't known, and then never calls it expired", () => {
+  it("says nobody can sign in yet with a login that was never invited, and never calls it expired", () => {
     const monthLater = later(SENT, 30 * 24 * 60 * MINUTE);
     const people = view("team-ip1", MEMBERS, LEADS, [], states([loginRow("m-mei", "invited")], monthLater))!.people;
     expect(loginOf(people, "m-mei")).toEqual({ state: "invited", sentAt: null, expired: false });
     expect(loginStatusText(people.find((p) => p.id === "m-mei")!.login)).toEqual({
-      label: "Invite not used",
+      label: "Can't sign in yet",
       tone: "warning",
-      detail: null,
+      detail: "No invite has been sent",
     });
   });
 
@@ -661,7 +661,7 @@ describe("buildTeamView", () => {
     const people = view("team-ip1", MEMBERS, LEADS, [], states(rows))!.people;
     expect(loginOf(people, "m-leo")).toEqual({ state: "ready" });
     expect(loginOf(people, "m-mei")).toEqual({ state: "active", lastSignedInOn: "8 Oct 2026" });
-    expect(loginStatusText(loginOf(people, "m-mei")).detail).toBe("Last signed in 8 Oct 2026");
+    expect(loginStatusText(loginOf(people, "m-mei")).detail).toBe("Last signed in with a link on 8 Oct 2026");
     // Without a readable date, it's still active, and says no more.
     for (const last_sign_in_at of [null, "not a date"]) {
       const undated = view("team-ip1", MEMBERS, LEADS, [], states([loginRow("m-mei", "active", { last_sign_in_at })]))!.people;
@@ -1017,13 +1017,13 @@ describe("emailChangedText", () => {
 
 describe("loginStatusText", () => {
   it.each<[LoginStatus, string, LoginStatusText["tone"], string | null]>([
-    [{ state: "none" }, "No login yet", "outline", null],
+    [{ state: "none" }, "No login yet", "neutral", null],
     [{ state: "invited", sentAt: "9 Oct 2026, 12:30 am", expired: false }, "Invite not used", "warning", "Invite sent 9 Oct 2026, 12:30 am"],
     [{ state: "invited", sentAt: "9 Oct 2026, 12:30 am", expired: true }, "Invite expired", "warning", "Invite sent 9 Oct 2026, 12:30 am"],
-    [{ state: "invited", sentAt: null, expired: false }, "Invite not used", "warning", null],
-    [{ state: "invited", sentAt: null, expired: true }, "Invite expired", "warning", null],
+    [{ state: "invited", sentAt: null, expired: false }, "Can't sign in yet", "warning", "No invite has been sent"],
+    [{ state: "invited", sentAt: null, expired: true }, "Can't sign in yet", "warning", "No invite has been sent"],
     [{ state: "ready" }, "Never signed in", "neutral", "Their login is ready: they sign in at the login page"],
-    [{ state: "active", lastSignedInOn: "8 Oct 2026" }, "Active", "success", "Last signed in 8 Oct 2026"],
+    [{ state: "active", lastSignedInOn: "8 Oct 2026" }, "Active", "success", "Last signed in with a link on 8 Oct 2026"],
     [{ state: "active", lastSignedInOn: null }, "Active", "success", null],
     [{ state: "unknown" }, "Has a login", "neutral", null],
   ])("%j → %s (%s), %j", (status, label, tone, detail) => {

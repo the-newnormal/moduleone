@@ -136,6 +136,11 @@ export function PersonRow({
           {login.detail && <span>{login.detail}</span>}
         </p>
         {person.loginGiven && <p className="text-xs text-muted-foreground">{person.loginGiven}</p>}
+        {person.login.state === "invited" && !person.canResendInvite && (
+          <p className="text-xs text-muted-foreground">
+            This login wasn&apos;t given in Module One, so only the project owner can send its invite again.
+          </p>
+        )}
         {person.emailChanged && <p className="text-xs text-muted-foreground">{person.emailChanged}</p>}
         {(person.ownerKeeps === "grants" || person.ownerGivesLogin) && (
           <p className="text-xs text-muted-foreground">

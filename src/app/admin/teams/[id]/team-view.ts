@@ -166,19 +166,22 @@ export function loginGivenText(giverName: string | null, givenAt: string | null)
 // detail when there is some.
 export type LoginStatusText = {
   label: string;
-  tone: "outline" | "neutral" | "warning" | "success";
+  tone: "neutral" | "warning" | "success";
   detail: string | null;
 };
 
 export function loginStatusText(status: LoginStatus): LoginStatusText {
   switch (status.state) {
     case "none":
-      return { label: "No login yet", tone: "outline", detail: null };
+      return { label: "No login yet", tone: "neutral", detail: null };
     case "invited":
+      // No invite time: a login the project owner made in the dashboard without inviting or
+      // confirming it. Nobody can sign in with it until an invite goes out.
+      if (status.sentAt === null) return { label: "Can't sign in yet", tone: "warning", detail: "No invite has been sent" };
       return {
         label: status.expired ? "Invite expired" : "Invite not used",
         tone: "warning",
-        detail: status.sentAt && `Invite sent ${status.sentAt}`,
+        detail: `Invite sent ${status.sentAt}`,
       };
     case "ready":
       return { label: "Never signed in", tone: "neutral", detail: "Their login is ready: they sign in at the login page" };
@@ -186,7 +189,8 @@ export function loginStatusText(status: LoginStatus): LoginStatusText {
       return {
         label: "Active",
         tone: "success",
-        detail: status.lastSignedInOn && `Last signed in ${status.lastSignedInOn}`,
+        // Staying signed in doesn't update it, only opening a sign-in link does.
+        detail: status.lastSignedInOn && `Last signed in with a link on ${status.lastSignedInOn}`,
       };
     case "unknown":
       return { label: "Has a login", tone: "neutral", detail: null };

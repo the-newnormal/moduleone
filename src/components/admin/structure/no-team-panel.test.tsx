@@ -150,10 +150,10 @@ describe("NoTeamPanel", () => {
     expect(statusLine("Ivy Ho")).toEqual(["Member", "Invite not used", "Invite sent 8 Oct 2026, 3:04 pm"]);
     expect(statusLine("Ben Kho")).toEqual(["Member", "Invite expired", "Invite sent 1 Oct 2026, 9:15 am"]);
     expect(statusLine("Cat Ng")).toEqual(["Member", "Never signed in", "Their login is ready: they sign in at the login page"]);
-    expect(statusLine("Dan Lim")).toEqual(["Member", "Active", "Last signed in 8 Oct 2026"]);
+    expect(statusLine("Dan Lim")).toEqual(["Member", "Active", "Last signed in with a link on 8 Oct 2026"]);
     expect(statusLine("Eve Tan")).toEqual(["Member", "Has a login"]);
 
-    expect(loginTag("Ana Lee")).toEqual({ label: "No login yet", tones: ["outline"] });
+    expect(loginTag("Ana Lee")).toEqual({ label: "No login yet", tones: ["neutral"] });
     expect(loginTag("Ivy Ho")).toEqual({ label: "Invite not used", tones: ["warning"] });
     expect(loginTag("Ben Kho")).toEqual({ label: "Invite expired", tones: ["warning"] });
     expect(loginTag("Cat Ng")).toEqual({ label: "Never signed in", tones: ["neutral"] });
@@ -197,9 +197,9 @@ describe("NoTeamPanel", () => {
     expect(statusLine("Ivy Ho")).toEqual(["Member", "Invite not used", "Invite sent 9 Oct 2026, 10:00 am"]);
     expect(statusLine("Ben Kho")).toEqual(["Member", "Invite expired", "Invite sent 9 Oct 2026, 9:00 am"]);
     expect(statusLine("Cat Ng")).toEqual(["Member", "Never signed in", "Their login is ready: they sign in at the login page"]);
-    expect(statusLine("Dan Lim")).toEqual(["Member", "Active", "Last signed in 8 Oct 2026"]);
+    expect(statusLine("Dan Lim")).toEqual(["Member", "Active", "Last signed in with a link on 8 Oct 2026"]);
     expect(statusLine("Eve Tan")).toEqual(["Member", "Has a login"]);
-    expect(statusLine("Hana Lim")).toEqual(["Master Admin", "Active", "Last signed in 9 Oct 2026"]);
+    expect(statusLine("Hana Lim")).toEqual(["Master Admin", "Active", "Last signed in with a link on 9 Oct 2026"]);
     for (const name of ["Ivy Ho", "Ben Kho", "Cat Ng", "Dan Lim"]) {
       expect(text(row(name))).toContain("Login given by Hana Lim on 1 Oct 2026");
     }
