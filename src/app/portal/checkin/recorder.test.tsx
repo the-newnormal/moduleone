@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { act } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { button, click, render, settle } from "@/test/dom";
 import type { SaveOutcome, Take } from "./take";
@@ -35,12 +36,14 @@ async function load() {
 class FakeRecorder {
   static isTypeSupported = () => true;
   static last: FakeRecorder | null = null;
+  stream: unknown;
   state: "inactive" | "recording" = "inactive";
   mimeType = "audio/webm;codecs=opus";
   ondataavailable: ((event: { data: Blob }) => void) | null = null;
   onstop: (() => void) | null = null;
   onerror: (() => void) | null = null;
-  constructor() {
+  constructor(stream: unknown) {
+    this.stream = stream;
     FakeRecorder.last = this;
   }
   start() {
@@ -56,7 +59,12 @@ describe("a recording stopped by Finish", () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     const track = { stop: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn() };
     Object.defineProperty(navigator, "mediaDevices", {
-      value: { getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }) },
+      value: {
+        getUserMedia: async ({ video }: MediaStreamConstraints) => {
+          if (video) throw new DOMException("no camera", "NotFoundError"); // no mirror in this test
+          return { getTracks: () => [track], getAudioTracks: () => [track] };
+        },
+      },
       configurable: true,
     });
     const { Recorder, currentSave } = await load();
@@ -85,5 +93,83 @@ describe("a failed take the recorder shows", () => {
 
     await click(button("Discard"));
     expect(failedTakeShown()).toBe(false);
+  });
+});
+
+// The camera is only a mirror: shown while recording, never recorded, and never in the way.
+describe("the camera mirror", () => {
+  const fakeTrack = () => ({ stop: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn() });
+  function devices(camera: () => Promise<unknown>) {
+    const mic = fakeTrack();
+    const microphone = { getTracks: () => [mic], getAudioTracks: () => [mic] };
+    const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) =>
+      constraints.video ? camera() : microphone,
+    );
+    Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia }, configurable: true });
+    return { microphone, getUserMedia };
+  }
+  // A real (happy-dom) MediaStream, as a <video> takes only those, with the given camera track.
+  function cameraStream(lens: ReturnType<typeof fakeTrack>) {
+    return Object.assign(new MediaStream(), { getTracks: () => [lens] });
+  }
+
+  it("shows the member's camera while recording, records only the microphone, and lets the camera go", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    const lens = fakeTrack();
+    const camera = cameraStream(lens);
+    const { microphone, getUserMedia } = devices(async () => camera);
+    const { Recorder } = await load();
+    await render(<Recorder />);
+    await click(button("Start recording"));
+    await settle();
+
+    expect(getUserMedia).toHaveBeenNthCalledWith(1, expect.objectContaining({ audio: expect.anything() }));
+    expect(getUserMedia.mock.calls[0][0]).not.toHaveProperty("video"); // the microphone alone, first
+    expect(FakeRecorder.last?.stream).toBe(microphone); // the camera never reaches the recorder
+    const video = document.querySelector("video");
+    expect(video?.srcObject).toBe(camera);
+    expect(video?.muted).toBe(true);
+
+    // The recorder's stop event (nothing recorded here) ends the recording and the preview.
+    await click(button("Next question"));
+    await click(button("Next question"));
+    await click(button("Finish"));
+    await act(async () => FakeRecorder.last?.onstop?.());
+    expect(lens.stop).toHaveBeenCalled();
+    expect(document.querySelector("video")).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it("records as before, without the mirror, when the camera is blocked", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    devices(async () => {
+      throw new DOMException("blocked", "NotAllowedError");
+    });
+    const { Recorder } = await load();
+    await render(<Recorder />);
+    await click(button("Start recording"));
+    await settle();
+    expect(button("Next question")).toBeTruthy();
+    expect(FakeRecorder.last?.state).toBe("recording");
+    expect(document.querySelector("video")).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it("lets go of a camera allowed only after the recording has finished", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    const lens = fakeTrack();
+    let allow: (stream: unknown) => void = () => {};
+    devices(() => new Promise((resolve) => (allow = resolve)));
+    const { Recorder } = await load();
+    await render(<Recorder />);
+    await click(button("Start recording"));
+    await settle();
+    await click(button("Next question"));
+    await click(button("Next question"));
+    await click(button("Finish"));
+    await act(async () => allow(cameraStream(lens)));
+    expect(lens.stop).toHaveBeenCalled();
+    expect(document.querySelector("video")).toBeNull();
+    vi.unstubAllGlobals();
   });
 });
