@@ -11,7 +11,7 @@ import { HeatmapTooltip } from "./heatmap-tooltip";
 // to it. A box covers its team and every team
 // under it (src/lib/dashboard/org.ts); open it to read that week's check-ins.
 
-const drillIn = (teamId: string | null, week: string) => `/portal/dashboard/${teamId ?? "none"}/${week}`;
+export const drillIn = (teamId: string | null, week: string) => `/portal/dashboard/${teamId ?? "none"}/${week}`;
 
 function Bars({ row, config }: { row: Row; config: HealthConfig }) {
   const viewing = row.cells[row.cells.length - 1].week;

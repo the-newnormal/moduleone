@@ -9,6 +9,8 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: "bg-primary text-primary-foreground hover:bg-primary/85",
+        // Normal's sun: the one thing a screen wants you to do. One per screen at most.
+        accent: "bg-sun text-on-sun hover:shadow-[inset_0_0_0_1px_var(--on-sun)]",
         destructive:
           "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:bg-destructive/60 dark:focus-visible:ring-destructive/40",
         outline:

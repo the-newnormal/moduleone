@@ -1,6 +1,6 @@
 import { CircleCheck, OctagonAlert, TriangleAlert, type LucideIcon } from "lucide-react";
 import type { HeatmapCell } from "@/lib/dashboard/org";
-import type { Band } from "@/lib/health/health";
+import type { Band, HealthConfig } from "@/lib/health/health";
 
 // How each colour looks everywhere on the dashboard: a distinct icon shape plus a word, so the
 // band never rests on colour alone.
@@ -50,4 +50,13 @@ export function barClass(cell: Pick<HeatmapCell, "health" | "pending">): string 
   const band = cell.health?.band;
   if (band) return `${BAR_HEIGHT[band]} ${BANDS[band].bar} ring-1 ring-black/30 ring-inset`;
   return cell.pending > 0 ? "h-full border border-dashed border-muted-foreground" : "h-0.5 bg-muted-foreground/40";
+}
+
+// What each colour means under the current thresholds, as the keys say it.
+export function thresholdItems({ green, yellow }: HealthConfig["thresholds"]): { band: Band; text: string }[] {
+  return [
+    { band: "green", text: `${green} or more` },
+    { band: "yellow", text: `${yellow} to under ${green}` },
+    { band: "red", text: `under ${yellow}` },
+  ];
 }
