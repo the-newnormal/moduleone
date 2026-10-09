@@ -13,7 +13,7 @@ import { HeatmapTooltip } from "./heatmap-tooltip";
 
 export const drillIn = (teamId: string | null, week: string) => `/portal/dashboard/${teamId ?? "none"}/${week}`;
 
-function Bars({ row, config }: { row: Row; config: HealthConfig }) {
+export function Bars({ row, config }: { row: Row; config: HealthConfig }) {
   const viewing = row.cells[row.cells.length - 1].week;
   return (
     // For the eye and the pointer: each bar opens its own week. The row's link reads the weeks out

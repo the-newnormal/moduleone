@@ -9,17 +9,19 @@ import { loadMyWeek, STRIP_WEEKS, weekStrip } from "@/lib/portal/my-week";
 import { loadTeamHealthGlance } from "@/lib/portal/team-health";
 import { createClient } from "@/lib/supabase/server";
 import { AdminTile } from "./_home/admin-tile";
+import { CheckedInTile } from "./_home/checked-in-tile";
 import { CheckinTile } from "./_home/checkin-tile";
+import { NeedsALookTile } from "./_home/needs-a-look-tile";
 import { PortalHeader } from "./_home/portal-header";
 import { QuestionsTile } from "./_home/questions-tile";
 import { TeamHealthStats, TeamHealthTile } from "./_home/team-health-tile";
-import { ComingSoonTile } from "./_home/tile";
 import { WeeksTile } from "./_home/weeks-tile";
 
 export const metadata: Metadata = { title: "Portal · Module One" };
 
 // The portal's dashboard. Everyone gets their own check-in, their last weeks and the questions;
-// leaders and hq also get team health; holders of the admin grant the way into admin. What each
+// leaders and hq also get team health and who's checked in (and division leaders and hq, what needs
+// a look); holders of the admin grant the way into admin. What each
 // viewer may see is decided here, on the server, before anything is loaded for it, and every query
 // runs as the viewer, so RLS decides the rows. Members never see a grade: their tiles read only
 // whether and when they checked in, and the heat-map is loaded only for leaders and hq.
@@ -66,26 +68,20 @@ export default async function PortalPage() {
           <CheckinTile week={mine} thisWeek={thisWeek} />
           {teamHealth?.status === "ok" && <TeamHealthStats health={teamHealth} />}
           {teamHealth && <TeamHealthTile health={teamHealth} />}
+          {teamHealth?.status === "ok" && teamHealth.needsALook && (
+            <NeedsALookTile spots={teamHealth.needsALook} config={teamHealth.config} />
+          )}
         </div>
         {side && (
           <div className="grid min-w-0 gap-6">
             {hasMember && <WeeksTile strip={strip} />}
+            {teamHealth?.status === "ok" && <CheckedInTile rows={teamHealth.checkedIn} glance={teamHealth.glance} />}
             {hasMember && <QuestionsTile />}
             {access.isAdmin && <AdminTile thresholds={thresholds} />}
           </div>
         )}
       </div>
 
-      {teamHealth && (
-        <div className="grid gap-6 sm:grid-cols-2">
-          <ComingSoonTile id="needs-a-look" title="Needs a look">
-            The teams that are red this week, or where someone was red.
-          </ComingSoonTile>
-          <ComingSoonTile id="whos-checked-in" title="Who's checked in">
-            How many people in each of your teams have checked in this week. Counts only, never names or scores.
-          </ComingSoonTile>
-        </div>
-      )}
     </main>
   );
 }
