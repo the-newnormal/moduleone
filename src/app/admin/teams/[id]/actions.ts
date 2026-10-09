@@ -1002,5 +1002,24 @@ async function deleteUnusedLogin(service: ServiceClient, loginId: string) {
   if ((linked.data ?? []).length > 0) return;
   // Soft, as closeLogin does: should they have signed in with it after all, what they accepted stays.
   const { error } = await service.auth.admin.deleteUser(loginId, true);
-  if (error && error.status !== 404) logError("changeEmail old login", error);
+  if (error && error.status !== 404) {
+    logError("changeEmail old login", error);
+    return;
+  }
+
+  // Assignment and Auth deletion are separate service operations. If a concurrent giveLogin got
+  // past the first check while the delete was in flight, do not leave that member pointing at the
+  // now unusable (soft-deleted) Auth row.
+  const linkedAfter = await service.from("members").select("id").eq("auth_user_id", loginId);
+  if (linkedAfter.error) {
+    logError("changeEmail old login cleanup check", linkedAfter.error);
+    return;
+  }
+  if ((linkedAfter.data ?? []).length > 0) {
+    const { error: unlinkError } = await service
+      .from("members")
+      .update({ auth_user_id: null })
+      .eq("auth_user_id", loginId);
+    if (unlinkError) logError("changeEmail old login cleanup", unlinkError);
+  }
 }
