@@ -163,6 +163,13 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
 
   // ---------- finding ----------
 
+  // Only what the chart draws a box for: a node "Not in the tree" (listed under the chart) has
+  // none to pan to, nor do the people in it. The search leaves out people whose node isn't here.
+  const charted = useMemo(() => {
+    const drawn = new Set(layout.items.flatMap((i) => (i.type === "node" ? [i.id] : [])));
+    return view.filter((r) => drawn.has(r.id));
+  }, [layout, view]);
+
   // A match from "Find a person or team": pan its box into view, then open its panel. A person's
   // panel is their node's (or No team's), as when their box is picked; their own box is panned to
   // only while people are shown, else their node's (No team has no box then). The box is centred
@@ -415,7 +422,7 @@ function Canvas({ rows, members, leads, grants, adminMemberId, actions, teamActi
           <Button variant="outline" data-no-team-button onClick={() => openPanel(NO_TEAM_ID)}>
             No team ({noTeamCount})
           </Button>
-          <FindBox rows={view} members={people} onPick={findOnChart} />
+          <FindBox rows={charted} members={people} onPick={findOnChart} />
           {saving && <span className="text-sm text-muted-foreground">Saving…</span>}
           {drag?.plan && (
             <span

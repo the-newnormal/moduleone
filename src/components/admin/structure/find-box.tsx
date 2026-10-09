@@ -49,7 +49,7 @@ export function FindBox({
         autoComplete="off"
         placeholder="Find a person or team"
         className="pl-8"
-        aria-expanded={showing}
+        aria-expanded={showing && matches.length > 0}
         aria-controls={`${id}-list`}
         aria-autocomplete="list"
         aria-activedescendant={showing && matches.length > 0 ? optionId(active) : undefined}
@@ -83,19 +83,21 @@ export function FindBox({
           }
         }}
       />
+      {/* Nothing to pick: said as a status, not offered as an option. */}
+      <p
+        role="status"
+        className="absolute top-full right-0 left-0 z-30 mt-1 rounded-md border bg-popover px-3 py-2 text-sm text-muted-foreground shadow-md empty:hidden"
+      >
+        {showing && matches.length === 0 ? "No one and nothing by that name." : null}
+      </p>
       <ul
         id={`${id}-list`}
         role="listbox"
         aria-label="Matches"
-        hidden={!showing}
+        hidden={!showing || matches.length === 0}
         className="absolute top-full right-0 left-0 z-30 mt-1 grid max-h-80 overflow-y-auto rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-md"
       >
-        {matches.length === 0 ? (
-          <li role="option" aria-selected={false} aria-disabled className="px-2 py-1.5 text-muted-foreground">
-            No one and nothing by that name.
-          </li>
-        ) : (
-          matches.map((match, i) => (
+        {matches.map((match, i) => (
             <li
               key={`${match.type}:${match.id}`}
               id={optionId(i)}
@@ -113,8 +115,7 @@ export function FindBox({
               <span className="truncate font-medium">{match.name}</span>
               <span className="shrink-0 text-xs text-muted-foreground">{match.detail}</span>
             </li>
-          ))
-        )}
+        ))}
       </ul>
     </div>
   );

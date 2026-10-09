@@ -348,7 +348,12 @@ describe("Find a person or team", () => {
     expect(options().join(" ")).not.toContain("Olga Day");
     expect(options().join(" ")).not.toContain("Labib Old");
     await type(find(), "zzz");
-    expect(options()).toEqual(["No one and nothing by that name."]);
+    // Nothing to pick is said as a status, not offered as an option.
+    expect(options()).toEqual([]);
+    expect(find().getAttribute("aria-expanded")).toBe("false");
+    expect([...document.querySelectorAll('[role="status"]')].map((el) => text(el))).toContain(
+      "No one and nothing by that name.",
+    );
   });
 
   it("opens the first match's panel on Enter, and a highlighted one's after the arrow keys", async () => {
@@ -382,6 +387,25 @@ describe("Find a person or team", () => {
     await type(find(), "ana");
     await press(find(), "Enter");
     expect(heading()).toBe("IP Lab 1");
+  });
+
+  it("offers only what the chart draws: not a node outside the tree, nor the people in it", async () => {
+    // Lost Team's parent doesn't exist, so it's listed under "Not in the tree", not on the chart.
+    await render(
+      <StructureCanvas
+        rows={[...ROWS, node("lost", "Lost Team", "team", "nowhere", 0)]}
+        members={[...MEMBERS, member("m-lou", "Lou Tan", "lost")]}
+        leads={[]}
+        grants={[]}
+        adminMemberId="m-admin"
+        actions={actions()}
+        teamActions={TEAM_ACTIONS}
+      />,
+    );
+    expect(text(document.querySelector('[aria-labelledby="stray-heading"]')!)).toContain("Lost Team");
+    await type(find(), "lo");
+    expect(options().join(" ")).not.toContain("Lost Team");
+    expect(options().join(" ")).not.toContain("Lou Tan");
   });
 
   it("picks a match on a click too", async () => {
