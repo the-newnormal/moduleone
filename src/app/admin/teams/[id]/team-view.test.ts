@@ -133,6 +133,7 @@ describe("buildTeamView", () => {
       typeLabel: null,
       note: null,
       archived: false,
+      everyoneLeads: false,
     });
     expect(v.crumbs).toEqual([
       { key: "div-gather", label: "Gather", href: "/admin/teams/div-gather" },
@@ -166,6 +167,10 @@ describe("buildTeamView", () => {
     expect(at("dom-legacy").crumbs.map((c) => c.label)).toEqual(["Unplaced"]);
     // Whoever sits in it leads everything below.
     expect(at("div-gather").inheritedLeads).toEqual([{ id: "m-eli", name: "Eli Chao", domainId: "org", domainName: "The New Normal" }]);
+    // Everyone placed in a division or in it leads it, once there's an organisation (0006); before,
+    // a division takes members too.
+    expect([at("org"), at("div-gather"), at("dom-ip")].map((v) => v.team.everyoneLeads)).toEqual([true, true, false]);
+    expect(view("div-gather")!.team.everyoneLeads).toBe(false);
     // Only the project owner places people there or decides who leads it: nothing to change here.
     expect(at("org").people.every((p) => !p.editable && !p.canGiveLogin)).toBe(true);
     expect(at("org").candidates).toEqual([]);

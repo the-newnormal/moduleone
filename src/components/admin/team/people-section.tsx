@@ -136,6 +136,8 @@ function PersonRow({
             />
           )}
           {leader ? (
+            // Everyone placed here leads it (0006): move them out to make them a member.
+            !team.everyoneLeads && (
             <ConfirmButton
               label={<>Make member{who}</>}
               title={`Make ${name} a member?`}
@@ -145,6 +147,7 @@ function PersonRow({
               context="setRole"
               onDone={() => onDone(`${name} is a member now.`)}
             />
+            )
           ) : (
             <ConfirmButton
               label={<>Make leader{who}</>}

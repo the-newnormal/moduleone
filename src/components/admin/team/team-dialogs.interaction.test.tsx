@@ -23,6 +23,7 @@ const TEAM: TeamSummary = {
   typeLabel: null,
   note: null,
   archived: false,
+  everyoneLeads: false,
 };
 
 const person = (id: string, name: string, changes: Partial<Person> = {}): Person => ({

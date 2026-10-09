@@ -37,6 +37,10 @@ export type TeamSummary = {
   typeLabel: string | null; // "Lab", "IP", "Development domain"
   note: string | null;
   archived: boolean;
+  // Everyone placed here leads it, so it has no members: a division or the organisation once
+  // migration 0006 is live (it adds the organisation node and that rule together). People added as
+  // members arrive as leaders, and a leader here can't be made a member.
+  everyoneLeads: boolean;
 };
 
 // The breadcrumb above the name, top first, without the team itself, each linking to its page. A
@@ -199,6 +203,8 @@ export function buildTeamView({
     typeLabel: typeLabel(row),
     note: row.note,
     archived: row.archived_at !== null,
+    everyoneLeads:
+      (row.kind === "division" || row.kind === "organisation") && teams.some((t) => t.kind === "organisation"),
   };
 
   const above = breadcrumb(teamId, teams).slice(0, -1);

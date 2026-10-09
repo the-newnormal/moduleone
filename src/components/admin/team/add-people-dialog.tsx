@@ -117,6 +117,7 @@ export function AddPeoplePanel({ team, candidates, actions, onDone, onBusy }: Pr
             </p>
             <p className="text-sm text-muted-foreground">
               People are in one team at a time. Their past check-ins stay with {moving.teamName}.
+              {team.everyoneLeads && ` Everyone placed in a ${team.kind} leads it, so they'll be a leader of ${team.name}.`}
             </p>
             <div className="flex flex-wrap gap-2">
               <Button ref={moveButton} type="button" disabled={pending} onClick={() => add(moving)}>
@@ -197,7 +198,8 @@ function NewPersonForm({
 }) {
   const id = useId();
   const [name, setName] = useState("");
-  const [role, setRole] = useState<AssignableRole>("member");
+  const [chosen, setRole] = useState<AssignableRole>("member");
+  const role: AssignableRole = team.everyoneLeads ? "leader" : chosen;
   const [nameError, setNameError] = useState<string | null>(null);
 
   const submit = (event: React.FormEvent<HTMLFormElement>) => {
@@ -239,6 +241,9 @@ function NewPersonForm({
           </p>
         )}
       </div>
+      {team.everyoneLeads ? (
+        <p className="text-sm text-muted-foreground">Everyone placed in a {team.kind} leads it, so they&apos;ll be a leader.</p>
+      ) : (
       <fieldset className="grid gap-2">
         <legend className="mb-2 text-sm font-medium">Role</legend>
         <div className="flex flex-wrap gap-x-5 gap-y-2">
@@ -257,6 +262,7 @@ function NewPersonForm({
           ))}
         </div>
       </fieldset>
+      )}
       <p className="text-sm text-muted-foreground">New people have no login until you give them one.</p>
       <div>
         <Button type="submit" disabled={pending}>

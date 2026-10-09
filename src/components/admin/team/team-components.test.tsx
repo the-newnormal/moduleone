@@ -33,6 +33,7 @@ const TEAM: TeamSummary = {
   typeLabel: null,
   note: null,
   archived: false,
+  everyoneLeads: false,
 };
 const DOMAIN: TeamSummary = {
   ...TEAM,
@@ -129,6 +130,12 @@ describe("PeopleSection", () => {
     expect(text(html)).toContain("Only the project owner places people in the organisation");
   });
 
+  it("offers no Make member where everyone leads (a division once 0006 is live)", () => {
+    const html = render({ ...DIVISION, everyoneLeads: true });
+    expect(row(html, "Leo Tan")).not.toContain("Make member");
+    expect(row(render(DIVISION), "Leo Tan")).toContain("Make member (Leo Tan)");
+  });
+
   it("says who gave a login and when", () => {
     expect(row(render(), "Mei Wong")).toContain("Login given by Hana Lim on 9 Oct 2026");
   });
@@ -204,6 +211,14 @@ describe("AddPeoplePanel", () => {
     expect(text(html)).toContain("Member Leader");
     expect(text(html)).not.toContain("Master Admin");
     expect(text(html)).toContain("New people have no login until you give them one.");
+  });
+
+  it("offers no role where everyone leads, and says they'll be a leader (a division once 0006 is live)", () => {
+    const html = renderToStaticMarkup(
+      <AddPeoplePanel team={{ ...DIVISION, everyoneLeads: true }} candidates={CANDIDATES} actions={actions} onDone={() => {}} />,
+    );
+    expect(count(html, /type="radio"/g)).toBe(0);
+    expect(text(html)).toContain("Everyone placed in a division leads it, so they'll be a leader.");
   });
 });
 
