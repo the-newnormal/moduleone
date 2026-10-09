@@ -388,20 +388,18 @@ describe("removeResetRecordings", () => {
     expect(calls).toContainEqual({ table: "checkin_resets", op: "in", args: ["id", ["r1", "r2"]] });
   });
 
-  it("never removes a file a check-in or draft points at, and leaves its row pending", async () => {
+  it("never removes a file a check-in or draft points at, and still stamps its row so the queue moves on", async () => {
     inUse = { checkin_drafts: [B] };
     await expect(removeResetRecordings()).resolves.toEqual({ removed: 1 });
     expect(remove).toHaveBeenCalledExactlyOnceWith([A]);
-    // r1 (only A) is done; r2 (A and B) keeps B, so it stays unstamped.
-    expect(calls).toContainEqual({ table: "checkin_resets", op: "in", args: ["id", ["r1"]] });
-    expect(calls).not.toContainEqual({ table: "checkin_resets", op: "in", args: ["id", ["r1", "r2"]] });
+    expect(calls).toContainEqual({ table: "checkin_resets", op: "in", args: ["id", ["r1", "r2"]] });
   });
 
-  it("stamps nothing when every file is in use", async () => {
+  it("removes nothing, but stamps the rows, when every file is in use", async () => {
     inUse = { checkins: [A, B] };
     await expect(removeResetRecordings()).resolves.toEqual({ removed: 0 });
     expect(remove).not.toHaveBeenCalled();
-    expect(calls.some((call) => call.op === "update")).toBe(false);
+    expect(calls).toContainEqual({ table: "checkin_resets", op: "in", args: ["id", ["r1", "r2"]] });
   });
 
   it("asks for a small batch, so its file filters stay well inside URL limits", async () => {

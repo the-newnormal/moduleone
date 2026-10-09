@@ -127,5 +127,65 @@ begin
       returning r.id, r.audio_paths;
 end $$;
 
+-- ---------- a deleted recording never comes back ----------
+-- 0004's save_checkin_draft, plus one check: a take whose file a Master Admin deleted can't be
+-- saved as a draft again. Without it, a save of the old take that arrives after a reset (a retry
+-- from another tab, or a slow request) would bring back the recording the admin deleted, and the
+-- file would then be in use again, so the daily retry couldn't remove it. Grants carry over (0004).
+create or replace function save_checkin_draft(
+  p_member_id uuid, p_audio_path text, p_mime_type text, p_duration_ms int, p_recorded_at timestamptz default null
+)
+  returns text
+  language plpgsql set search_path = '' as $$
+declare
+  v_week date := (date_trunc('week', now() at time zone 'Asia/Singapore'))::date;
+  -- Unknown counts as earliest, so any take with a time replaces it.
+  v_recorded timestamptz := least(coalesce(p_recorded_at, '-infinity'), now());
+  v_old text;
+  v_old_recorded timestamptz;
+begin
+  -- Only a take made for this week ('<member_id>/<yyyy-mm-dd>-…', as the server names it), and
+  -- never a file a check-in already uses. The app checks the week too, but on its own clock: a
+  -- request that crosses Sunday midnight would otherwise turn an old take, or a submitted check-in's
+  -- recording, into next week's draft, which housekeeping later deletes.
+  if not starts_with(p_audio_path, p_member_id::text || '/' || to_char(v_week, 'YYYY-MM-DD') || '-')
+     or exists (select 1 from public.checkins c where c.audio_path = p_audio_path) then
+    raise exception using errcode = 'P0001', message = 'bad_path';
+  end if;
+  -- Serialise this member's draft changes for the week (also covers the no-draft-yet case).
+  perform pg_advisory_xact_lock(hashtextextended(p_member_id::text || v_week::text, 0));
+  -- Never a file a Master Admin deleted (0007): a save that arrives after the reset (retried, or
+  -- slow) must not bring the recording back as a draft. Checked under the lock, which the reset
+  -- takes too, so a reset in progress has committed (or not) by now.
+  if exists (select 1 from public.checkin_resets r where r.audio_paths @> array[p_audio_path]) then
+    raise exception using errcode = 'P0001', message = 'bad_path';
+  end if;
+  if exists (select 1 from public.checkins c where c.member_id = p_member_id and c.week_start = v_week) then
+    raise exception using errcode = 'P0001', message = 'already_submitted';
+  end if;
+  select d.audio_path, d.recorded_at into v_old, v_old_recorded
+    from public.checkin_drafts d
+    where d.member_id = p_member_id and d.week_start = v_week;
+  if v_old <> p_audio_path then
+    if p_recorded_at is null then
+      raise exception using errcode = 'P0001', message = 'unknown_order';
+    elsif v_old_recorded > v_recorded then
+      raise exception using errcode = 'P0001', message = 'newer_draft';
+    end if;
+  end if;
+  insert into public.checkin_drafts (member_id, week_start, audio_path, mime_type, duration_ms, recorded_at)
+    values (p_member_id, v_week, p_audio_path, p_mime_type, p_duration_ms, v_recorded)
+    on conflict (member_id, week_start) do update
+      set audio_path = excluded.audio_path,
+          mime_type = excluded.mime_type,
+          duration_ms = excluded.duration_ms,
+          recorded_at = excluded.recorded_at,
+          created_at = now();
+  return case when v_old is distinct from p_audio_path then v_old end;
+end $$;
+
+-- save_checkin_draft looks paths up here.
+create index checkin_resets_audio_paths on checkin_resets using gin (audio_paths);
+
 revoke execute on function hq_delete_checkin_recording(uuid), hq_reset_checkin(uuid) from public, anon;
 grant execute on function hq_delete_checkin_recording(uuid), hq_reset_checkin(uuid) to authenticated;

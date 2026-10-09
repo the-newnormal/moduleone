@@ -145,10 +145,11 @@ export async function deleteExpiredRecordings(): Promise<{ deleted: number } | n
 
 // A Master Admin's delete or reset (0007) whose files Storage didn't delete at the time stays on
 // checkin_resets without files_removed_at. Each daily run retries them, oldest first, then stamps
-// the rows whose files are all gone. A file a check-in or draft points at again is never removed
-// (the server names takes with a fresh UUID, so this shouldn't happen; checked anyway), and its row
-// stays unstamped. Up to 2 paths of ~90 characters a row, so 20 rows keep the .in() filters near
-// the 3.7 kB the dashboard's TEAM_BATCH allows.
+// them. A logged file can't become a draft or check-in again (save_checkin_draft refuses it, 0007),
+// so none should be in use; if one is anyway, it is left alone (it belongs to a live recording
+// now, whose own lifecycle deletes it) and its row is stamped too, so it can't hold up the queue.
+// Up to 2 paths of ~90 characters a row, so 20 rows keep the .in() filters near the 3.7 kB the
+// dashboard's TEAM_BATCH allows.
 const RESET_BATCH = 20;
 
 export async function removeResetRecordings(): Promise<{ removed: number } | null> {
@@ -189,12 +190,14 @@ export async function removeResetRecordings(): Promise<{ removed: number } | nul
         return null;
       }
     }
-    const done = rows.filter((row) => row.audio_paths.every((path) => !inUse.has(path))).map((row) => row.id);
-    if (done.length === 0) return { removed: remove.length };
+    if (inUse.size > 0) console.error("removeResetRecordings: a deleted recording is in use again", { count: inUse.size });
     const { error: stampError } = await admin
       .from("checkin_resets")
       .update({ files_removed_at: new Date().toISOString() })
-      .in("id", done);
+      .in(
+        "id",
+        rows.map((row) => row.id),
+      );
     if (stampError) {
       console.error("removeResetRecordings: stamping the log failed", { code: stampError.code });
       return null;

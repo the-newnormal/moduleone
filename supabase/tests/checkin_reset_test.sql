@@ -9,7 +9,7 @@
 --   m4      member, a scored check-in from before 0004 (never submitted through the app), with a
 --           recording
 begin;
-select plan(50);
+select plan(51);
 
 -- ---------- fixtures ----------
 insert into auth.users (id, email) values
@@ -204,6 +204,11 @@ reset role;
 
 -- ---------- after a reset, the member records the week again ----------
 set local role service_role;
+select throws_ok(
+  format($$select save_checkin_draft('d7c00000-0000-4000-8000-000000000003', %L, 'audio/webm', 30000, now())$$,
+         pg_temp.take('d7c00000-0000-4000-8000-000000000003', pg_temp.this_week(), 'm2.webm')),
+  'P0001', 'bad_path', 'a late save of the take the reset deleted cannot bring it back as a draft'
+);
 select is(
   save_checkin_draft('d7c00000-0000-4000-8000-000000000003', pg_temp.take('d7c00000-0000-4000-8000-000000000003', pg_temp.this_week(), 'again.webm'), 'audio/webm', 30000, now()),
   null, 'a reset member can save a new take this week'
