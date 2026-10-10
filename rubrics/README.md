@@ -315,13 +315,13 @@ short follow-up questions appear on screen as they talk.
    stay open longer than the key below lasts), the browser asks the server for a live session; a
    refused microphone starts none. The server checks live check-ins are on, `coach.md` can be
    used, the member has accepted the current privacy notice and hasn't submitted this week, and
-   they have started fewer than 12 sessions in 24 hours. It then creates
-   the session and gets a short-lived OpenAI key, which can be used to connect for 30 seconds (a
-   session that has connected carries on after it expires). Until it expires, a member who dug the
-   key out of their browser could open more than one transcription session with it, on Normal's
-   OpenAI bill: [#34](https://github.com/the-newnormal/moduleone/issues/34) tracks this, and the
-   planned containment is a separate OpenAI project with a budget. The opening question from
-   `coach.md` is shown:
+   they have started fewer than 12 sessions in 24 hours. It then creates the session and gets a
+   short-lived OpenAI key, which can be used to connect for 30 seconds (a session that has
+   connected carries on after it expires). Until it expires, a member who dug the key out of their
+   browser could open more than one transcription session with it, on Normal's OpenAI bill:
+   [#34](https://github.com/the-newnormal/moduleone/issues/34) tracks this, and the planned
+   containment is a separate OpenAI project with a budget. The opening question from `coach.md`
+   is on screen from before Start is pressed:
    *"Talk me through your week: what you worked on, what came of it, and how you're feeling about
    the team."*
 2. **Live text.** While the recording runs as usual, the browser sends a copy of the microphone to
