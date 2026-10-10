@@ -131,11 +131,12 @@ the three fixed questions until it's fixed.
 ### Fingerprints: which version graded what
 
 Every grade stores a **fingerprint** in `checkins.rubric_version`: the first 12 characters of a
-SHA-256 hash of the whole grading request apart from the transcript: the system prompt (the fixed
-rules and `grading.md`'s sections, as the app builds them), the reply schema
-(`GRADE_JSON_SCHEMA`), the user message the transcript is wrapped in, and the thinking effort
-(`graderInstructions` in [`src/lib/grader/prompt.ts`](../src/lib/grader/prompt.ts)). The model
-isn't in it; it is stored on its own, in `checkins.grader_model`. Every live session stores the
+SHA-256 hash of the parts of the grading request that can change a grade, apart from the
+transcript and the model: the system prompt (the fixed rules and `grading.md`'s sections, as the
+app builds them), the reply schema (`GRADE_JSON_SCHEMA`), the user message the transcript is
+wrapped in, and the thinking effort (`graderInstructions` in
+[`src/lib/grader/prompt.ts`](../src/lib/grader/prompt.ts)). The model is stored on its own, in
+`checkins.grader_model`. Every live session stores the
 coach's fingerprint in `live_checkin_sessions.coach_rubric`: a hash of the coach's system prompt
 plus everything read from `coach.md` (every topic, weight, setting, question and closing line),
 with the model in `coach_model`. So:
@@ -340,8 +341,8 @@ short follow-up questions appear on screen as they talk.
    - its suggestion: the topic most worth asking next, its own wording for the question, and the
      member's exact words that wording quotes, if any.
 
-   Claude is sent only the text so far and the ids of topics already asked or skipped. It never
-   sees the weights or settings.
+   Claude is sent only the text so far and the ids of topics already asked or skipped, with its
+   instructions. It never sees the weights or settings, apart from "Longest question".
 5. **The policy decides.** Plain code ([`src/lib/coach/policy.ts`](../src/lib/coach/policy.ts))
    adds the read to what it knew (each topic keeps the highest level any read gave it; the mood
    only ever gets heavier) and picks the next thing to show: a question, a closing line, or
