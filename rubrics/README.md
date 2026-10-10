@@ -74,15 +74,17 @@ the three fixed questions until it's fixed.
 
 ### Rules for `grading.md`
 
-- Keep the sections `## Activity`, `## Excellence` and `## Morale`. Each starts with a line saying
-  what it is about, then exactly five levels written together, one per line: `- 1: …` to `- 5: …`
-  (`- 1 = …`, `- 1. …` and `- 1) …` work too). Anything after the levels is sent to Claude as well.
+- Keep the sections `## Activity`, `## Excellence` and `## Morale`, together, one after another:
+  Claude is sent them as one block, so a section between them is refused. Each starts with a line
+  saying what it is about, then exactly five levels written together, one per line: `- 1: …` to
+  `- 5: …` (`- 1 = …`, `- 1. …` and `- 1) …` work too). Anything after the levels is sent to
+  Claude as well.
 - Keep `## Themes` with exactly these five, each as `- name: meaning`: `delivery`,
   `collaboration`, `growth`, `wellbeing`, `blockers`. Reword the meanings freely; the names are
   fixed (the database accepts only these).
 - Keep `## Review`, and don't leave it empty.
 - Any other `## …` section is sent to Claude as extra guidance, in the order it appears. It must
-  not be empty, and must stay under 4,000 characters. (Today these are "How to score",
+  not be empty, and must be at most 4,000 characters. (Today these are "How to score",
   "Unanswered questions" and "Singapore English".)
 - Every piece of text must sit inside a `## ` section. Text under the `# Grading rubric` title, or
   after a heading typed with one `#`, would never reach Claude, so it is refused. Use a note
