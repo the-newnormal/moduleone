@@ -156,12 +156,15 @@ export function acknowledge(state: CoachState, id: number, rubric: CoachRubric):
   if (offer.kind === "question" && offer.topic) {
     const topic = rubric.topics.find((t) => t.id === offer.topic);
     if (!topic || seen(state, topic.id)) return next;
+    // The question that replaces a skipped one keeps the run of skips going; any other starts it again.
+    const replaced = state.offers.find((o) => o.id === state.current)?.topic;
+    const afterSkip = replaced != null && state.skipped.includes(replaced);
     return {
       ...next,
       asked: [...state.asked, topic.id],
       followUps: state.followUps + 1,
       perArea: { ...state.perArea, [topic.area]: areaCount(state, topic.area) + 1 },
-      skipsInARow: 0,
+      skipsInARow: afterSkip ? state.skipsInARow : 0,
       linesShown: offer.beforeYouFinish ? [...state.linesShown, "beforeYouFinish"] : state.linesShown,
       counts: {
         ...state.counts,
