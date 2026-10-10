@@ -74,8 +74,9 @@ the three fixed questions until it's fixed.
 
 ### Rules for `grading.md`
 
-- Keep the sections `## Activity`, `## Excellence` and `## Morale`, together, one after another:
-  Claude is sent them as one block, so a section between them is refused. Each starts with a line
+- Keep the sections `## Activity`, `## Excellence` and `## Morale`, together and in that order:
+  Claude is sent them as one block in that order, so a section between them, or a different order,
+  is refused. Each starts with a line
   saying what it is about, then exactly five levels written together, one per line: `- 1: …` to
   `- 5: …` (`- 1 = …`, `- 1. …` and `- 1) …` work too). Anything after the levels is sent to
   Claude as well.

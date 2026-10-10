@@ -39,8 +39,8 @@ const LEVEL_ISH = /^-\s*\d/;
 const MAX_TEXT = 4000;
 
 
-const SCORING_APART =
-  'Keep "## Activity", "## Excellence" and "## Morale" together, one after another: Claude is sent them as one block, so a section between them would be moved.';
+const SCORING_BLOCK =
+  'Keep "## Activity", "## Excellence" and "## Morale" together, in that order: Claude is sent them as one block in that order, so a section between them, or a different order, would not reach Claude as written.';
 
 export function parseGradingRubric(source: string, file = GRADING_RUBRIC_FILE): GradingRubric {
   const problems: string[] = [];
@@ -78,18 +78,25 @@ export function parseGradingRubric(source: string, file = GRADING_RUBRIC_FILE): 
   const fixed = new Set(["activity", "excellence", "morale", "themes", "review"]);
   const guidance = sections.filter((s) => !fixed.has(s.heading.toLowerCase()));
   const layout: GradingRubric["layout"] = [];
+  // The three are sent as one block, in QUESTIONS order, so a section between them would be moved
+  // and a different order ignored.
+  const scoringOrder = QUESTIONS.map((q) => q.id as string);
+  let lastScoring = -1;
+  let scoringAsSent = true;
   for (const section of sections) {
     const key = section.heading.toLowerCase();
     if (key === "activity" || key === "excellence" || key === "morale") {
       if (!layout.includes("scoring")) layout.push("scoring");
-      // The three are sent as one block, so a section between them would be moved after them.
-      else if (layout.at(-1) !== "scoring" && !problems.includes(SCORING_APART)) problems.push(SCORING_APART);
+      else if (layout.at(-1) !== "scoring") scoringAsSent = false;
+      if (scoringOrder.indexOf(key) < lastScoring) scoringAsSent = false;
+      lastScoring = scoringOrder.indexOf(key);
     } else if (key === "themes" || key === "review") {
       if (!layout.includes(key)) layout.push(key);
     } else {
       layout.push(guidance.indexOf(section));
     }
   }
+  if (!scoringAsSent) problems.push(SCORING_BLOCK);
   for (const section of guidance) {
     if (!section.heading) problems.push('A "##" heading has no name.');
     if (!section.body) problems.push(`The section "## ${section.heading}" is empty.`);

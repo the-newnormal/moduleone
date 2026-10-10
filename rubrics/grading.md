@@ -6,8 +6,8 @@ grades a check-in. Change the wording here and every check-in graded after the c
 deployed uses the new wording. Read README.md in this folder before editing.
 
 The rules for this file (a test checks them on every pull request):
-- Keep the three sections "## Activity", "## Excellence" and "## Morale", together, one after
-  another. Each needs exactly five levels, written "- 1: ...", "- 2: ...", up to "- 5: ...". Anything else in the section
+- Keep the three sections "## Activity", "## Excellence" and "## Morale", together and in that
+  order. Each needs exactly five levels, written "- 1: ...", "- 2: ...", up to "- 5: ...". Anything else in the section
   (the line before the levels, notes after them) is sent to Claude too.
 - Keep "## Themes" with exactly these five themes: delivery, collaboration, growth, wellbeing,
   blockers. You can reword what each means; the names themselves are fixed (the database only

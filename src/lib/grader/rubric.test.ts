@@ -210,7 +210,17 @@ describe("parseGradingRubric refuses a broken file, saying what is wrong", () =>
       "an extra section between the scoring sections",
       () => editSection("Excellence", (section) => `\n## Examples\n\nA member who says "settled the Jurong vendor onboarding" has described specific work.\n${section}`),
       [
-        'Keep "## Activity", "## Excellence" and "## Morale" together, one after another: Claude is sent them as one block, so a section between them would be moved.',
+        'Keep "## Activity", "## Excellence" and "## Morale" together, in that order: Claude is sent them as one block in that order, so a section between them, or a different order, would not reach Claude as written.',
+      ],
+    ],
+    [
+      "the scoring sections in a different order",
+      () => {
+        const morale = /\n## Morale\n[\s\S]*?(?=\n## )/.exec(gradingFile)![0];
+        return gradingFile.replace(morale, "").replace("\n## Excellence\n", `${morale}\n\n## Excellence\n`);
+      },
+      [
+        'Keep "## Activity", "## Excellence" and "## Morale" together, in that order: Claude is sent them as one block in that order, so a section between them, or a different order, would not reach Claude as written.',
       ],
     ],
     [
@@ -220,7 +230,7 @@ describe("parseGradingRubric refuses a broken file, saying what is wrong", () =>
         return gradingFile.replace(themes, "").replace("\n## Morale\n", `${themes}\n\n## Morale\n`);
       },
       [
-        'Keep "## Activity", "## Excellence" and "## Morale" together, one after another: Claude is sent them as one block, so a section between them would be moved.',
+        'Keep "## Activity", "## Excellence" and "## Morale" together, in that order: Claude is sent them as one block in that order, so a section between them, or a different order, would not reach Claude as written.',
       ],
     ],
     [
