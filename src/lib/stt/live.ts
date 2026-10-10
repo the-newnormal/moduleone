@@ -17,6 +17,10 @@ export const REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
 // The short-lived key is used here at once, for the one offer, and thrown away.
 const KEY_TTL_SECONDS = 30;
 const TIMEOUT_MS = 10_000;
+// The whole of openLiveTranscription (the key, its one retry and the offer) gets this long: less than
+// the browser waits for the connection (CONNECT_TIMEOUT_MS, 8 s, in pacing.ts), so the server gives
+// up before the recorder has moved on to the fixed questions and never opens a session after that.
+export const CONNECT_DEADLINE_MS = 6_000;
 // An SDP answer is a few kilobytes; anything far bigger isn't one.
 const MAX_ANSWER_CHARS = 64 * 1024;
 
@@ -70,15 +74,16 @@ export async function mintLiveTranscriptionKey(signal?: AbortSignal): Promise<Li
 // with it, server to server. Returns OpenAI's SDP answer for the browser. Throws
 // LiveTranscriptionError; nothing here logs the offer or the answer.
 export async function openLiveTranscription(offer: string, signal?: AbortSignal): Promise<string> {
-  const key = await mintLiveTranscriptionKey(signal);
-  const timeout = AbortSignal.timeout(TIMEOUT_MS);
+  const deadline = AbortSignal.timeout(CONNECT_DEADLINE_MS);
+  const within = signal ? AbortSignal.any([signal, deadline]) : deadline;
+  const key = await mintLiveTranscriptionKey(within);
   let response: Response;
   try {
     response = await fetch(REALTIME_CALLS_URL, {
       method: "POST",
       body: offer,
       headers: { Authorization: `Bearer ${key.value}`, "Content-Type": "application/sdp", Accept: "application/sdp" },
-      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      signal: within,
       cache: "no-store",
     });
   } catch (error) {

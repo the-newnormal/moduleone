@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LiveTranscriptionError, mintLiveTranscriptionKey, openLiveTranscription, REALTIME_CALLS_URL } from "./live";
+import { CONNECT_TIMEOUT_MS } from "@/app/portal/checkin/live/pacing";
+import { CONNECT_DEADLINE_MS, LiveTranscriptionError, mintLiveTranscriptionKey, openLiveTranscription, REALTIME_CALLS_URL } from "./live";
 
 // The OpenAI SDK calls the global fetch, so each test answers its requests here: no network.
 type Call = { url: string; method: string; headers: Headers; body: unknown; signal?: AbortSignal | null };
@@ -207,6 +208,31 @@ describe("openLiveTranscription", () => {
     const error = await openLiveTranscription(OFFER).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(LiveTranscriptionError);
     expect((error as LiveTranscriptionError).config).toBe(false);
+  });
+
+  it("gives the key and the offer one deadline, shorter than the browser waits, so it never connects after the browser gave up", async () => {
+    expect(CONNECT_DEADLINE_MS).toBeLessThan(CONNECT_TIMEOUT_MS);
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    await openLiveTranscription(OFFER);
+    expect(timeout).toHaveBeenCalledWith(CONNECT_DEADLINE_MS);
+    // Both requests stop when that deadline passes.
+    const deadline = timeout.mock.results.find((r, i) => timeout.mock.calls[i][0] === CONNECT_DEADLINE_MS)!.value as AbortSignal;
+    expect(calls).toHaveLength(2);
+    for (const call of calls) expect(call.signal).toBeInstanceOf(AbortSignal);
+    expect(calls[1].signal).toBe(deadline);
+  });
+
+  it("gives up once the deadline has passed", async () => {
+    vi.spyOn(AbortSignal, "timeout").mockImplementation(() => AbortSignal.abort(new DOMException("Timed out", "TimeoutError")));
+    respond = (call) =>
+      call.url === REALTIME_CALLS_URL
+        ? new Promise((_resolve, reject) => {
+            if (call.signal?.aborted) reject(call.signal.reason);
+            call.signal?.addEventListener("abort", () => reject(call.signal?.reason));
+          })
+        : json(200, SECRET);
+    const error = await openLiveTranscription(OFFER).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(LiveTranscriptionError);
   });
 
   it("stops when the caller stops", async () => {
