@@ -185,6 +185,73 @@ describe("the camera", () => {
     vi.unstubAllGlobals();
   });
 
+  it("keeps the reason and the way round after a take without it comes to nothing", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    devices(async () => {
+      throw new DOMException("blocked", "NotAllowedError");
+    }, "denied");
+    const { Recorder } = await load();
+    const page = await render(<Recorder />);
+    await turnOnCamera();
+    await click(button("Record without camera"));
+    await settle();
+    await finish();
+    await act(async () => FakeRecorder.last?.onstop?.()); // no chunks: nothing was recorded
+    await settle();
+    expect(text(page.container)).toContain("Nothing was recorded.");
+    expect(text(page.container)).toContain("Camera access is blocked.");
+    expect(button("Record without camera")).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
+
+  it("says when the computer blocks the microphone, or its question was closed", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    let micError = new DOMException("Permission denied by system", "NotAllowedError");
+    const { getUserMedia } = devices(async () => {
+      throw new DOMException("none", "NotFoundError");
+    });
+    getUserMedia.mockImplementation(async (constraints: MediaStreamConstraints) => {
+      throw constraints.video ? new DOMException("none", "NotFoundError") : micError;
+    });
+    const { Recorder } = await load();
+    const page = await render(<Recorder />);
+    await turnOnCamera();
+    await click(button("Record without camera"));
+    await settle();
+    expect(text(page.container)).toContain("Your computer doesn't let this browser use the microphone.");
+    expect(text(page.container)).not.toContain("Allow it for this site");
+    micError = new DOMException("Permission dismissed", "NotAllowedError");
+    await click(button("Record without camera"));
+    await settle();
+    expect(text(page.container)).toContain("The microphone question was closed. Try again, and choose Allow when asked.");
+    vi.unstubAllGlobals();
+  });
+
+  it("goes back to the card when it goes away while the browser asks about the microphone", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    const lens = fakeTrack();
+    const camera = cameraStream(lens);
+    let allowMic: (stream: unknown) => void = () => {};
+    const { microphone, getUserMedia } = devices(async () => camera);
+    getUserMedia.mockImplementation((constraints: MediaStreamConstraints) =>
+      constraints.video ? Promise.resolve(camera) : new Promise((resolve) => (allowMic = resolve)),
+    );
+    const { Recorder } = await load();
+    const page = await render(<Recorder />);
+    await turnOnCamera();
+    const before = FakeRecorder.last;
+    await click(button("Start recording")); // the browser asks about the microphone
+    await lens.fire("ended"); // unplugged meanwhile
+    await act(async () => allowMic(microphone));
+    await settle();
+    expect(FakeRecorder.last).toBe(before); // no take began
+    expect(microphone.getTracks()[0].stop).toHaveBeenCalled(); // and the microphone was let go
+    expect(text(page.container)).toContain("Your camera stopped before the recording began.");
+    expect(button("Turn on my camera")).toBeTruthy();
+    expect(button("Record without camera")).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
+
   it("comes on by itself where the browser allows it without asking", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     const camera = cameraStream();

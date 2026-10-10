@@ -25,6 +25,7 @@ const SUPERSEDED =
   "You'd already saved a newer recording, on another device or tab, so this one wasn't kept. Your draft is the newer one.";
 const AWAY = "Your phone may have paused the recording while you were away. Listen back before you submit.";
 const CAMERA_ASKING = "If your browser asks about the camera, answer it to go on. On a computer, it's by the address bar.";
+const CAMERA_STOPPED = "Your camera stopped before the recording began. Turn it on again, or record without it.";
 
 type State =
   | { step: "idle"; problem: string | null }
@@ -97,6 +98,14 @@ function cameraProblem(error: unknown): string {
 
 function microphoneProblem(error: unknown): string {
   const name = error instanceof Error ? error.name : "";
+  const message = error instanceof Error ? error.message : "";
+  // As for the camera: Chrome's words for the computer blocking the browser, and for a closed question.
+  if (name === "NotAllowedError" && message === "Permission denied by system") {
+    return "Your computer doesn't let this browser use the microphone. Allow it in your computer's privacy settings (on a Mac: System Settings, Privacy & Security, Microphone), then try again.";
+  }
+  if (name === "NotAllowedError" && message === "Permission dismissed") {
+    return "The microphone question was closed. Try again, and choose Allow when asked.";
+  }
   if (name === "NotAllowedError" || name === "SecurityError") {
     return "Microphone access is blocked. Allow it for this site in your browser's settings, then try again.";
   }
@@ -375,10 +384,11 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
     return outcome;
   }
 
+  // The camera note is left as it is: null while the camera was on, and the camera's problem after a
+  // take recorded without it, so that take ends with the reason and Record without camera still there.
   function turnCameraOff() {
     closeCamera(camera);
     setMirror(null);
-    setCameraNote(null);
   }
 
   // ask: the member pressed Turn on my camera, so the browser may ask them. Otherwise the camera is
@@ -469,6 +479,13 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
     if (attempt !== startCount.current) {
       stream.getTracks().forEach((track) => track.stop());
       return;
+    }
+    // The camera went away while the browser asked about the microphone: the take hasn't begun, so
+    // the member turns the camera on again, or chooses to record without it.
+    if (!withoutCamera && !camera.current.stream) {
+      stream.getTracks().forEach((track) => track.stop());
+      setCameraNote({ problem: CAMERA_STOPPED });
+      return setState({ step: "idle", problem: null });
     }
 
     let recorder: MediaRecorder;
