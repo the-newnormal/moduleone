@@ -54,6 +54,22 @@ describe("LivePrompt", () => {
     expect(onFinish).toHaveBeenCalledOnce();
   });
 
+  it("reads light on dark when laid over the member's camera", async () => {
+    await render(prompt({ offer: FOLLOW_UP, canSkip: true, touched: { activity: true, excellence: false, morale: false }, onStage: true }));
+    expect(button("Finish").className).toContain("bg-white");
+    expect(button("Different question").className).toContain("text-white");
+    expect(document.querySelectorAll("li")[1].firstElementChild?.className).toContain("text-white/80"); // "Not yet"
+    expect(document.querySelector("p")?.className).toContain("text-white/75");
+  });
+
+  it("shows only the question and Finish when no follow-ups are coming", async () => {
+    await render(prompt({ touched: null }));
+    expect(document.querySelector("h3")?.textContent).toBe(OPENING.text);
+    expect(text()).not.toContain("a follow-up may appear");
+    expect(document.querySelector("ul")).toBeNull();
+    expect([...document.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Finish"]);
+  });
+
   it("drops the how-to line for a closing line", async () => {
     await render(prompt({ offer: COVERED }));
     expect(document.querySelector("h3")?.textContent).toBe(COVERED.text);

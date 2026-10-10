@@ -19,7 +19,7 @@ const KEY_TTL_SECONDS = 30;
 const TIMEOUT_MS = 10_000;
 // The whole of openLiveTranscription (the key, its one retry and the offer) gets this long: less than
 // the browser waits for the connection (CONNECT_TIMEOUT_MS, 8 s, in pacing.ts), so the server gives
-// up before the recorder has moved on to the fixed questions and never opens a session after that.
+// up before the recorder has given up on follow-ups and never opens a session after that.
 export const CONNECT_DEADLINE_MS = 6_000;
 // An SDP answer is a few kilobytes; anything far bigger isn't one.
 const MAX_ANSWER_CHARS = 64 * 1024;

@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { noticeSections } from "@/lib/checkin/notice";
 import { processCheckin } from "@/lib/checkin/process";
+import { DEFAULT_OPENING_QUESTION, QUESTIONS } from "@/lib/checkin/week";
 import { coachRubric } from "@/lib/coach/rubric";
 import { RubricError } from "@/lib/rubrics/markdown";
 import { createClient } from "@/lib/supabase/server";
@@ -144,7 +145,7 @@ describe("/portal/checkin", () => {
     reads.members = { data: null, error: null };
     const html = await render();
     expect(html).toContain("Your account isn&#x27;t set up yet. Ask HQ.");
-    expect(html).not.toContain("Start recording");
+    expect(html).not.toContain("Turn on my camera");
     expect(queries.map((q) => q.table)).toEqual(["members"]);
     expect(after).not.toHaveBeenCalled();
   });
@@ -154,7 +155,7 @@ describe("/portal/checkin", () => {
     const html = await render();
     for (const { heading } of noticeSections()) expect(html).toContain(heading);
     expect(html).toContain("I understand, continue");
-    expect(html).not.toContain("Start recording");
+    expect(html).not.toContain("Turn on my camera");
   });
 
   it("looks for the notice accepted with this login, not the member row's earlier one", async () => {
@@ -167,40 +168,42 @@ describe("/portal/checkin", () => {
     );
   });
 
-  it("shows the recorder when there's nothing yet", async () => {
+  it("shows the recorder when there's nothing yet, with the one open question", async () => {
     const html = await render();
-    expect(html).toContain("Start recording");
-    expect(html).toContain("What have you done this week?");
-    expect(html).toContain("Where did you / your team use your superpower?");
-    expect(html).toContain("How are you feeling about the team?");
+    expect(html).toContain("Turn on my camera"); // they record looking at themselves, so the camera comes first
+    expect(html).toContain(renderToStaticMarkup(coachRubric().opening));
+    for (const { text: question } of QUESTIONS) expect(html).not.toContain(renderToStaticMarkup(question));
   });
 
-  it("shows the three fixed questions while live check-ins are off", async () => {
+  it("asks the one open question, without follow-ups, while live check-ins are off", async () => {
     vi.stubEnv("LIVE_CHECKIN", "off");
     const html = await render();
-    expect(html).toContain("What have you done this week?");
-    expect(html).not.toContain(coachRubric().opening.slice(0, 20));
+    expect(html).toContain(renderToStaticMarkup(coachRubric().opening));
+    expect(html).toContain("There&#x27;s one question.");
     expect(html).not.toContain("We&#x27;ll start with one question");
+    expect(html).not.toContain("What have you done this week?");
   });
 
   it("starts with the coach's one open question while live check-ins are on", async () => {
     vi.stubEnv("LIVE_CHECKIN", "on");
     const html = await render();
-    expect(html).toContain("Start recording");
+    expect(html).toContain("Turn on my camera");
     expect(html).toContain("We&#x27;ll start with one question");
     expect(html).toContain(renderToStaticMarkup(coachRubric().opening));
     expect(html).not.toContain("What have you done this week?");
   });
 
-  it("falls back to the fixed questions when rubrics/coach.md can't be used", async () => {
+  it("asks the built-in opening question, without follow-ups, when rubrics/coach.md can't be used", async () => {
     vi.stubEnv("LIVE_CHECKIN", "on");
     vi.mocked(coachRubric).mockImplementationOnce(() => {
       throw new RubricError("rubrics/coach.md", ['"## Opening question" is missing.']);
     });
     const html = await render();
-    expect(html).toContain("Start recording");
-    expect(html).toContain("What have you done this week?");
+    expect(html).toContain("Turn on my camera");
+    expect(html).toContain(renderToStaticMarkup(DEFAULT_OPENING_QUESTION));
+    expect(html).toContain("There&#x27;s one question.");
     expect(html).not.toContain("We&#x27;ll start with one question");
+    expect(html).not.toContain("What have you done this week?");
   });
 
   it("shows the draft with playback, its length and when it was recorded", async () => {
@@ -220,7 +223,7 @@ describe("/portal/checkin", () => {
     expect(html).toContain("Recorded Thursday 8 October at 11:30 am · 3 min 12 s");
     expect(html).toContain("Delete and record again");
     expect(html).toContain("Submit check-in");
-    expect(html).not.toContain("Start recording");
+    expect(html).not.toContain("Turn on my camera");
   });
 
   it("shows when the draft was saved when its recording time is unknown", async () => {
@@ -251,7 +254,7 @@ describe("/portal/checkin", () => {
       expect(html).not.toContain(secret);
     }
     expect(html).not.toMatch(/\b[1-5]\s*\/\s*5\b/);
-    expect(html).not.toContain("Start recording");
+    expect(html).not.toContain("Turn on my camera");
     expect(html).not.toContain("Submit check-in");
   });
 

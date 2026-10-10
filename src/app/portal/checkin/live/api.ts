@@ -1,6 +1,6 @@
 // The recorder's calls to the live check-in routes (contract.ts). Each answers null when the route
 // couldn't be reached or didn't answer as the contract says (signed out, the proxy redirecting to
-// /login, a new deployment, no network); the recorder then carries on with the fixed questions.
+// /login, a new deployment, no network); the recorder then carries on without follow-ups.
 // Error answers from the routes ({ status: "error", code }) come back as they are.
 
 import { AREAS, OFFER_KINDS } from "@/lib/coach/types";

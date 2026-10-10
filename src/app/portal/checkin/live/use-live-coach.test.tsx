@@ -190,10 +190,10 @@ describe("starting", () => {
     ["live check-ins are off", { status: "off" } as const],
     ["the route can't be reached", null],
     ["the member has no live session left today", { status: "error", code: "too_many_sessions" } as const],
-  ])("falls back to the fixed questions when %s", async (_label, response) => {
+  ])("carries on without follow-ups when %s", async (_label, response) => {
     const live = setup({ start: vi.fn(async () => response) });
     await live.record();
-    expect(live.view()).toEqual({ mode: "fallback" });
+    expect(live.view()).toMatchObject({ mode: "fallback", offer: { id: 0 } });
     expect(live.deps.connect).not.toHaveBeenCalled();
     expect(live.coach.stop()).toBeNull();
     expect(live.deps.end).not.toHaveBeenCalled();
@@ -216,7 +216,7 @@ describe("starting", () => {
     await advance(CONNECT_TIMEOUT_MS - 250);
     expect(live.view()?.mode).toBe("live");
     await advance(250);
-    expect(live.view()).toEqual({ mode: "fallback" });
+    expect(live.view()).toMatchObject({ mode: "fallback", offer: { id: 0 } });
     expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: 0, shown: 0 });
     expect(live.meterStopped).toHaveBeenCalled();
   });
@@ -225,7 +225,7 @@ describe("starting", () => {
     const live = setup({ meter: vi.fn(() => () => {}) });
     await live.record();
     await advance(METER_WAIT_MS);
-    expect(live.view()).toEqual({ mode: "fallback" });
+    expect(live.view()).toMatchObject({ mode: "fallback", offer: { id: 0 } });
   });
 
   it("ends a session that starts only after the take has ended", async () => {
@@ -322,6 +322,54 @@ describe("while they talk", () => {
     expect(live.view()).toMatchObject({ mode: "live", offer: QUESTION_1 });
   });
 
+  it.each([
+    ["shows its question instead", QUESTION_2, QUESTION_2],
+    ["shows nothing new when it finds nothing worth asking", null, { id: 0 }],
+  ] as const)("holds an offer back while a newer read, which has heard more, is out, then %s", async (_label, newerOffer, shown) => {
+    const newer = deferred<CoachResponse>();
+    const ask = vi.fn<LiveCoachDeps["ask"]>().mockResolvedValueOnce(ok(QUESTION_1)).mockImplementationOnce(() => newer.promise);
+    const live = setup({ ask });
+    await firstRead(live); // QUESTION_1 waits: too early for a follow-up
+    expect(live.view()).toMatchObject({ offer: { id: 0 } });
+    await live.speak(16_000);
+    live.say(MORE);
+    await live.pause(5000); // the second read is asked for and doesn't answer yet
+    expect(ask).toHaveBeenCalledTimes(2);
+    expect(live.view()).toMatchObject({ offer: { id: 0 } }); // not QUESTION_1, though its time has come
+    newer.resolve(ok(newerOffer));
+    await live.pause(500);
+    expect(live.view()).toMatchObject({ mode: "live", offer: shown });
+  });
+
+  it.each([
+    ["fails", async (_live: ReturnType<typeof setup>, newer: ReturnType<typeof deferred<CoachResponse>>) => newer.resolve({ status: "error", code: "unavailable" })],
+    ["never answers", async (live: ReturnType<typeof setup>) => live.pause(15_000)],
+    // Claude couldn't read the newest speech: its question comes from what was known before.
+    ["is degraded", async (_live: ReturnType<typeof setup>, newer: ReturnType<typeof deferred<CoachResponse>>) => newer.resolve(ok(QUESTION_2, true))],
+  ] as const)("drops an offer held back for a newer read that %s, rather than show it late", async (_label, end) => {
+    const newer = deferred<CoachResponse>();
+    const ask = vi.fn<LiveCoachDeps["ask"]>().mockResolvedValueOnce(ok(QUESTION_1)).mockImplementationOnce(() => newer.promise);
+    const live = setup({ ask });
+    await firstRead(live);
+    await live.speak(16_000);
+    live.say(MORE);
+    await live.pause(5000); // the second read is out
+    expect(ask).toHaveBeenCalledTimes(2);
+    await end(live, newer);
+    await live.pause(5000);
+    expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 } }); // QUESTION_1 never shown
+  });
+
+  it("keeps the follow-up on screen when live coaching stops", async () => {
+    const live = setup();
+    live.deps.ask.mockResolvedValueOnce(ok(QUESTION_1));
+    await firstRead(live);
+    await live.pause(2000);
+    expect(live.view()).toMatchObject({ mode: "live", offer: QUESTION_1 });
+    live.lose();
+    expect(live.view()).toEqual({ mode: "fallback", offer: QUESTION_1 });
+  });
+
   it("tells the coach which question is on screen", async () => {
     const live = setup();
     live.deps.ask.mockResolvedValueOnce(ok(QUESTION_1));
@@ -390,7 +438,7 @@ describe("falling back", () => {
     live.say(MORE);
     await live.pause(6000);
     expect(live.deps.ask).toHaveBeenCalledTimes(2);
-    expect(live.view()).toEqual({ mode: "fallback" });
+    expect(live.view()).toMatchObject({ mode: "fallback", offer: { id: 0 } });
     expect(live.connection.close).toHaveBeenCalledOnce();
     expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: expect.any(Number), shown: 0 });
     expect(live.coach.stop()).toBe(SESSION); // the take still records which session it was
@@ -416,14 +464,14 @@ describe("falling back", () => {
   it.each(["submitted", "session_over"] as const)("falls back at once when the session is %s", async (code) => {
     const live = setup({ ask: vi.fn(async () => ({ status: "error", code }) as const) });
     await firstRead(live);
-    expect(live.view()).toEqual({ mode: "fallback" });
+    expect(live.view()).toMatchObject({ mode: "fallback", offer: { id: 0 } });
   });
 
   it("falls back when the transcription connection is lost", async () => {
     const live = setup();
     await live.record();
     live.lose();
-    expect(live.view()).toEqual({ mode: "fallback" });
+    expect(live.view()).toMatchObject({ mode: "fallback", offer: { id: 0 } });
   });
 
   it("falls back when they keep talking and no text comes back", async () => {
@@ -433,17 +481,17 @@ describe("falling back", () => {
     await live.speak(NO_TEXT_WHILE_SPEAKING_MS - 1000);
     expect(live.view()?.mode).toBe("live");
     await live.speak(1500);
-    expect(live.view()).toEqual({ mode: "fallback" });
+    expect(live.view()).toMatchObject({ mode: "fallback", offer: { id: 0 } });
   });
 
-  it("stays on the fixed questions for the rest of the take", async () => {
+  it("stays without follow-ups for the rest of the take", async () => {
     const live = setup({ ask: vi.fn(async () => ({ status: "error", code: "submitted" }) as const) });
     await firstRead(live);
     await live.speak(3000);
     live.say(MORE);
     await live.pause(10_000);
     expect(live.deps.ask).toHaveBeenCalledOnce();
-    expect(live.view()).toEqual({ mode: "fallback" });
+    expect(live.view()).toMatchObject({ mode: "fallback", offer: { id: 0 } });
   });
 });
 
@@ -516,7 +564,7 @@ describe("finishing", () => {
     const live = setup();
     await live.record();
     live.lose();
-    expect(live.view()).toEqual({ mode: "fallback" });
+    expect(live.view()).toMatchObject({ mode: "fallback", offer: { id: 0 } });
     live.coach.stop();
     await live.record();
     expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 } });
@@ -588,10 +636,10 @@ describe("useLiveCoach", () => {
       useEffect(() => {
         coach = c;
       }, [c]);
-      return <p>{view === null ? "fixed questions" : "live"}</p>;
+      return <p>{view === null ? "no follow-ups" : "live"}</p>;
     }
     await render(<Off />);
-    expect(text()).toBe("fixed questions");
+    expect(text()).toBe("no follow-ups");
     expect(coach!.stop()).toBeNull();
     vi.useRealTimers();
   });

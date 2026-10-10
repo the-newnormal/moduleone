@@ -5,12 +5,14 @@ import { useEffect, useRef, type ReactNode, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/normal/tag";
 import type { Area, Touched } from "@/lib/coach/types";
+import { ON_STAGE_MAIN, ON_STAGE_OUTLINE } from "../camera-stage";
 import type { ShownOffer } from "./contract";
 
-// What the member sees while recording a live check-in: the question on screen, which areas they
-// have touched on (never how well: no scores, no percentages), "Different question" while a
-// follow-up is shown, and Finish. Their words are never shown back to them, so their attention
-// stays on talking. New questions are announced by the recorder's live region, without moving focus.
+// What the member sees while recording: the question on screen and Finish. With follow-ups coming
+// (touched), also which areas they have touched on (never how well: no scores, no percentages), and
+// "Different question" while a follow-up is shown. Their words are never shown back to them, so their
+// attention stays on talking. New questions are announced by the recorder's live region, without
+// moving focus. onStage: laid over the member's camera (the recorder's CameraStage), so light on dark.
 
 const AREA_LABELS: { area: Area; label: string }[] = [
   { area: "activity", label: "What you did" },
@@ -25,15 +27,18 @@ export function LivePrompt({
   onSkip,
   onFinish,
   finishRef,
+  onStage = false,
   children,
 }: {
   offer: ShownOffer;
-  touched: Touched;
+  // null when no follow-ups are coming: live check-ins are off, or live coaching has stopped.
+  touched: Touched | null;
   canSkip: boolean;
   onSkip: () => void;
   onFinish: () => void;
   // The recorder's main button, which it focuses as its steps change.
   finishRef: RefObject<HTMLButtonElement | null>;
+  onStage?: boolean;
   // Shown above the buttons (the recorder's one-minute warning).
   children?: ReactNode;
 }) {
@@ -49,30 +54,38 @@ export function LivePrompt({
 
   return (
     <>
-      <h3 className="text-2xl leading-snug">{offer.text}</h3>
-      {offer.kind === "question" && (
-        <p className="text-sm text-muted-foreground">Answer out loud. When you pause, a follow-up may appear.</p>
+      <h3 className={onStage ? "text-2xl leading-snug font-medium sm:text-4xl" : "text-2xl leading-snug"}>{offer.text}</h3>
+      {touched && offer.kind === "question" && (
+        <p className={onStage ? "text-sm text-white/75" : "text-sm text-muted-foreground"}>
+          Answer out loud. When you pause, a follow-up may appear.
+        </p>
       )}
-      <ul aria-label="What you've talked about so far" className="flex flex-wrap gap-2">
-        {AREA_LABELS.map(({ area, label }) => (
-          <li key={area}>
-            <Tag tone={touched[area] ? "success" : "outline"} className={touched[area] ? undefined : "text-muted-foreground"}>
-              {touched[area] && <Check aria-hidden="true" className="size-3" />}
-              <span className="sr-only">{touched[area] ? "Touched on: " : "Not yet: "}</span>
-              {label}
-            </Tag>
-          </li>
-        ))}
-      </ul>
+      {touched && (
+        <ul aria-label="What you've talked about so far" className="flex flex-wrap gap-2">
+          {AREA_LABELS.map(({ area, label }) => (
+            <li key={area}>
+              <Tag
+                tone={touched[area] ? "success" : "outline"}
+                className={touched[area] ? undefined : onStage ? "border-white/45 text-white/80" : "text-muted-foreground"}
+              >
+                {touched[area] && <Check aria-hidden="true" className="size-3" />}
+                <span className="sr-only">{touched[area] ? "Touched on: " : "Not yet: "}</span>
+                {label}
+              </Tag>
+            </li>
+          ))}
+        </ul>
+      )}
       {children}
       <div className="flex flex-wrap gap-2">
-        <Button ref={finishRef} type="button" onClick={onFinish}>
+        <Button ref={finishRef} type="button" onClick={onFinish} className={onStage ? ON_STAGE_MAIN : undefined}>
           Finish
         </Button>
         {canSkip && (
           <Button
             type="button"
             variant="outline"
+            className={onStage ? ON_STAGE_OUTLINE : undefined}
             onFocus={() => {
               skipFocused.current = true;
             }}

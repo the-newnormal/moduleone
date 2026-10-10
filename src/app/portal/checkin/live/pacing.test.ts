@@ -85,6 +85,7 @@ describe("shouldShow", () => {
     elapsedMs: 100_000,
     onOpening: false,
     offerRequestedAt: 90_000 as number | null,
+    newerReadOut: false,
   };
 
   it.each([
@@ -101,6 +102,8 @@ describe("shouldShow", () => {
     ["the opening question, late enough", { ...base, onOpening: true, elapsedMs: 45_000 }, true],
     ["they have stopped, however briefly the question was up", { ...base, silenceMs: 5000, shownAt: 99_000, wordsSinceShown: 0, onOpening: true, elapsedMs: 1000, offerRequestedAt: 99_500 }, true],
     ["nearly stopped, but too early", { ...base, silenceMs: 4999, shownAt: 99_000, offerRequestedAt: 99_500 }, false],
+    ["a newer read still out, which has heard more", { ...base, newerReadOut: true }, false],
+    ["a newer read still out, even once they have stopped", { ...base, silenceMs: 60_000, newerReadOut: true }, false],
   ])("%s", (_label, input, expected) => {
     expect(shouldShow(input)).toBe(expected);
   });

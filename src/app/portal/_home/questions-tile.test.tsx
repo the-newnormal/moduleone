@@ -2,14 +2,14 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { noticeSections } from "@/lib/checkin/notice";
-import { QUESTIONS } from "@/lib/checkin/week";
+import { DEFAULT_OPENING_QUESTION, QUESTIONS } from "@/lib/checkin/week";
 import { coachRubric } from "@/lib/coach/rubric";
 import { RubricError } from "@/lib/rubrics/markdown";
 import { text } from "@/test/dom";
 import { QuestionsTile } from "./questions-tile";
 
-// The home page's questions tile: the three fixed questions, or with the live check-in on, the
-// opening question from rubrics/coach.md; and the privacy notice to read again either way.
+// The home page's question tile: the one open question from rubrics/coach.md, with a note about
+// follow-ups while the live check-in is on; and the privacy notice to read again either way.
 
 vi.mock("@/lib/coach/rubric", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/coach/rubric")>();
@@ -38,36 +38,36 @@ afterEach(() => {
 });
 
 describe("the questions tile", () => {
-  it("lists the three questions when the live check-in is off", () => {
+  it("shows the one open question from rubrics/coach.md when the live check-in is off, with no follow-ups", () => {
     const tile = render();
-    expect(text(tile.querySelector("h2")!)).toBe("This week's questions");
-    expect(items(tile)).toEqual(QUESTIONS.map((q, i) => `${i + 1}${q.text}`));
-    expect(text(tile)).toContain("The recorder shows them one at a time.");
+    expect(text(tile.querySelector("h2")!)).toBe("This week's question");
+    expect(text(tile)).toContain(OPENING);
+    expect(text(tile)).toContain("The topics are what you did, where you or your team were at your best, and how you feel about the team.");
     expect(text(tile)).not.toContain("follow-up question");
-    expect(coachRubric).not.toHaveBeenCalled();
+    expect(tile.querySelector("ol")).toBeNull();
+    for (const { text: question } of QUESTIONS) expect(text(tile)).not.toContain(question);
   });
 
-  it("shows the opening question from rubrics/coach.md when the live check-in is on", () => {
+  it("adds the follow-ups when the live check-in is on", () => {
     vi.stubEnv("LIVE_CHECKIN", "on");
     const tile = render();
-    expect(text(tile.querySelector("h2")!)).toBe("This week's questions");
+    expect(text(tile.querySelector("h2")!)).toBe("This week's question");
     expect(text(tile)).toContain(OPENING);
     expect(text(tile)).toContain(
       "As you talk, a follow-up question may appear when you pause. The topics are what you did, where you or your team were at your best, and how you feel about the team.",
     );
-    expect(tile.querySelector("ol")).toBeNull();
-    expect(text(tile)).not.toContain("The recorder shows them one at a time.");
+    expect(items(tile)).toEqual([]);
   });
 
-  it("falls back to the three questions when rubrics/coach.md can't be used", () => {
+  it("shows the built-in opening question, without follow-ups, when rubrics/coach.md can't be used", () => {
     vi.stubEnv("LIVE_CHECKIN", "on");
     vi.mocked(coachRubric).mockImplementationOnce(() => {
       throw new RubricError("rubrics/coach.md", ['The section "## Opening question" is missing.']);
     });
     const tile = render();
-    expect(items(tile)).toEqual(QUESTIONS.map((q, i) => `${i + 1}${q.text}`));
-    expect(text(tile)).toContain("The recorder shows them one at a time.");
-    expect(text(tile)).not.toContain(OPENING);
+    expect(text(tile)).toContain(DEFAULT_OPENING_QUESTION);
+    expect(text(tile)).not.toContain("As you talk, a follow-up question may appear");
+    for (const { text: question } of QUESTIONS) expect(text(tile)).not.toContain(question);
   });
 
   it("doesn't hide a fault that isn't the rubric file's", () => {
