@@ -180,13 +180,10 @@ function CameraStage({ stream, top, children }: { stream: MediaStream; top?: Rea
           aria-hidden="true"
           className="absolute inset-0 size-full -scale-x-100 object-cover"
         />
-        {top && (
-          <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-3 sm:p-5">
-            {top}
-          </div>
-        )}
-        <div className="absolute inset-x-0 bottom-0 p-3 sm:p-6">
-          <div className="mx-auto grid max-w-3xl gap-4 rounded-2xl bg-black/65 p-4 backdrop-blur-md sm:p-6">
+        {/* Scrolls when there isn't room for both (a short screen, or zoomed in), so the question is never cut off. */}
+        <div className="absolute inset-0 flex flex-col justify-between gap-3 overflow-y-auto p-3 sm:p-5">
+          <div className="flex items-start justify-between gap-2">{top}</div>
+          <div className="mx-auto grid w-full max-w-3xl gap-4 rounded-2xl bg-black/65 p-4 backdrop-blur-md sm:p-6">
             {children}
           </div>
         </div>
