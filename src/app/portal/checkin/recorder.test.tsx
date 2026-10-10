@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
-import { describe, expect, it, vi } from "vitest";
-import { button, click, render, settle } from "@/test/dom";
+import { act } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { button, click, queryButton, render, settle, text } from "@/test/dom";
+import type { LiveReady } from "./live/api";
 import type { SaveOutcome, Take } from "./take";
 
 // The recorder beside the app bar's Sign out: a take whose save failed is safe only in this page,
@@ -9,8 +11,31 @@ import type { SaveOutcome, Take } from "./take";
 // One router for the page, as Next.js gives (the recorder's effects depend on it).
 const router = { push: vi.fn(), refresh: vi.fn() };
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
-vi.mock("./actions", () => ({ prepareRecording: vi.fn(), saveDraft: vi.fn() }));
-vi.mock("@/lib/supabase/client", () => ({ createClient: vi.fn() }));
+// The same fakes for every fresh copy of the modules (see load).
+const fakes = vi.hoisted(() => ({
+  prepareRecording: vi.fn(),
+  saveDraft: vi.fn(),
+  createClient: vi.fn(),
+  startLive: vi.fn(),
+  askCoach: vi.fn(),
+  endLive: vi.fn(),
+  connectLiveTranscription: vi.fn(),
+  startLevelMeter: vi.fn(),
+}));
+vi.mock("./actions", () => ({ prepareRecording: fakes.prepareRecording, saveDraft: fakes.saveDraft }));
+vi.mock("@/lib/supabase/client", () => ({ createClient: fakes.createClient }));
+// The live check-in's browser side: its routes, its WebRTC connection and its level meter.
+vi.mock("./live/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./live/api")>()),
+  startLive: fakes.startLive,
+  askCoach: fakes.askCoach,
+  endLive: fakes.endLive,
+}));
+vi.mock("./live/transport", () => ({ connectLiveTranscription: fakes.connectLiveTranscription }));
+vi.mock("./live/voice", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./live/voice")>()),
+  startLevelMeter: fakes.startLevelMeter,
+}));
 
 const take: Take = {
   blob: new Blob([new Uint8Array([1])], { type: "audio/webm" }),
@@ -20,6 +45,7 @@ const take: Take = {
   recordedAtMono: 0,
   serverRecordedAt: null,
   uploadedPath: null,
+  liveSessionId: null,
 };
 const failed: SaveOutcome = { step: "failed", take, message: "Couldn't save your recording. Try again.", updated: false };
 
@@ -85,5 +111,114 @@ describe("a failed take the recorder shows", () => {
 
     await click(button("Discard"));
     expect(failedTakeShown()).toBe(false);
+  });
+});
+
+const SESSION = "5e550000-0000-4000-8000-000000000001";
+const OPENING = "Talk me through your week: what you worked on, what came of it, and how you're feeling about the team.";
+const READY: LiveReady = {
+  status: "ready",
+  sessionId: SESSION,
+  clientSecret: "ek_test_only",
+  sttModel: "gpt-live-transcribe",
+  opening: OPENING,
+  pacing: { showAfterSilenceMs: 1500, stoppedSilenceMs: 3000, minQuestionMs: 8000, minWordsPerQuestion: 15, firstFollowUpAfterMs: 20_000 },
+};
+
+describe("a live check-in", () => {
+  const track = { stop: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn() };
+  const connection = { commit: vi.fn(), close: vi.fn() };
+
+  function microphone() {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: { getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }) },
+      configurable: true,
+    });
+    fakes.connectLiveTranscription.mockReset().mockResolvedValue(connection);
+    // Level samples, so live coaching carries on for the length of a test.
+    fakes.startLevelMeter.mockReset().mockImplementation((_stream: MediaStream, onLevel: (level: number, now: number) => void) => {
+      const timer = setInterval(() => onLevel(0.002, performance.now()), 50);
+      return () => clearInterval(timer);
+    });
+    fakes.endLive.mockReset();
+    fakes.askCoach.mockReset().mockResolvedValue(null);
+  }
+
+  async function startRecording(start: unknown = READY) {
+    microphone();
+    fakes.startLive.mockReset().mockResolvedValue(start);
+    const { Recorder } = await load();
+    await render(<Recorder live={{ opening: OPENING }} />);
+    await click(button("Start recording"));
+    await settle();
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("starts with the one open question, not the three fixed ones", async () => {
+    const { Recorder } = await load();
+    await render(<Recorder live={{ opening: OPENING }} />);
+    expect(text()).toContain("We'll start with one question.");
+    expect(text()).toContain(OPENING);
+    expect(text()).not.toContain("What have you done this week?");
+    expect(button("Start recording")).toBeTruthy();
+  });
+
+  it("shows the open question while recording, with Finish and no Next question", async () => {
+    await startRecording();
+    expect(document.querySelector("h3")?.textContent).toBe(OPENING);
+    expect(button("Finish")).toBe(document.activeElement);
+    expect(queryButton("Next question")).toBeNull();
+    expect(queryButton("Different question")).toBeNull(); // not for the opening question
+    expect(text()).toContain("Not yet: What you did");
+    expect(text()).not.toContain("Question 1 of 3");
+    expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain(`Recording. ${OPENING}`);
+    expect(fakes.connectLiveTranscription).toHaveBeenCalledOnce();
+  });
+
+  it("goes back to the three fixed questions when live questions aren't available", async () => {
+    await startRecording({ status: "off" });
+    expect(text()).toContain("Question 1 of 3");
+    expect(document.querySelector("h3")?.textContent).toBe("What have you done this week?");
+    expect(text()).toContain("Live questions aren't available, so here are this week's three questions.");
+    expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain("Live questions aren't available");
+    await click(button("Next question"));
+    await click(button("Next question"));
+    expect(button("Finish")).toBeTruthy();
+    expect(fakes.connectLiveTranscription).not.toHaveBeenCalled();
+  });
+
+  it("saves the take with its live session, and ends the session once", async () => {
+    await startRecording();
+    fakes.prepareRecording.mockResolvedValue({
+      status: "ready",
+      path: "3e3b0000-0000-4000-8000-000000000003/2026-10-05-take.webm",
+      token: "token-1",
+      contentType: "audio/webm",
+    });
+    fakes.createClient.mockReturnValue({
+      storage: { from: () => ({ uploadToSignedUrl: async () => ({ error: null }) }) },
+    });
+    fakes.saveDraft.mockResolvedValue({ status: "saved" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ now: Date.now() }), { headers: { "content-type": "application/json" } })),
+    );
+
+    await click(button("Finish"));
+    expect(fakes.endLive).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: expect.any(Number) });
+    expect(connection.close).toHaveBeenCalled();
+    await act(async () => {
+      FakeRecorder.last?.ondataavailable?.({ data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }) });
+      FakeRecorder.last?.onstop?.();
+    });
+    for (let i = 0; i < 5; i++) await settle();
+
+    expect(fakes.saveDraft).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ liveSessionId: SESSION }));
+    expect(text()).toContain("Saved.");
+    expect(fakes.endLive).toHaveBeenCalledOnce();
   });
 });
