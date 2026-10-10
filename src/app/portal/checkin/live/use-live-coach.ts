@@ -391,7 +391,8 @@ export function createLiveCoach({
     }
     const touchedNow = !sameTouched(r.touched, response.touched);
     if (touchedNow) r.touched = response.touched;
-    // Claude's read failed (the offer comes from what was known before, so it can still be shown).
+    // Claude's read failed: the offer comes from what was known before, so only "Different question"
+    // takes it (below).
     if (response.degraded) {
       failed(r);
       if (!active(r)) return;
@@ -401,8 +402,10 @@ export function createLiveCoach({
     const offer = response.offer && response.offer.id !== r.shown.id ? response.offer : null;
     // They asked for a different question: it replaces the one on screen straight away.
     if (skip !== null && offer && r.shown.id === skip) return show(r, offer);
-    // A "Different question" waiting to be sent answers instead of this.
-    if (skip === null) r.pending = offer && r.skipWanted === null ? { offer, requestedAt } : null;
+    // A "Different question" waiting to be sent answers instead of this. A degraded read never heard
+    // the newest speech: its offer, like the one held back for it, may be about what they have just
+    // covered, so neither waits to be shown.
+    if (skip === null) r.pending = offer && !response.degraded && r.skipWanted === null ? { offer, requestedAt } : null;
     if (touchedNow) publish(r);
   }
 

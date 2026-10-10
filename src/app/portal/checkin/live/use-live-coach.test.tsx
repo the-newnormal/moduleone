@@ -344,6 +344,8 @@ describe("while they talk", () => {
   it.each([
     ["fails", async (_live: ReturnType<typeof setup>, newer: ReturnType<typeof deferred<CoachResponse>>) => newer.resolve({ status: "error", code: "unavailable" })],
     ["never answers", async (live: ReturnType<typeof setup>) => live.pause(15_000)],
+    // Claude couldn't read the newest speech: its question comes from what was known before.
+    ["is degraded", async (_live: ReturnType<typeof setup>, newer: ReturnType<typeof deferred<CoachResponse>>) => newer.resolve(ok(QUESTION_2, true))],
   ] as const)("drops an offer held back for a newer read that %s, rather than show it late", async (_label, end) => {
     const newer = deferred<CoachResponse>();
     const ask = vi.fn<LiveCoachDeps["ask"]>().mockResolvedValueOnce(ok(QUESTION_1)).mockImplementationOnce(() => newer.promise);
