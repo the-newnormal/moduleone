@@ -592,7 +592,8 @@ records it (`linesShown` holds `covered`).
 A question waiting to be shown never appears while they speak, and only if the read behind it was
 asked for after the question on screen appeared. While a newer read is still out, it waits: that
 read has heard more, so its answer replaces the question waiting (or drops it, if nothing is worth
-asking now), and they aren't asked about something they have just covered. Then it appears either:
+asking now, or if that read fails), and they aren't asked about something they have just covered.
+Then it appears either:
 
 - after **2.5 s** of silence, once the question on screen has been up at least **20 s** and they
   have said at least **20 words** since it appeared (and, while the opening question is up, they

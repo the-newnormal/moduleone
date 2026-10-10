@@ -345,6 +345,7 @@ export function createLiveCoach({
       if (r.call?.seq !== seq) return;
       r.call = null;
       controller.abort();
+      if (skip === null) r.pending = null; // see answer()
       if (active(r)) failed(r);
     }, COACH_TIMEOUT_MS);
     r.call = { seq, controller, timer };
@@ -375,6 +376,9 @@ export function createLiveCoach({
   }
 
   function answer(r: Run, response: CoachResponse | null, requestedAt: number, skip: number | null) {
+    // A read that heard more came back with nothing to weigh (failed, or turned away): the offer
+    // waiting from an earlier read may be about what they have just covered, so it goes too.
+    if (skip === null && (response === null || response.status === "error")) r.pending = null;
     if (response === null) return failed(r);
     if (response.status === "error") {
       // Too soon after the last call: a "Different question" waits a moment and goes again.
