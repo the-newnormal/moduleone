@@ -5,10 +5,12 @@ import { useId, useState } from "react";
 import type { Candidate, Person, TeamSummary } from "@/app/admin/teams/[id]/team-view";
 import {
   demoteDescription,
+  loginStatusText,
   promoteDescription,
   removeDescription,
   removePersonDescription,
 } from "@/app/admin/teams/[id]/team-view";
+import { Tag } from "@/components/normal/tag";
 import { Badge } from "@/components/ui/badge";
 import type { Removal } from "@/app/admin/teams/[id]/actions";
 import { AddPeopleDialog } from "./add-people-dialog";
@@ -118,6 +120,7 @@ export function PersonRow({
   // Each button says whose it is, for screen readers.
   const who = <span className="sr-only"> ({name})</span>;
   const editable = person.editable && team !== null;
+  const login = loginStatusText(person.login);
 
   return (
     <li className="grid gap-3 py-3 @3xl:grid-cols-[minmax(0,1fr)_auto] @3xl:items-center">
@@ -129,9 +132,15 @@ export function PersonRow({
         </p>
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
           <Badge variant={person.role === "member" ? "outline" : "secondary"}>{person.roleLabel}</Badge>
-          <span>{person.hasLogin ? "Can sign in" : "No login yet"}</span>
+          <Tag tone={login.tone}>{login.label}</Tag>
+          {login.detail && <span>{login.detail}</span>}
         </p>
         {person.loginGiven && <p className="text-xs text-muted-foreground">{person.loginGiven}</p>}
+        {person.ownerResendsInvite && (
+          <p className="text-xs text-muted-foreground">
+            This login wasn&apos;t given in Module One, so only the project owner can send it an invite.
+          </p>
+        )}
         {person.emailChanged && <p className="text-xs text-muted-foreground">{person.emailChanged}</p>}
         {(person.ownerKeeps === "grants" || person.ownerGivesLogin) && (
           <p className="text-xs text-muted-foreground">

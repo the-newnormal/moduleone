@@ -472,8 +472,9 @@ export async function giveLogin(memberId: string, email: string): Promise<Action
 //   4. service role: that login hasn't been used (no confirmed email, never signed in);
 //   5. service role: invite its address again (the link goes to Supabase Auth's Site URL +
 //      /auth/callback, as for giveLogin).
-// The address never leaves the server; logs carry codes and statuses only. Nothing on the page
-// changes, so nothing is revalidated.
+// The address never leaves the server; logs carry codes and statuses only. Each row says when its
+// invite went out (admin_login_states, 0010), which Supabase restamps, so the pages that list
+// people are revalidated once the invite has gone.
 export async function resendInvite(memberId: string): Promise<ActionResult> {
   // 1.
   const admin = await requireAdmin();
@@ -542,6 +543,7 @@ export async function resendInvite(memberId: string): Promise<ActionResult> {
     }
     return fail(GENERIC_ERROR);
   }
+  revalidateTeamTree();
   return OK;
 }
 
