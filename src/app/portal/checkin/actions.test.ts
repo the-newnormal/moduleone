@@ -2,6 +2,7 @@ import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_AUDIO_BYTES } from "@/lib/checkin/audio";
+import { linkLiveCheckin, linkLiveTake } from "@/lib/checkin/live-sessions";
 import { noticeVersion } from "@/lib/checkin/notice";
 import { processCheckin } from "@/lib/checkin/process";
 import { createServiceRoleClient } from "@/lib/supabase/admin";
@@ -17,6 +18,11 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 // Mocked whole, so their `import "server-only"` never runs.
 vi.mock("@/lib/supabase/admin", () => ({ createServiceRoleClient: vi.fn() }));
 vi.mock("@/lib/checkin/process", () => ({ processCheckin: vi.fn() }));
+vi.mock("@/lib/checkin/live-sessions", () => ({ linkLiveTake: vi.fn(), linkLiveCheckin: vi.fn() }));
+
+// The real links, for the tests that check a failing one never fails the action: they write through
+// the fake service-role client below.
+const actualLinks = () => vi.importActual<typeof import("@/lib/checkin/live-sessions")>("@/lib/checkin/live-sessions");
 
 // Thursday 8 October 2026, noon in Singapore: the week of Monday 5 October.
 const NOW = new Date("2026-10-08T04:00:00Z");
@@ -26,10 +32,11 @@ const MEMBER = "3e3b0000-0000-4000-8000-000000000003";
 const OTHER = "3e3b0000-0000-4000-8000-000000000002";
 const PATH = `${MEMBER}/${WEEK}-0c6f2a8e-5b1d-4c43-9a51-2f3c1d9e8b7a.webm`;
 const OLD_PATH = `${MEMBER}/${WEEK}-11111111-2222-4333-8444-555555555555.webm`;
+const LIVE = "1f5e0000-0000-4000-8000-000000000001";
 const PAGE = "/portal/checkin";
 
 type Result = { data: unknown; error: unknown };
-type Query = { table: string; columns: string; filters: [string, unknown][] };
+type Query = { table: string; columns: string; filters: [string, unknown][]; values?: unknown };
 
 // The user's (RLS) client: auth plus one maybeSingle() read per table.
 let reads: Record<string, Result>;
@@ -52,9 +59,11 @@ function rlsFrom(table: string) {
   return builder;
 }
 
-// The service-role client: rpc, an upsert, the check-ins lookup before a delete, and Storage.
-// The lookup only finds checkinsUsingPath when it filters on this member and this path.
+// The service-role client: rpc, an upsert, the check-ins lookup before a delete, an update (the live
+// session links) and Storage. The lookup only finds checkinsUsingPath when it filters on this member
+// and this path; an update answers with updateResult.
 let checkinsUsingPath: { id: string; member_id: string; audio_path: string }[];
+let updateResult: Result | Error;
 let adminQueries: Query[];
 const rpc = vi.fn();
 const upsert = vi.fn();
@@ -82,6 +91,17 @@ function adminFrom(table: string) {
       );
       return { data: rows.map(({ id }) => ({ id })), error: null };
     },
+    update(values: Record<string, unknown>) {
+      query.values = values;
+      const chain = {
+        eq: (column: string, value: unknown) => (query.filters.push([column, value]), chain),
+        is: (column: string, value: unknown) => (query.filters.push([column, value]), chain),
+        abortSignal: () => chain,
+        then: (resolve: (r: Result) => void, reject: (e: unknown) => void) =>
+          updateResult instanceof Error ? reject(updateResult) : resolve(updateResult),
+      };
+      return chain;
+    },
   };
   return builder;
 }
@@ -102,6 +122,7 @@ beforeEach(() => {
   queries = [];
   adminQueries = [];
   checkinsUsingPath = [];
+  updateResult = { data: null, error: null };
   vi.mocked(createClient).mockResolvedValue({ auth: { getClaims }, from: rlsFrom } as never);
   vi.mocked(createServiceRoleClient).mockReset().mockReturnValue({ rpc, from: adminFrom, storage: { from: storageFrom } } as never);
   getClaims.mockReset().mockResolvedValue({ data: { claims: { sub: USER } }, error: null });
@@ -117,6 +138,8 @@ beforeEach(() => {
   vi.mocked(revalidatePath).mockClear();
   vi.mocked(after).mockReset();
   vi.mocked(processCheckin).mockReset().mockResolvedValue("graded");
+  vi.mocked(linkLiveTake).mockReset().mockResolvedValue(undefined);
+  vi.mocked(linkLiveCheckin).mockReset().mockResolvedValue(undefined);
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -261,6 +284,7 @@ describe("saveDraft", () => {
     });
     expect(remove).not.toHaveBeenCalled();
     expect(revalidatePath).toHaveBeenCalledExactlyOnceWith(PAGE);
+    expect(linkLiveTake).not.toHaveBeenCalled(); // not recorded in a live check-in
   });
 
   it.each([
@@ -436,6 +460,72 @@ describe("saveDraft", () => {
   });
 });
 
+describe("saveDraft in a live check-in", () => {
+  it("links the saved take to the member's live session", async () => {
+    expect(await saveDraft({ path: PATH, durationMs: 95_000, liveSessionId: LIVE })).toEqual({ status: "saved" });
+    expect(linkLiveTake).toHaveBeenCalledExactlyOnceWith(LIVE, MEMBER, PATH);
+    expect(vi.mocked(rpc).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(linkLiveTake).mock.invocationCallOrder[0]);
+  });
+
+  it("takes the member from the session, never from the input", async () => {
+    await saveDraft({ path: PATH, liveSessionId: LIVE, memberId: OTHER } as never);
+    expect(linkLiveTake).toHaveBeenCalledExactlyOnceWith(LIVE, MEMBER, PATH);
+  });
+
+  it.each([
+    ["an id that isn't a uuid", "not-a-uuid"],
+    ["part of a uuid", "1f5e0000"],
+    ["a uuid with more after it", `${LIVE}' or '1'='1`],
+    ["a uuid with a newline after it", `${LIVE}\n`],
+    ["an empty id", ""],
+    ["a number", 42],
+    ["null", null],
+    ["nothing", undefined],
+  ])("saves without linking for %s", async (_label, liveSessionId) => {
+    expect(await saveDraft({ path: PATH, liveSessionId: liveSessionId as string })).toEqual({ status: "saved" });
+    expect(linkLiveTake).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["newer_draft", { status: "superseded" }],
+    ["already_submitted", { status: "submitted" }],
+    ["bad_path", { status: "error", code: "bad_path" }],
+  ])("links nothing when the database refuses the take (%s)", async (message, result) => {
+    rpc.mockResolvedValue(raised(message));
+    expect(await saveDraft({ path: PATH, liveSessionId: LIVE, recordedAt: NOW.getTime() })).toMatchObject(result);
+    expect(linkLiveTake).not.toHaveBeenCalled();
+  });
+
+  it("links nothing for a take that never arrived", async () => {
+    info.mockResolvedValue({ data: null, error: { name: "StorageApiError", message: "Object not found", status: 404 } });
+    await saveDraft({ path: PATH, liveSessionId: LIVE });
+    expect(linkLiveTake).not.toHaveBeenCalled();
+  });
+
+  it("still saves when the link is refused by the database", async () => {
+    vi.mocked(linkLiveTake).mockImplementation((await actualLinks()).linkLiveTake);
+    updateResult = { data: null, error: { code: "42501", message: "permission denied" } };
+    expect(await saveDraft({ path: PATH, liveSessionId: LIVE })).toEqual({ status: "saved" });
+    expect(adminQueries.find((q) => q.table === "live_checkin_sessions")).toMatchObject({
+      values: { audio_path: PATH },
+      filters: [
+        ["id", LIVE],
+        ["member_id", MEMBER],
+        ["checkin_id", null],
+      ],
+    });
+    expect(console.error).toHaveBeenCalledWith("live session: linking the take failed", { code: "42501" });
+    expect(revalidatePath).toHaveBeenCalledExactlyOnceWith(PAGE);
+  });
+
+  it("still saves when the link throws", async () => {
+    vi.mocked(linkLiveTake).mockImplementation((await actualLinks()).linkLiveTake);
+    updateResult = Object.assign(new Error("signal timed out"), { name: "TimeoutError" });
+    expect(await saveDraft({ path: PATH, liveSessionId: LIVE })).toEqual({ status: "saved" });
+    expect(console.error).toHaveBeenCalledWith("live session: linking the take failed", { error: "TimeoutError" });
+  });
+});
+
 describe("deleteDraft", () => {
   it("deletes this week's draft and its file", async () => {
     rpc.mockResolvedValue({ data: PATH, error: null });
@@ -493,6 +583,8 @@ describe("submitCheckin", () => {
     expect(rpc).toHaveBeenCalledExactlyOnceWith("submit_checkin_draft", { p_member_id: MEMBER, p_audio_path: PATH });
     expect(after).toHaveBeenCalledOnce();
     expect(processCheckin).not.toHaveBeenCalled(); // not before the response is sent
+    // The live session that recorded the take, if any, follows it to the check-in.
+    expect(linkLiveCheckin).toHaveBeenCalledExactlyOnceWith(MEMBER, PATH, ID);
 
     const task = vi.mocked(after).mock.calls[0][0] as () => Promise<unknown>;
     await task();
@@ -527,5 +619,48 @@ describe("submitCheckin", () => {
     rpc.mockResolvedValue({ data: null, error: { code: "40001", message: "serialization failure" } });
     expect(await submitCheckin(PATH)).toMatchObject({ status: "error", code: "failed" });
     expect(after).not.toHaveBeenCalled();
+  });
+
+  it("links the live session with the shown take and the member from the session", async () => {
+    rpc.mockResolvedValue({ data: ID, error: null });
+    await submitCheckin(PATH);
+    expect(linkLiveCheckin).toHaveBeenCalledExactlyOnceWith(MEMBER, PATH, ID);
+  });
+
+  it.each([
+    ["no_draft", raised("no_draft")],
+    ["already_submitted", raised("already_submitted")],
+    ["draft_changed", raised("draft_changed")],
+    ["another error", { data: null, error: { code: "40001", message: "serialization failure" } }],
+    ["no id", { data: null, error: null }],
+  ])("links nothing when nothing was submitted (%s)", async (_label, answer) => {
+    rpc.mockResolvedValue(answer);
+    await submitCheckin(PATH);
+    expect(linkLiveCheckin).not.toHaveBeenCalled();
+  });
+
+  it("still submits, and schedules processing, when the link is refused by the database", async () => {
+    vi.mocked(linkLiveCheckin).mockImplementation((await actualLinks()).linkLiveCheckin);
+    rpc.mockResolvedValue({ data: ID, error: null });
+    updateResult = { data: null, error: { code: "57014", message: "canceling statement due to statement timeout" } };
+    expect(await submitCheckin(PATH)).toEqual({ status: "submitted" });
+    expect(adminQueries.find((q) => q.table === "live_checkin_sessions")).toMatchObject({
+      values: { checkin_id: ID, audio_path: null },
+      filters: [
+        ["member_id", MEMBER],
+        ["audio_path", PATH],
+      ],
+    });
+    expect(console.error).toHaveBeenCalledWith("live session: linking the check-in failed", { code: "57014" });
+    expect(after).toHaveBeenCalledOnce();
+  });
+
+  it("still submits when the link throws", async () => {
+    vi.mocked(linkLiveCheckin).mockImplementation((await actualLinks()).linkLiveCheckin);
+    rpc.mockResolvedValue({ data: ID, error: null });
+    updateResult = new TypeError("fetch failed");
+    expect(await submitCheckin(PATH)).toEqual({ status: "submitted" });
+    expect(console.error).toHaveBeenCalledWith("live session: linking the check-in failed", { error: "TypeError" });
+    expect(after).toHaveBeenCalledOnce();
   });
 });

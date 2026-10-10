@@ -15,6 +15,8 @@ export type Grade = {
   review: string;
   // The model that actually produced the grade (after any refusal fallback).
   model: string;
+  // Fingerprint of the grading instructions used (rubrics/grading.md and the rules around it).
+  rubricVersion: string;
   // Every billed model attempt in the call, for the cost log: one, or more when a refusal fallback
   // took over (the declined attempt is billed too). Output includes thinking.
   attempts: GradeAttempt[];
@@ -29,7 +31,8 @@ export type GradeUsage = {
   cacheWriteTokens: number;
 };
 
-export type GradingFailure = "empty_transcript" | "refusal" | "invalid_output" | "api";
+// "rubric": rubrics/grading.md can't be used (a broken edit); nothing is sent until it's fixed.
+export type GradingFailure = "empty_transcript" | "refusal" | "invalid_output" | "api" | "rubric";
 
 export class GradingError extends Error {
   readonly reason: GradingFailure;

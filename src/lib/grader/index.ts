@@ -10,7 +10,8 @@ import Anthropic, {
   RateLimitError,
 } from "@anthropic-ai/sdk";
 import { GRADE_JSON_SCHEMA, parseGradeOutput } from "./output";
-import { countWords, GRADER_SYSTEM_PROMPT, transcriptMessage } from "./prompt";
+import { RubricError } from "@/lib/rubrics/markdown";
+import { countWords, GRADER_EFFORT, graderRubricVersion, graderSystemPrompt, transcriptMessage } from "./prompt";
 import { GradingError, type Grade, type GradeAttempt } from "./types";
 
 export * from "./types";
@@ -51,8 +52,9 @@ const REFUSAL_FALLBACK_BETA = "server-side-fallback-2026-07-01";
 // scores, theme and review together. Only the transcript is sent. `model` overrides
 // ANTHROPIC_MODEL (the side-by-side comparison uses it). `signal` lets the caller stop sooner than GRADER_TIMEOUT_MS (processCheckin keeps a whole attempt
 // inside the time its function may run).
-// Throws GradingError: "empty_transcript" (nothing to grade; the API is not called), "refusal",
-// "invalid_output" (the reply was cut off or didn't match the schema) or "api".
+// Throws GradingError: "empty_transcript" (nothing to grade; the API is not called), "rubric"
+// (rubrics/grading.md is broken; not called either), "refusal", "invalid_output" (the reply was cut
+// off or didn't match the schema) or "api".
 export async function gradeCheckin(input: { transcript: string; model?: string; signal?: AbortSignal }): Promise<Grade> {
   const transcript = input.transcript.trim();
   if (countWords(transcript) < MIN_TRANSCRIPT_WORDS) {
@@ -72,6 +74,21 @@ export async function gradeCheckin(input: { transcript: string; model?: string; 
       retryable: false,
     });
   }
+  // The rubric file, checked before anything is sent: a broken edit stops grading with a clear
+  // reason (and, like a missing key, doesn't use up the check-in's attempts) until it's fixed.
+  let system: string;
+  let rubricVersion: string;
+  try {
+    system = graderSystemPrompt();
+    rubricVersion = graderRubricVersion();
+  } catch (error) {
+    if (!(error instanceof RubricError)) throw error;
+    throw new GradingError("rubrics/grading.md can't be used; fix it and redeploy", {
+      reason: "rubric",
+      retryable: false,
+      cause: error,
+    });
+  }
   const model = input.model?.trim() || graderModel();
   const fallback = FALLBACK_MODELS.has(model) ? { betas: [REFUSAL_FALLBACK_BETA], fallbacks: "default" as const } : {};
   const client = new Anthropic({ apiKey, authToken: null, timeout: GRADER_TIMEOUT_MS, maxRetries: 2 });
@@ -89,13 +106,13 @@ export async function gradeCheckin(input: { transcript: string; model?: string; 
         // No `thinking` field: thinking is on by default on these models and effort sets its depth
         // (default medium; grading is a judgement call, so high).
         output_config: {
-          effort: "high",
+          effort: GRADER_EFFORT,
           format: { type: "json_schema", schema: GRADE_JSON_SCHEMA },
         },
         // The rubric is the same on every call and long enough to cache (over the 512-token
         // minimum), so check-ins graded within a few minutes of each other read it at a fraction
         // of the price. Nothing that varies goes in the system prompt.
-        system: [{ type: "text", text: GRADER_SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
+        system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
         messages: [{ role: "user", content: transcriptMessage(transcript) }],
       },
       { signal },
@@ -125,7 +142,12 @@ export async function gradeCheckin(input: { transcript: string; model?: string; 
   // Read by block type: thinking blocks (and a fallback marker, if another model took over) come
   // before the text.
   const text = response.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
-  return { ...parseGradeOutput(text), model: response.model, attempts: billedAttempts(response.usage, response.model) };
+  return {
+    ...parseGradeOutput(text),
+    model: response.model,
+    rubricVersion,
+    attempts: billedAttempts(response.usage, response.model),
+  };
 }
 
 type Usage = {

@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 import { act } from "react";
-import { describe, expect, it, vi } from "vitest";
-import { button, click, render, settle, text } from "@/test/dom";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { button, click, queryButton, render, settle, text } from "@/test/dom";
+import type { LiveReady } from "./live/api";
 import type { SaveOutcome, Take } from "./take";
 
 // The recorder beside the app bar's Sign out: a take whose save failed is safe only in this page,
@@ -10,8 +11,32 @@ import type { SaveOutcome, Take } from "./take";
 // One router for the page, as Next.js gives (the recorder's effects depend on it).
 const router = { push: vi.fn(), refresh: vi.fn() };
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
-vi.mock("./actions", () => ({ prepareRecording: vi.fn(), saveDraft: vi.fn() }));
-vi.mock("@/lib/supabase/client", () => ({ createClient: vi.fn() }));
+// The same fakes for every fresh copy of the modules (see load).
+const fakes = vi.hoisted(() => ({
+  prepareRecording: vi.fn(),
+  saveDraft: vi.fn(),
+  createClient: vi.fn(),
+  startLive: vi.fn(),
+  askCoach: vi.fn(),
+  endLive: vi.fn(),
+  connectLiveTranscription: vi.fn(),
+  startLevelMeter: vi.fn(),
+}));
+vi.mock("./actions", () => ({ prepareRecording: fakes.prepareRecording, saveDraft: fakes.saveDraft }));
+vi.mock("@/lib/supabase/client", () => ({ createClient: fakes.createClient }));
+// The live check-in's browser side: its routes, its WebRTC connection and its level meter.
+vi.mock("./live/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./live/api")>()),
+  startLive: fakes.startLive,
+  askCoach: fakes.askCoach,
+  endLive: fakes.endLive,
+}));
+vi.mock("./live/transport", () => ({ connectLiveTranscription: fakes.connectLiveTranscription }));
+vi.mock("./live/voice", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./live/voice")>()),
+  startLevelMeter: fakes.startLevelMeter,
+}));
+
 
 const take: Take = {
   blob: new Blob([new Uint8Array([1])], { type: "audio/webm" }),
@@ -21,6 +46,7 @@ const take: Take = {
   recordedAtMono: 0,
   serverRecordedAt: null,
   uploadedPath: null,
+  liveSessionId: null,
 };
 const failed: SaveOutcome = { step: "failed", take, message: "Couldn't save your recording. Try again.", updated: false };
 
@@ -634,5 +660,275 @@ describe("the camera", () => {
     expect(video()).toBeNull();
     expect(button("Turn on my camera")).toBeTruthy();
     vi.unstubAllGlobals();
+  });
+});
+
+const SESSION = "5e550000-0000-4000-8000-000000000001";
+const OPENING = "Talk me through your week: what you worked on, what came of it, and how you're feeling about the team.";
+const READY: LiveReady = {
+  status: "ready",
+  sessionId: SESSION,
+  sttModel: "gpt-live-transcribe",
+  opening: OPENING,
+  pacing: { showAfterSilenceMs: 1500, stoppedSilenceMs: 3000, minQuestionMs: 8000, minWordsPerQuestion: 15, firstFollowUpAfterMs: 20_000 },
+};
+
+// With live check-ins on, the member still records looking at themselves: the coach's question is
+// laid over the camera, as the fixed ones are.
+describe("a live check-in", () => {
+  const connection = { commit: vi.fn(), close: vi.fn() };
+
+  // The devices, and the live check-in's browser side. permission: as for devices.
+  function liveDevices(camera?: () => Promise<unknown>, permission?: PermissionState) {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    const found = devices(camera, permission);
+    connection.close.mockReset();
+    fakes.connectLiveTranscription.mockReset().mockResolvedValue(connection);
+    // Level samples, so live coaching carries on for the length of a test.
+    fakes.startLevelMeter.mockReset().mockImplementation((_stream: MediaStream, onLevel: (level: number, now: number) => void) => {
+      const timer = setInterval(() => onLevel(0.002, performance.now()), 50);
+      return () => clearInterval(timer);
+    });
+    fakes.endLive.mockReset();
+    fakes.askCoach.mockReset().mockResolvedValue(null);
+    fakes.startLive.mockReset().mockResolvedValue(READY);
+    return found;
+  }
+
+  async function startRecording(start: unknown = READY) {
+    const found = liveDevices();
+    fakes.startLive.mockResolvedValue(start);
+    const { Recorder, ...saves } = await load();
+    const page = await render(<Recorder live={{ opening: OPENING }} />);
+    await turnOnCamera();
+    await record();
+    return { ...found, ...saves, page };
+  }
+
+  // What the take is saved through, so a test can see the take reach the draft.
+  function saving() {
+    fakes.prepareRecording.mockResolvedValue({
+      status: "ready",
+      path: "3e3b0000-0000-4000-8000-000000000003/2026-10-05-take.webm",
+      token: "token-1",
+      contentType: "audio/webm",
+    });
+    fakes.createClient.mockReturnValue({
+      storage: { from: () => ({ uploadToSignedUrl: async () => ({ error: null }) }) },
+    });
+    fakes.saveDraft.mockReset().mockResolvedValue({ status: "saved" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ now: Date.now() }), { headers: { "content-type": "application/json" } })),
+    );
+  }
+
+  const stage = () => video()?.parentElement ?? null;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("starts with the one open question, not the three fixed ones, and the camera first", async () => {
+    liveDevices();
+    const { Recorder } = await load();
+    await render(<Recorder live={{ opening: OPENING }} />);
+    expect(text()).toContain("We'll start with one question.");
+    expect(text()).toContain("You record with your camera on");
+    expect(text()).toContain(OPENING);
+    expect(text()).not.toContain("What have you done this week?");
+    expect(button("Turn on my camera")).toBeTruthy();
+    expect(queryButton("Start recording")).toBeNull();
+  });
+
+  it("shows the open question on the stage before the take, and asks for no live session yet", async () => {
+    liveDevices(undefined, "granted");
+    const { Recorder } = await load();
+    await render(<Recorder live={{ opening: OPENING }} />);
+    await settle();
+    expect(stage()?.textContent).toContain("Ready when you are.");
+    expect(stage()?.textContent).toContain(OPENING);
+    expect(stage()?.textContent).not.toContain("What have you done this week?");
+    expect(document.activeElement).toBe(button("Start recording"));
+    expect(fakes.startLive).not.toHaveBeenCalled();
+  });
+
+  it("lays the open question over the camera while recording, with Finish and no Next question", async () => {
+    const { microphone } = await startRecording();
+    expect(FakeRecorder.last?.stream).toBe(microphone); // the camera never reaches the recorder
+    expect(stage()?.querySelector("h3")?.textContent).toBe(OPENING);
+    expect(stage()?.contains(button("Finish"))).toBe(true);
+    expect(button("Finish")).toBe(document.activeElement);
+    expect(button("Finish").className).toContain("bg-white"); // light on the dark stage
+    expect(queryButton("Next question")).toBeNull();
+    expect(queryButton("Different question")).toBeNull(); // not for the opening question
+    expect(stage()?.textContent).toContain("Not yet: What you did");
+    expect(stage()?.textContent).toContain("Recording");
+    expect(text()).not.toContain("Question 1 of 3");
+    expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain(`Recording. ${OPENING}`);
+    // Live transcription hears the microphone, never the camera.
+    expect(fakes.connectLiveTranscription).toHaveBeenCalledOnce();
+    expect(fakes.startLevelMeter).toHaveBeenCalledWith(microphone, expect.any(Function));
+  });
+
+  it("asks for the live session only once the microphone is allowed, however long that takes", async () => {
+    const { microphone, getUserMedia } = liveDevices();
+    // The browser's prompt stays open until the test answers it.
+    let allow: () => void = () => {};
+    getUserMedia.mockImplementation((constraints: MediaStreamConstraints) =>
+      constraints.video ? Promise.resolve(cameraStream()) : new Promise((resolve) => (allow = () => resolve(microphone))),
+    );
+    const { Recorder } = await load();
+    await render(<Recorder live={{ opening: OPENING }} />);
+    await turnOnCamera();
+    await record();
+    expect(text()).toContain("Waiting for your microphone…");
+    expect(fakes.startLive).not.toHaveBeenCalled();
+
+    await act(async () => allow());
+    await settle();
+    expect(fakes.startLive).toHaveBeenCalledOnce();
+    expect(fakes.connectLiveTranscription).toHaveBeenCalledOnce();
+    expect(stage()?.querySelector("h3")?.textContent).toBe(OPENING);
+  });
+
+  it("asks for no live session when the microphone is refused, and keeps the camera on", async () => {
+    const { getUserMedia } = liveDevices();
+    getUserMedia.mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if (constraints.video) return cameraStream();
+      throw new DOMException("denied", "NotAllowedError");
+    });
+    const { Recorder } = await load();
+    await render(<Recorder live={{ opening: OPENING }} />);
+    await turnOnCamera();
+    await record();
+    expect(button("Start recording")).toBeTruthy();
+    expect(stage()?.textContent).toContain("Microphone access is blocked");
+    expect(fakes.startLive).not.toHaveBeenCalled();
+    expect(fakes.endLive).not.toHaveBeenCalled();
+  });
+
+  it("asks for no live session when the camera goes away while the browser asks about the microphone", async () => {
+    const lens = fakeTrack();
+    const camera = cameraStream(lens);
+    const { microphone, getUserMedia } = liveDevices();
+    let allowMic: (stream: unknown) => void = () => {};
+    getUserMedia.mockImplementation((constraints: MediaStreamConstraints) =>
+      constraints.video ? Promise.resolve(camera) : new Promise((resolve) => (allowMic = resolve)),
+    );
+    const { Recorder } = await load();
+    await render(<Recorder live={{ opening: OPENING }} />);
+    await turnOnCamera();
+    await click(button("Start recording"));
+    await lens.fire("ended");
+    await act(async () => allowMic(microphone));
+    await settle();
+    expect(text()).toContain("Your camera stopped before the recording began.");
+    expect(fakes.startLive).not.toHaveBeenCalled();
+  });
+
+  it("goes back to the three fixed questions on the stage when live questions aren't available", async () => {
+    await startRecording({ status: "off" });
+    expect(stage()?.textContent).toContain("Question 1 of 3");
+    expect(stage()?.querySelector("h3")?.textContent).toBe("What have you done this week?");
+    expect(stage()?.textContent).toContain("Live questions aren't available, so here are this week's three questions.");
+    expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain("Live questions aren't available");
+    await click(button("Next question"));
+    await click(button("Next question"));
+    expect(stage()?.contains(button("Finish"))).toBe(true);
+    expect(fakes.connectLiveTranscription).not.toHaveBeenCalled();
+  });
+
+  it("saves the take with its live session, ends the session once, and turns the camera off", async () => {
+    const lens = fakeTrack();
+    liveDevices(async () => cameraStream(lens));
+    const { Recorder } = await load();
+    await render(<Recorder live={{ opening: OPENING }} />);
+    await turnOnCamera();
+    await record();
+    saving();
+
+    await click(button("Finish"));
+    // The opening question was still on screen.
+    expect(fakes.endLive).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: expect.any(Number), shown: 0 });
+    expect(connection.close).toHaveBeenCalled();
+    expect(lens.stop).toHaveBeenCalled();
+    expect(video()).toBeNull();
+    await act(async () => {
+      FakeRecorder.last?.ondataavailable?.({ data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }) });
+      FakeRecorder.last?.onstop?.();
+    });
+    for (let i = 0; i < 5; i++) await settle();
+
+    expect(fakes.saveDraft).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ liveSessionId: SESSION }));
+    expect(text()).toContain("Saved.");
+    expect(fakes.endLive).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the live question, and its session, in the card when the camera goes away mid-take", async () => {
+    const lens = fakeTrack();
+    liveDevices(async () => cameraStream(lens));
+    const { Recorder } = await load();
+    const page = await render(<Recorder live={{ opening: OPENING }} />);
+    await turnOnCamera();
+    await record();
+    await lens.fire("ended"); // unplugged, or taken by another app
+    expect(video()).toBeNull();
+    expect(FakeRecorder.last?.state).toBe("recording");
+    expect(page.container.querySelector("h3")?.textContent).toBe(OPENING);
+    expect(document.activeElement).toBe(button("Finish"));
+    expect(button("Finish").className).not.toContain("bg-white"); // the card's own button now
+    expect(fakes.endLive).not.toHaveBeenCalled();
+    expect(connection.close).not.toHaveBeenCalled();
+    saving();
+    await click(button("Finish"));
+    expect(fakes.endLive).toHaveBeenCalledOnce();
+    expect(text(page.container)).toContain("Saving your recording");
+  });
+
+  it("records with live questions in the card when the camera can't come on", async () => {
+    const { microphone } = liveDevices(async () => {
+      throw new DOMException("none", "NotFoundError");
+    });
+    const { Recorder } = await load();
+    const page = await render(<Recorder live={{ opening: OPENING }} />);
+    await turnOnCamera();
+    await click(button("Record without camera"));
+    await settle();
+    expect(FakeRecorder.last?.stream).toBe(microphone);
+    expect(video()).toBeNull();
+    expect(page.container.querySelector("h3")?.textContent).toBe(OPENING);
+    expect(document.activeElement).toBe(button("Finish"));
+    expect(fakes.startLive).toHaveBeenCalledOnce();
+    expect(fakes.connectLiveTranscription).toHaveBeenCalledOnce();
+  });
+
+  it("ends the session and turns the camera off when Sign out finishes the recording", async () => {
+    const lens = fakeTrack();
+    liveDevices(async () => cameraStream(lens), "granted");
+    const { Recorder, finishRecording, currentSave } = await load();
+    await render(<Recorder live={{ opening: OPENING }} />);
+    await settle();
+    await record();
+    await settle();
+    await act(async () => finishRecording()); // what Sign out does first
+    expect(fakes.endLive).toHaveBeenCalledOnce();
+    expect(lens.stop).toHaveBeenCalled();
+    expect(video()).toBeNull();
+    expect(currentSave()).not.toBeNull();
+  });
+
+  it("ends the session and turns the camera off when the member leaves the page mid-take", async () => {
+    const lens = fakeTrack();
+    liveDevices(async () => cameraStream(lens));
+    const { Recorder } = await load();
+    const page = await render(<Recorder live={{ opening: OPENING }} />);
+    await turnOnCamera();
+    await record();
+    await settle();
+    await page.rerender(<></>);
+    expect(fakes.endLive).toHaveBeenCalledOnce();
+    expect(lens.stop).toHaveBeenCalled();
+    expect(FakeRecorder.last?.state).toBe("inactive"); // the take is finished and saved, as Finish would
   });
 });

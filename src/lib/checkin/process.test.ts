@@ -20,6 +20,7 @@ const GRADE: Grade = {
   category: "delivery",
   review: "Shipped the login page.",
   model: "claude-haiku-5-5",
+  rubricVersion: "3f9a1c0b7d2e",
   attempts: [{ model: "claude-haiku-5-5", usage: { inputTokens: 40, outputTokens: 300, cacheReadTokens: 1500, cacheWriteTokens: 0 } }],
 };
 
@@ -120,6 +121,8 @@ describe("processCheckin", () => {
           category: "delivery",
           rubric_review: "Shipped the login page.",
           grader_model: "claude-haiku-5-5",
+          // Which version of rubrics/grading.md (and the rules around it) graded it.
+          rubric_version: "3f9a1c0b7d2e",
           graded_at: expect.any(String),
           processing_error: null,
         },
@@ -172,11 +175,9 @@ describe("processCheckin", () => {
     insertError = { code: "42501", message: "denied" };
     expect(await processCheckin(CHECKIN)).toBe("graded");
     expect(inserts).toHaveLength(2);
-    expect(console.error).toHaveBeenCalledWith("processCheckin: could not record the cost", {
-      checkinId: CHECKIN,
-      step: "grading",
-      code: "42501",
-    });
+    // Logged by the shared cost recorder (src/lib/costs/record.ts): the step and the code only.
+    expect(console.error).toHaveBeenCalledWith("costs: could not record the cost", { step: "transcription", code: "42501" });
+    expect(console.error).toHaveBeenCalledWith("costs: could not record the cost", { step: "grading", code: "42501" });
   });
 
   it("still grades when the cost log request throws", async () => {
@@ -188,11 +189,8 @@ describe("processCheckin", () => {
       from: (table: string) => (table === "processing_costs" ? { insert: () => rejecting } : client.from(table)),
     } as never);
     expect(await processCheckin(CHECKIN)).toBe("graded");
-    expect(console.error).toHaveBeenCalledWith("processCheckin: could not record the cost", {
-      checkinId: CHECKIN,
-      step: "grading",
-      error: "Error: network down",
-    });
+    // The error's name only: a message could carry anything.
+    expect(console.error).toHaveBeenCalledWith("costs: could not record the cost", { step: "grading", error: "Error" });
   });
 
   it("logs only the grading cost when it reuses a saved transcript", async () => {
@@ -342,6 +340,23 @@ describe("processCheckin", () => {
       expect(transcribe).toHaveBeenCalledOnce();
       expect(updates.at(-1)?.values).toEqual({
         processing_error: "grading_api: GradingError: Missing ANTHROPIC_API_KEY (server-only).",
+        processing_attempts: 0,
+      });
+
+      vi.mocked(gradeCheckin).mockResolvedValue(GRADE);
+      expect(await visit()).toBe("graded");
+    });
+
+    it("doesn't use them up while rubrics/grading.md is broken, so it grades once the file is fixed", async () => {
+      vi.mocked(gradeCheckin).mockRejectedValue(
+        new GradingError("rubrics/grading.md can't be used; fix it and redeploy", { reason: "rubric", retryable: false }),
+      );
+      for (let i = 0; i < 8; i++) expect(await visit()).toBe("failed");
+      expect(row.attempts).toBe(0);
+      // Transcribed once; every later visit only tries to grade the saved transcript.
+      expect(transcribe).toHaveBeenCalledOnce();
+      expect(updates.at(-1)?.values).toEqual({
+        processing_error: "grading_rubric: GradingError: rubrics/grading.md can't be used; fix it and redeploy",
         processing_attempts: 0,
       });
 

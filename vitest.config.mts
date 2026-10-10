@@ -2,6 +2,16 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  // Rubric files (rubrics/*.md) are imported as plain text, as Turbopack does in next.config.ts.
+  plugins: [
+    {
+      name: "markdown-as-text",
+      transform(code, id) {
+        if (!id.endsWith(".md")) return null;
+        return { code: `export default ${JSON.stringify(code)};`, map: null };
+      },
+    },
+  ],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

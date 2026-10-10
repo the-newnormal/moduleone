@@ -2,15 +2,19 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { liveCheckinEnabled } from "@/lib/checkin/live-config";
 import { noticeSections, noticeVersion } from "@/lib/checkin/notice";
 import { processCheckin } from "@/lib/checkin/process";
 import { currentWeekStart } from "@/lib/checkin/week";
+import { coachRubric } from "@/lib/coach/rubric";
+import { RubricError } from "@/lib/rubrics/markdown";
 import { createClient } from "@/lib/supabase/server";
 import { CardFocus } from "./card-focus";
 import { DraftControls } from "./draft-controls";
 import { DraftPlayer } from "./draft-player";
 import { formatDateTime, formatLength, formatWeekEnd, formatWeekStart } from "./format";
 import { needsProcessing, tidyMemberAudio, type ProcessingState } from "./housekeeping";
+import type { LiveOptions } from "./live/use-live-coach";
 import { NoticeForm } from "./notice-form";
 import { Recorder } from "./recorder";
 import { SavedTake } from "./saved-take";
@@ -37,7 +41,7 @@ type View =
   | { state: "notice" }
   | { state: "submitted"; submittedAt: string | null }
   | { state: "draft"; path: string; playbackUrl: string | null; durationMs: number | null; recordedAt: string }
-  | { state: "record" };
+  | { state: "record"; live: LiveOptions | undefined };
 
 export default async function CheckinPage() {
   const supabase = await createClient();
@@ -112,7 +116,7 @@ async function loadView(
 
   if (!notice.data) return { state: "notice" };
   if (submitted) return { state: "submitted", submittedAt: submitted.submitted_at };
-  if (!draft.data) return { state: "record" };
+  if (!draft.data) return { state: "record", live: liveOptions() };
 
   // The member's own folder, so RLS lets them read it (0002), drafts included (0004).
   const { data: signed, error: signError } = await supabase.storage
@@ -127,6 +131,19 @@ async function loadView(
     // When the take was recorded; when that is unknown ('-infinity', see 0004), when it was saved.
     recordedAt: Number.isFinite(Date.parse(draft.data.recorded_at)) ? draft.data.recorded_at : draft.data.created_at,
   };
+}
+
+// Live check-ins (one open question with follow-ups), when they are on and rubrics/coach.md can be
+// used. A broken rubric means the three fixed questions, as with live check-ins off; the start
+// route logs it (live/route.ts).
+function liveOptions(): LiveOptions | undefined {
+  if (!liveCheckinEnabled()) return undefined;
+  try {
+    return { opening: coachRubric().opening };
+  } catch (error) {
+    if (error instanceof RubricError) return undefined;
+    throw error;
+  }
 }
 
 function unavailable(what: string, code: string | undefined): View {
@@ -229,7 +246,7 @@ function CheckinCard({ view }: { view: View }) {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <Recorder />
+            <Recorder live={view.live} />
           </CardContent>
         </Card>
       );

@@ -23,6 +23,7 @@ const take: Take = {
   recordedAtMono: -5 * 60 * 1000, // the steady clock starts at 0 when the tests fake it, 5 minutes later
   serverRecordedAt: null,
   uploadedPath: `${MEMBER}/2026-10-05-take.webm`,
+  liveSessionId: null,
 };
 
 // The server's clock is an hour ahead of this browser's.
@@ -79,7 +80,26 @@ describe("saveTake", () => {
       path: ready(1).path,
       durationMs: 95_000,
       recordedAt: take.recordedAt + HOUR,
+      liveSessionId: null,
     });
+  });
+
+  it("saves a take recorded live with its live session, so the session can follow it", async () => {
+    const steps = fakes();
+    const session = "5e550000-0000-4000-8000-000000000001";
+    expect(await saveTake({ ...fresh, liveSessionId: session }, steps)).toEqual({ step: "saved" });
+    expect(steps.saveDraft).toHaveBeenCalledWith(expect.objectContaining({ path: ready(1).path, liveSessionId: session }));
+  });
+
+  it("keeps the live session through a retry", async () => {
+    const steps = fakes();
+    const session = "5e550000-0000-4000-8000-000000000002";
+    steps.saveDraft.mockResolvedValueOnce({ status: "error", code: "failed", message: "Something went wrong." });
+    const outcome = await saveTake({ ...fresh, liveSessionId: session }, steps);
+    if (outcome.step !== "failed") throw new Error("expected the first save to fail");
+    expect(outcome.take.liveSessionId).toBe(session);
+    expect(await saveTake(outcome.take, steps)).toEqual({ step: "saved" });
+    expect(steps.saveDraft.mock.calls.map(([input]) => input.liveSessionId)).toEqual([session, session]);
   });
 
   it("keeps the recording, with nothing uploaded, when the upload fails", async () => {
@@ -122,6 +142,7 @@ describe("saveTake", () => {
       path: ready(2).path,
       durationMs: 95_000,
       recordedAt: take.recordedAt + HOUR,
+      liveSessionId: null,
     });
   });
 

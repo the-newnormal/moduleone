@@ -14,6 +14,11 @@ const nextConfig: NextConfig = {
   },
   turbopack: {
     rules: {
+      // The rubric files (rubrics/*.md) are imported as plain text: people edit them as documents,
+      // and the grader's and coach's prompts are built from them. vitest.config.mts does the same.
+      "*.md": {
+        type: "text",
+      },
       "*.css": {
         loaders: ["@tailwindcss/turbopack"],
         as: "*.css",
