@@ -9,9 +9,14 @@ them on GitHub without touching any code:
 | [`coach.md`](coach.md) | What the live check-in asks and when: the opening question, the topics Claude listens for, the follow-up questions, the weights and settings that choose between them, and the closing lines. Used only while live check-ins are on (`LIVE_CHECKIN=on`). |
 | `README.md` (this page) | How both work, how to edit them safely, what to measure and how to tune. The app never reads it. |
 
-Claude is sent the text of these files, word for word, apart from notes between `<!--` and `-->`,
-which are for people only. If this page and the files ever disagree, the files (and the code they
-feed) are what the app does; please fix this page in the same pull request.
+Claude is sent the wording of these files, apart from notes between `<!--` and `-->`, which are for
+people only: every section of `grading.md` (the app sets out its headings and levels its own
+way), and from `coach.md` the opening question, the coverage levels, the mood, each topic's label,
+description and `Ask` question, and the question style. The rest of `coach.md` (the weights, the
+closing lines, each topic's `Ask in a hard week` question and every setting except "Longest
+question") is used by the app only, and a topic's other lines reach Claude as sentences the app
+writes, such as "The key topic for activity." If this page and the files ever disagree, the files
+(and the code they feed) are what the app does; please fix this page in the same pull request.
 
 Contents:
 
@@ -59,6 +64,13 @@ Some rules are not in these files, so that no edit here can weaken them:
    - "teamwork" isn't one of the themes: the themes are delivery, collaboration, growth, wellbeing, blockers (the names can't change).
    ```
 
+   Four of the [rules for `coach.md`](#rules-for-coachmd) are checked by tests on the file instead:
+   keeping the nine ids, a `Needs` topic in the same area, `Tailor: no` on morale topics, and
+   `Brief is enough: yes` on `morale_reason` and `morale_team`. Breaking one fails `ci / check`
+   with a failing test named for the rule (for example "never quotes a member back in a question
+   about how they feel"), not a `can't be used` list. The app itself doesn't check these four, so
+   such a file wouldn't switch live check-ins off if it reached production.
+
    Fix them on the same branch (pencil icon again) and the checks run again.
 5. Once a reviewer has approved it (CodeRabbit's review counts) and the checks pass, merge it.
 6. **Nothing changes until `main` is deployed to production** (normally straight after the merge).
@@ -76,10 +88,9 @@ the three fixed questions until it's fixed.
 
 - Keep the sections `## Activity`, `## Excellence` and `## Morale`, together and in that order:
   Claude is sent them as one block in that order, so a section between them, or a different order,
-  is refused. Each starts with a line
-  saying what it is about, then exactly five levels written together, one per line: `- 1: …` to
-  `- 5: …` (`- 1 = …`, `- 1. …` and `- 1) …` work too). Anything after the levels is sent to
-  Claude as well.
+  is refused. Each starts with a line saying what it is about, then exactly five levels written
+  together, one per line: `- 1: …` to `- 5: …` (`- 1 = …`, `- 1. …` and `- 1) …` work too).
+  Anything after the levels is sent to Claude as well.
 - Keep `## Themes` with exactly these five, each as `- name: meaning`: `delivery`,
   `collaboration`, `growth`, `wellbeing`, `blockers`. Reword the meanings freely; the names are
   fixed (the database accepts only these).
@@ -100,7 +111,7 @@ the three fixed questions until it's fixed.
 - As in `grading.md`, every piece of text must sit inside a `## ` section: text under the
   `# Follow-up question rubric` title, or after a heading typed with one `#`, is refused. Use a
   note instead. Section headings may be in any case. Every `<!--` needs its `-->`.
-- **Opening question:** one line, at most 300 characters.
+- **Opening question:** at most 300 characters; line breaks in it are joined into one line.
 - **Coverage levels:** a line starting `- none:`, `- brief:`, `- clear:` and `- declined:`. The four
   levels are fixed; what each means is yours to word.
 - **Reading the mood:** a line starting `- neutral:`, `- hard_week:` and `- distress:`.
@@ -115,9 +126,9 @@ the three fixed questions until it's fixed.
   - Questions end with `?` and fit within "Longest question (characters)".
   - Every area has at least one topic and exactly one key topic, which needs nothing.
   - A topic can only need a topic in its own area that itself needs nothing.
-  - The current nine ids must stay as they are: they are stored with each recording's
-    statistics. Adding a topic is fine. Removing or renaming one is a change for an engineer (the
-    test lists the ids).
+  - The current nine ids must stay as they are, in the same order, each in the area its id starts
+    with: they are stored with each recording's statistics. Adding a topic is fine. Removing or
+    renaming one is a change for an engineer (the test lists the ids).
   - Morale topics keep `Tailor: no` (no question about feelings ever quotes someone back), and
     `morale_reason` and `morale_team` keep `Brief is enough: yes`.
 - **Closing lines:** exactly these four: `Everything covered`, `Time is nearly up`,
@@ -127,7 +138,9 @@ the three fixed questions until it's fixed.
 - **Settings:** every setting in [the settings table](#every-setting-in-coachmd), as a plain number
   (`2` or `0.5`, not `two` or `1e3`), inside its range, whole where it says so. "No new questions
   after" can't be earlier than "Only key topics after", and "Silence that means they have stopped"
-  can't be shorter than "Silence before showing a new question".
+  can't be shorter than "Silence before showing a new question". Lines under `## Settings` or
+  `## Closing lines` that aren't `- label: text` (such as "How the screen paces them:") are ignored:
+  the app doesn't read them and Claude never sees them.
 
 ### Fingerprints: which version graded what
 
@@ -142,11 +155,17 @@ coach's fingerprint in `live_checkin_sessions.coach_rubric`: a hash of the coach
 plus everything read from `coach.md` (every topic, weight, setting, question and closing line),
 with the model in `coach_model`. So:
 
-- any change to a rubric's wording, weights or settings gives a new fingerprint, and so does a
-  change to the fixed rules around it in code (for grading, also to the reply schema, the message
-  around the transcript or the effort). Rewording an existing note doesn't, and nor does switching
-  models;
-- grades and sessions can always be split into "before" and "after" a change;
+- for grading, any change to `grading.md`'s wording gives a new fingerprint, and so does a change
+  in code to the fixed rules around it, the reply schema, the message around the transcript or the
+  effort, so grades can always be split into "before" and "after" a change;
+- for the coach, only a change to what the app reads from `coach.md` (its wording, weights or
+  settings) or to the coach's system prompt (`src/lib/coach/prompt.ts`) gives a new fingerprint. A
+  change in code to the policy (scores, order of decisions, `validateQuestion`'s checks and blocked
+  words), when Claude reads (`src/lib/coach/turn.ts`), pacing, the reply schema, the message around
+  the transcript, or the effort and thinking doesn't, so split sessions by the date of the deploy
+  that made it (`started_at`) instead;
+- neither fingerprint changes when you reword an existing note, change the lines `coach.md` ignores
+  under `## Settings` and `## Closing lines`, or switch models;
 - hashing the `.md` file yourself will **not** give the fingerprint, because it covers the request
   built from the file, not the file.
 
@@ -196,7 +215,7 @@ them (a Master Admin) should do this:
    ```sql
    select json_agg(json_build_object('id', id, 'transcript', transcript))
    from (select id, transcript from checkins where transcript is not null
-         order by submitted_at desc limit 20) t;
+         order by submitted_at desc nulls last limit 20) t;
    ```
 
 2. On `main`, grade them with today's rubric:
@@ -207,8 +226,9 @@ them (a Master Admin) should do this:
    ```
 
 3. Switch to your branch with the edited rubric and run the same command again.
-4. Compare the two files in `grader-compare/` (each grade in the `.json` carries its
-   `rubricVersion`): did the scores move the way you meant, and nowhere else?
+4. Compare the two runs' files in `grader-compare/` (each run writes a `.md` to read and a `.json`
+   in which each grade carries its `rubricVersion`): did the scores move the way you meant, and
+   nowhere else?
 5. Delete `grader-compare/` and the input file. `grader-compare/` is git-ignored; never paste its
    contents into a pull request, issue or chat.
 
@@ -333,8 +353,10 @@ short follow-up questions appear on screen as they talk.
 3. **A coach call.** When they pause after saying enough new words (details under
    [pacing](#when-the-browser-calls-the-coach)), the browser sends the text so far to the server.
 4. **Claude's read.** If there are enough new words since its last read, Claude (`COACH_MODEL`,
-   default `claude-haiku-5-5`, thinking off, low effort, structured output, 6 seconds at most)
-   reads the whole text so far and reports:
+   default `claude-haiku-5-5`; low effort, structured output, 6 seconds at most; thinking off on
+   Haiku and on `claude-sonnet-5-5`, while any other model gets no thinking setting, so one that
+   thinks by default, such as Opus 5.5, thinks adaptively at low effort) reads the whole text so
+   far and reports:
    - each topic's coverage: **none**, **brief**, **clear** or **declined**;
    - the mood: **neutral**, **hard_week** or **distress**;
    - whether they are wrapping up, and whether the text tries to give it instructions (used in that
@@ -636,8 +658,9 @@ judgement, and members are told that nobody sees that record in the app. So:
 
 - look at totals and shares, never at one person's rows; never join to `members` or select ids;
 - don't export the results with anything that identifies anyone;
-- sessions never submitted are deleted after 14 days, so any count that includes them (`sessions`
-  in query 1) covers only the last 14 days.
+- sessions never submitted (or whose check-in was later reset or deleted) are deleted after 14
+  days, so `sessions` in query 1 counts submitted sessions over 28 days but unsubmitted ones over
+  only the last 14; for a like-for-like count, change its window to 14 days.
 
 ### What each live session records
 
@@ -648,10 +671,10 @@ end call came) holds:
 | --- | --- |
 | `coverage` | Each topic's highest level so far (`brief`, `clear` or `declined`); a topic missing is `none` |
 | `tone` | `neutral`, `hard_week` or `distress` |
-| `asked`, `skipped` | Topic ids shown, and those the member skipped with "Different question" |
+| `asked`, `skipped` | Topic ids shown and not skipped; a topic skipped with "Different question" moves from `asked` to `skipped`, so the two never overlap |
 | `followUps`, `perArea` | Follow-ups shown (skips excluded), and per area (skips included) |
-| `linesShown` | Closing lines shown: `covered`, `late`, `closing`, `beforeYouFinish` |
-| `counts.reads`, `counts.failures` | Claude reads, and reads that failed |
+| `linesShown` | Closing lines shown: `covered` (Everything covered), `late` (Time is nearly up), `closing` (After a hard moment, shown only on distress), `beforeYouFinish` (Before you finish) |
+| `counts.reads`, `counts.failures` | Successful Claude reads, and reads that failed (timeout, API error, refusal, unusable reply); a failed read is not in `reads` |
 | `counts.tailored`, `counts.bank` | Questions shown in Claude's wording, and in the file's (skipped ones included) |
 | `counts.rejected` | Questions shown in the file's wording because Claude's failed the checks (also counted in `bank`) |
 | `counts.latencyMs`, `counts.slowestMs` | Total and slowest Claude read time, in ms |
@@ -666,10 +689,14 @@ The row also has `coach_rubric` (the fingerprint), `coach_model`, `stt_model`, `
 submitted). A session with no coach call at all has `coach_state = '{}'`. Coverage and mood are as
 of the last read, so anything said after it isn't in `coverage`.
 
-The privacy notice tells members what this record keeps: which topics they were asked about, how
-much of each they had covered, and whether it sounded like a hard week or like they weren't coping
-(it then stops asking questions). Keeping anything more means changing the notice
-(`src/lib/checkin/notice.ts`) and its revision, so members accept it again.
+The privacy notice (`src/lib/checkin/notice.ts`) names three things this record keeps: which
+topics they were asked about, how much of each they had covered, and whether it sounded like a hard
+week or like they weren't coping (it then stops asking questions). The row keeps more than those
+three: counts and timings about how the app ran (Claude's reads and failed reads, where each
+question's wording came from, read times, how long live transcription ran, the models and the
+start time), and how many words Claude had read by its last read (`wordsRead`), which measures how
+much the member said and which the notice doesn't name. Keeping anything more about what members
+say or how they seem means changing the notice and its revision, so members accept it again.
 
 ### The metrics
 
@@ -682,10 +709,10 @@ Starting targets are a first guess: revisit them after the first month.
 | Skip rate | Skipped ÷ (asked + skipped) | under 15% | 1: `skip_rate` |
 | Tailored share | Questions shown in Claude's wording ÷ all follow-up questions shown (tailored + bank) | no target: watch for sudden changes | 1: `tailored_share` |
 | Rejected share | Of the questions shown where Claude's wording would have been used had it passed the checks, the share where it failed them: rejected ÷ (tailored + rejected), both counted when shown | under 20% | 1: `rejected_share` |
-| Coach failure rate | Failed reads ÷ all reads | under 2% | 1: `failure_rate` |
-| Read time | Mean, 95th-percentile slowest, and slowest Claude read | mean under 2 s, 95th under 4 s (the limit is 6 s) | 1: `mean_read_ms`, `p95_slowest_ms`, `slowest_ms` |
+| Coach failure rate | Failed reads ÷ all reads (successful and failed), in submitted live check-ins | under 2% | 1: `failure_rate` |
+| Read time | Mean read time; the 95th percentile of each session's slowest read; and the slowest read of all. The row keeps only each session's total and slowest, so a per-read percentile can't be worked out | mean under 2 s, 95% of sessions' slowest read under 4 s (the limit is 6 s) | 1: `mean_read_ms`, `p95_slowest_ms`, `slowest_ms` |
 | Fallback rate | Submitted live check-ins that fell back (best estimate: Claude never read it, or two or more reads failed) | under 5% | 1: `fallback_rate`; 9 |
-| Ended with "Everything covered" | Share whose questions ended because nothing was left worth asking | rising is good | 1: `ended_covered` |
+| Ended with "Everything covered" | Share whose questions ended with "Everything covered": nothing left worth asking, 4 follow-ups reached, or two skips in a row | watch alongside skip rate: a rise from skips isn't good | 1: `ended_covered` |
 | How often each topic is asked | Per topic: times asked and skipped, and asked per session | no topic skipped much more than others | 2 |
 | Coverage at finish, per topic | How many sessions ended with each topic at each level | | 3 |
 | Cost per check-in | All processing costs ÷ check-ins | live adds about US$0.05 for a 3-minute check-in, mostly live transcription | `/admin/costs` (Per check-in); 4 for coach detail |
@@ -694,6 +721,11 @@ Starting targets are a first guess: revisit them after the first month.
 | Live versus fixed | Mean scores, share red and green, excellence 1, minutes, by mode | no gap you can't explain | 7 |
 | Morale drift | Mean morale by week and mode | must not rise just because follow-ups were asked | 8 |
 | Coach and grader agree | The coach's excellence coverage against the excellence score | none or declined should mostly be a 1 | 9 |
+
+Query 1's figures other than `sessions`, `submitted`, `fallback_rate` and `failure_rate`, and
+queries 2, 3 and the first part of 9, cover submitted live check-ins that Claude read at least
+once: a check-in Claude never read has no coverage to measure. `fallback_rate` and `failure_rate`
+count every submitted live check-in.
 
 Add `coach_rubric` to a query's `select` and `group by` to compare before and after a
 `coach.md` change, and `rubric_version` for a `grading.md` change.
@@ -726,8 +758,9 @@ select
         / nullif(sum((n ->> 'tailored')::int + (n ->> 'bank')::int), 0), 2) as tailored_share,
   round(sum((n ->> 'rejected')::int)::numeric
         / nullif(sum((n ->> 'rejected')::int + (n ->> 'tailored')::int), 0), 2) as rejected_share,
-  round(sum((n ->> 'failures')::int)::numeric
-        / nullif(sum((n ->> 'reads')::int + (n ->> 'failures')::int), 0), 3) as failure_rate,
+  (select round(sum(coalesce((n ->> 'failures')::int, 0))::numeric
+          / nullif(sum(coalesce((n ->> 'reads')::int, 0) + coalesce((n ->> 'failures')::int, 0)), 0), 3)
+     from s where checkin_id is not null) as failure_rate,
   round(sum((n ->> 'latencyMs')::numeric) / nullif(sum((n ->> 'reads')::int), 0)) as mean_read_ms,
   percentile_disc(0.95) within group (order by (n ->> 'slowestMs')::numeric) as p95_slowest_ms,
   max((n ->> 'slowestMs')::numeric) as slowest_ms,
@@ -890,7 +923,11 @@ short of the recording's length most likely fell back: a second estimate of the 
 1. **Pick one thing to improve**, from the metrics above, and one change that should move it: a
    weight, a setting, a topic's description, a question's wording. **One change per pull
    request**, so you know what moved the numbers.
-2. **Note the numbers before**: run the queries for the last four weeks.
+2. **Note the numbers before**: run the queries. Their windows differ: queries 1 to 3 and the
+   second part of 9 cover the last 28 days, 7 the last 8 weeks and 8 the last 12; 4 is by month,
+   and 5, 6 and the first part of 9 have no time limit (5 and 6 are split by `rubric_version`).
+   Give 7, 8 and the first part of 9 the same 28 days, or split them by `rubric_version` or
+   `coach_rubric`.
 3. **Check the change offline.**
    - For `coach.md` wording (topic descriptions, coverage levels, mood): run the coach's eval set,
      a dozen made-up check-ins labelled with the coverage a careful reader would give (in
