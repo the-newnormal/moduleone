@@ -269,7 +269,7 @@ export function nextOffer(
 
   // They are finishing but an area hasn't come up: one last question about it, once.
   if (read?.wrappingUp && !allKeys && !said("beforeYouFinish")) {
-    const area = AREAS.find((a) => !keyDone(state, rubric, a) && canAsk(keyTopic(rubric, a)));
+    const area = AREAS.find((a) => level(state, keyTopic(rubric, a).id) === "none" && canAsk(keyTopic(rubric, a)));
     if (area) {
       const topic = keyTopic(rubric, area);
       return question(state, topic, "bank", `${lines.beforeYouFinish} ${lowerFirst(bankText(state, topic))}`, true);

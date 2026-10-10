@@ -190,7 +190,7 @@ begin
   update public.live_checkin_sessions s
     set coach_state = p_coach_state,
         recorded_ms = least(greatest(coalesce(p_recorded_ms, 0), s.recorded_ms, 0),
-                            (extract(epoch from now() - s.started_at) * 1000)::int, 3600000)
+                            extract(epoch from now() - s.started_at) * 1000, 3600000)
     where s.id = p_session_id and s.member_id = p_member_id
       and s.coach_calls = p_call_number and s.ended_at is null
     returning true into v_saved;
@@ -206,10 +206,12 @@ create function end_live_checkin_session(p_session_id uuid, p_member_id uuid, p_
 declare
   v_ms int;
 begin
+  -- The time since it started stays numeric until capped: as an int it overflows after 24 days, and
+  -- a session the daily job missed could be that old.
   update public.live_checkin_sessions s
     set ended_at = now(),
         recorded_ms = least(greatest(coalesce(p_recorded_ms, 0), s.recorded_ms, 0),
-                            (extract(epoch from now() - s.started_at) * 1000)::int, 3600000)
+                            extract(epoch from now() - s.started_at) * 1000, 3600000)
     where s.id = p_session_id and s.member_id = p_member_id and s.ended_at is null
     returning s.recorded_ms into v_ms;
   return v_ms;
