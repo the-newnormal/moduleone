@@ -5,7 +5,7 @@
 
 import { QUESTIONS, type QuestionId } from "@/lib/checkin/week";
 import gradingFile from "../../../rubrics/grading.md";
-import { keyValue, RubricError, splitSections, withoutNotes } from "../rubrics/markdown";
+import { keyValue, OUTSIDE_SECTIONS, RubricError, splitSections, withoutNotes } from "../rubrics/markdown";
 import { CATEGORIES, type Category, type Score } from "./types";
 
 export const GRADING_RUBRIC_FILE = "rubrics/grading.md";
@@ -38,12 +38,14 @@ const LEVEL_LINE = /^-\s*([1-5])\s*[:=.)]\s*(.*)$/;
 const LEVEL_ISH = /^-\s*\d/;
 const MAX_TEXT = 4000;
 
+
 export function parseGradingRubric(source: string, file = GRADING_RUBRIC_FILE): GradingRubric {
   const problems: string[] = [];
   const { text, unclosed } = withoutNotes(source);
   if (unclosed) problems.push('A note starting "<!--" is never closed with "-->", so everything after it would be hidden.');
 
-  const { sections } = splitSections(text, 2);
+  const { preamble, sections } = splitSections(text, 2);
+  if (preamble) problems.push(OUTSIDE_SECTIONS);
   const byHeading = new Map<string, string>();
   for (const section of sections) {
     const key = section.heading.toLowerCase();

@@ -26,6 +26,11 @@ export function withoutNotes(text: string): { text: string; unclosed: boolean } 
 
 export type Section = { heading: string; body: string };
 
+// Text that splitSections leaves outside every "## " section (under the "# " title, or after a
+// heading typed with one "#") would never reach Claude, so the rubric parsers refuse it.
+export const OUTSIDE_SECTIONS =
+  'Text outside the "## " sections is never sent to Claude: move it into a section, or make it a note between <!-- and -->. (Check for a heading written with one "#" instead of two.)';
+
 // The file split at headings of one level ("## " or "### "): each heading with the text under it,
 // up to the next heading of that level or higher. Text before the first heading is `preamble`.
 export function splitSections(text: string, level: 2 | 3): { preamble: string; sections: Section[] } {

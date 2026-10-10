@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import gradingFile from "../../../rubrics/grading.md";
-import { RubricError, withoutNotes } from "../rubrics/markdown";
+import { OUTSIDE_SECTIONS, RubricError, withoutNotes } from "../rubrics/markdown";
 import { gradingRubric, parseGradingRubric } from "./rubric";
 import { CATEGORIES } from "./types";
 
@@ -139,6 +139,16 @@ describe("parseGradingRubric refuses a broken file, saying what is wrong", () =>
       ['The section "## Morale" is missing.'],
     ],
     ["the Themes section deleted", () => editSection("Themes", () => ""), ['The section "## Themes" is missing.']],
+    [
+      "words under the title, outside any section",
+      () => gradingFile.replace("# Grading rubric\n", "# Grading rubric\n\nBe generous with new joiners.\n"),
+      [OUTSIDE_SECTIONS],
+    ],
+    [
+      "a heading typed with one # instead of two",
+      () => replaceIn("Singapore English", "## Singapore English", "## Language\n\nPlain English.\n\n# Singapore English"),
+      [OUTSIDE_SECTIONS],
+    ],
     ["the Review section deleted", () => editSection("Review", () => ""), ['The section "## Review" is missing.']],
     [
       "a section written twice",

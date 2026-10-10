@@ -4,7 +4,7 @@
 // falls back to the three fixed questions, rather than coaching with half a rubric.
 
 import coachFile from "../../../rubrics/coach.md";
-import { decimal, keyValue, RubricError, splitSections, withoutNotes, yesNo } from "../rubrics/markdown";
+import { decimal, keyValue, OUTSIDE_SECTIONS, RubricError, splitSections, withoutNotes, yesNo } from "../rubrics/markdown";
 import { AREAS, type Area, type CoachLines, type CoachRubric, type CoachSettings, type Pacing, type Topic } from "./types";
 
 export const COACH_RUBRIC_FILE = "rubrics/coach.md";
@@ -50,7 +50,8 @@ export function parseCoachRubric(source: string, file = COACH_RUBRIC_FILE): Coac
   const { text, unclosed } = withoutNotes(source);
   if (unclosed) problems.push('A note starting "<!--" is never closed with "-->", so everything after it would be hidden.');
 
-  const { sections } = splitSections(text, 2);
+  const { preamble, sections } = splitSections(text, 2);
+  if (preamble) problems.push(OUTSIDE_SECTIONS);
   const byHeading = new Map<string, string>();
   for (const section of sections) {
     const known = SECTIONS.find((name) => name.toLowerCase() === section.heading.toLowerCase());

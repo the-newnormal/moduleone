@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import coachFile from "../../../rubrics/coach.md";
-import { RubricError } from "../rubrics/markdown";
+import { OUTSIDE_SECTIONS, RubricError } from "../rubrics/markdown";
 import { coachRubric, pacingFrom, parseCoachRubric, SETTINGS } from "./rubric";
 import { AREAS } from "./types";
 
@@ -215,6 +215,11 @@ describe("parseCoachRubric refuses a broken file, saying what is wrong", () => {
       [`"## Question styles" isn't a section this file has. The sections are: ${sections}.`, 'The section "## Question style" is missing.'],
     ],
     ["a section deleted", () => editPart("## Reading the mood\n", () => ""), ['The section "## Reading the mood" is missing.']],
+    [
+      "words under the title, outside any section",
+      () => coachFile.replace("# Follow-up question rubric\n", "# Follow-up question rubric\n\nBe extra gentle on Mondays.\n"),
+      [OUTSIDE_SECTIONS],
+    ],
     ["an empty section", () => editPart("## Opening question\n", () => "\n## Opening question\n"), ['The section "## Opening question" is empty.']],
     [
       "a section written twice",
