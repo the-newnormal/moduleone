@@ -311,9 +311,11 @@ short follow-up questions appear on screen as they talk.
 
 ### End to end
 
-1. **Start.** The browser asks the server for a live session. The server checks live check-ins
-   are on, `coach.md` can be used, the member has accepted the current privacy notice and hasn't
-   submitted this week, and they have started fewer than 12 sessions in 24 hours. It then creates
+1. **Start.** Once the recording has started (so after the browser's microphone prompt, which can
+   stay open longer than the key below lasts), the browser asks the server for a live session; a
+   refused microphone starts none. The server checks live check-ins are on, `coach.md` can be
+   used, the member has accepted the current privacy notice and hasn't submitted this week, and
+   they have started fewer than 12 sessions in 24 hours. It then creates
    the session and gets a short-lived OpenAI key, which can be used to connect for 30 seconds (a
    session that has connected carries on after it expires). Until it expires, a member who dug the
    key out of their browser could open more than one transcription session with it, on Normal's
@@ -772,7 +774,7 @@ group by 1, 2 order by 1, 2;
 select date_trunc('month', created_at at time zone 'Asia/Singapore')::date as month,
   count(distinct live_session_id) as live_sessions,
   round(sum(audio_ms) filter (where step = 'live_transcription') / 60000.0, 1) as live_minutes,
-  count(*) filter (where step = 'coaching') as coach_reads,
+  count(*) filter (where step = 'coaching') as coach_replies,
   round(avg(input_tokens + cache_read_tokens + cache_write_tokens) filter (where step = 'coaching')) as coach_tokens_in,
   round(avg(output_tokens) filter (where step = 'coaching')) as coach_tokens_out,
   round(sum(cache_read_tokens) filter (where step = 'coaching')::numeric
@@ -781,6 +783,9 @@ from processing_costs
 where live_session_id is not null
 group by 1 order by 1 desc;
 ```
+
+`coach_replies` counts every reply Claude sent, including the few that couldn't be used (a
+refusal, a cut-off reply, output that doesn't fit), since those are paid for too.
 
 **5. Grades by rubric version**
 
