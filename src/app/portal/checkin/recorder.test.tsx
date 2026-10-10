@@ -281,6 +281,21 @@ describe("the camera", () => {
     vi.unstubAllGlobals();
   });
 
+  it("says why when it can't come on by itself", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    devices(async () => {
+      throw new DOMException("busy", "NotReadableError");
+    }, "granted");
+    const { Recorder } = await load();
+    await render(<Recorder />);
+    await settle();
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+      "Your camera is busy in another app. Close that app, then try again.",
+    );
+    expect(button("Turn on my camera")).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
+
   it("says when the computer blocks the camera for the browser, or the browser's question was closed", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     // Chrome's words for each: the site setting can't fix either.

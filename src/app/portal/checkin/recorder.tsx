@@ -392,7 +392,8 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
       if (ask) holdCameraQuestion(request);
       stream = await request;
     } catch (error) {
-      if (attempt === camera.current.asked) setCameraNote(ask ? { problem: cameraProblem(error) } : null);
+      // Coming on by itself too: the member needs it, so they're told at once why it can't.
+      if (attempt === camera.current.asked) setCameraNote({ problem: cameraProblem(error) });
       return;
     }
     // Turned off (or the page left) while the browser asked: let it go.
