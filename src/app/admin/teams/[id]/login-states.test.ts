@@ -143,6 +143,37 @@ describe("readLoginStates", () => {
     loggedNothingWithAnEmail();
   });
 
+  it("returns null when the call throws instead of answering, so the page still loads", async () => {
+    // A fetch that fails outright (the network, or a client set to throw), on the first page or a later one.
+    for (const pages of [0, 1]) {
+      vi.mocked(console.error).mockClear();
+      const rpc = vi.fn(() => {
+        let from = 0;
+        const builder = {
+          order: () => builder,
+          range(f: number) {
+            from = f;
+            return builder;
+          },
+          then<A, B>(resolve: (r: Response) => A, reject?: (e: unknown) => B) {
+            const answer: Promise<Response> =
+              from / PAGE_SIZE < pages
+                ? Promise.resolve({ data: logins(PAGE_SIZE), error: null })
+                : Promise.reject(Object.assign(new TypeError("fetch failed for nora@example.com"), { code: "ECONNRESET" }));
+            return answer.then(resolve, reject);
+          },
+        };
+        return builder;
+      });
+      await expect(readLoginStates({ rpc } as unknown as SupabaseClient)).resolves.toBeNull();
+      expect(console.error).toHaveBeenCalledExactlyOnceWith("read login states failed", {
+        code: "ECONNRESET",
+        status: undefined,
+      });
+      loggedNothingWithAnEmail();
+    }
+  });
+
   it("returns null when the caller isn't an admin, logging the code and HTTP status", async () => {
     const error = { code: "42501", status: 403, message: "Only admins can see who has signed in.", details: null };
     const { client } = fakeClient([{ data: null, error }]);

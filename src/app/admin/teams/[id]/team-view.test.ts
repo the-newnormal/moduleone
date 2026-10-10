@@ -771,6 +771,46 @@ describe("buildTeamView", () => {
       "Invite not used",
       "Invite not used",
     ]);
+    // Nor do they say only the project owner can re-send it, whether or not it was given here.
+    const fromDashboard = members.map((m) => ({ ...m, login_given_by: null, login_given_at: null }));
+    const dashboardPeople = buildTeamView({
+      teamId: "team-ip1",
+      adminMemberId: "m-leo",
+      teams: TEAMS,
+      members: fromDashboard,
+      leads: [],
+      logins: states(unused),
+    })!.people;
+    expect([...at(states(unused)), ...dashboardPeople].some((p) => p.ownerResendsInvite)).toBe(false);
+  });
+
+  it("says only the project owner can re-send an unused invite whose login wasn't given in Module One", () => {
+    const dashboard = (id: string, name: string) => member(id, name, "member", "team-ip1", { auth_user_id: `u-${id.slice(2)}` });
+    const members = [
+      ...MEMBERS.filter((m) => m.id === ADMIN),
+      dashboard("m-fay", "Fay Fresh"),
+      dashboard("m-rei", "Rei Ready"),
+      dashboard("m-act", "Act Active"),
+      dashboard("m-una", "Una Unread"),
+      member("m-giv", "Giv Given", "member", "team-ip1", { auth_user_id: "u-giv", login_given_by: ADMIN, login_given_at: SENT }),
+    ];
+    const logins = states([
+      loginRow("m-fay", "invited", { invited_at: SENT }),
+      loginRow("m-rei", "ready"),
+      loginRow("m-act", "active", { last_sign_in_at: SENT }),
+      loginRow("m-giv", "invited", { invited_at: SENT }),
+    ]);
+    const flags = Object.fromEntries(
+      view("team-ip1", members, LEADS, [], logins)!.people.map((p) => [p.name, [p.ownerResendsInvite, p.canResendInvite]]),
+    );
+    expect(flags).toEqual({
+      "Act Active": [false, false],
+      "Fay Fresh": [true, false],
+      "Giv Given": [false, true],
+      "Hana Lim": [false, false],
+      "Rei Ready": [false, false],
+      "Una Unread": [false, false], // unread: nothing to say
+    });
   });
 
   it("never carries an email address or auth user id, even with the login states", () => {

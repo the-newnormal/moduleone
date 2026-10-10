@@ -23,6 +23,7 @@ const person = (id: string, name: string, changes: Partial<Person> = {}): Person
   canGiveLogin: false,
   ownerGivesLogin: false,
   canResendInvite: false,
+  ownerResendsInvite: false,
   emailChanged: null,
   canChangeEmail: false,
   canRemove: false,

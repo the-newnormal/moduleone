@@ -101,6 +101,9 @@ export type Person = {
   // Not a Master Admin or the admin, with a login given in Module One that hasn't been used (or
   // whose state couldn't be read: the server checks again either way).
   canResendInvite: boolean;
+  // As canResendInvite, but the unused login wasn't given in Module One (it was made in the
+  // Supabase dashboard), so only the project owner can send its invite again.
+  ownerResendsInvite: boolean;
   emailChanged: string | null; // "Sign-in email changed by Hana Lim on 9 Oct 2026", while they have a login
   // Change email and Remove from Module One: not a Master Admin or the admin, and not someone the
   // project owner keeps (below). Change email needs a login.
@@ -536,6 +539,7 @@ function personOf(
     // Once a login is used, resendInvite refuses it (it signs in at the login page instead).
     canResendInvite:
       loginsHere && hasLogin && m.login_given_at !== null && (login.state === "invited" || login.state === "unknown"),
+    ownerResendsInvite: loginsHere && login.state === "invited" && m.login_given_at === null,
     emailChanged:
       hasLogin && changedSinceGiven(m)
         ? emailChangedText(nameOf(m.login_email_changed_by), m.login_email_changed_at)

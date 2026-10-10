@@ -76,6 +76,7 @@ const person = (id: string, name: string, changes: Partial<Person> = {}): Person
   canGiveLogin: false,
   ownerGivesLogin: false,
   canResendInvite: false,
+  ownerResendsInvite: false,
   emailChanged: null,
   canChangeEmail: false,
   canRemove: false,
@@ -212,7 +213,12 @@ describe("PeopleSection", () => {
 
   it("shows the sign-in status without a date when there's none to show", () => {
     const html = render(TEAM, [
-      person("m-ivy", "Ivy Ho", { editable: false, hasLogin: true, login: { state: "invited", sentAt: null, expired: false } }),
+      person("m-ivy", "Ivy Ho", {
+        editable: false,
+        hasLogin: true,
+        ownerResendsInvite: true,
+        login: { state: "invited", sentAt: null, expired: false },
+      }),
       person("m-dan", "Dan Lim", { editable: false, hasLogin: true, login: { state: "active", lastSignedInOn: null } }),
     ]);
     // A login the project owner made without an invite: nobody can sign in with it yet.
@@ -224,18 +230,21 @@ describe("PeopleSection", () => {
     expect(text(html)).not.toMatch(/Invite sent|Last signed in/);
   });
 
-  it("says only the project owner can send an unused invite again when Resend invite isn't offered", () => {
+  it("says only the project owner can send an unused invite again when its login wasn't given in Module One", () => {
     const note = "only the project owner can send its invite again";
     const invited = { state: "invited", sentAt: "1 Oct 2026, 9:15 am", expired: true } as const;
     const html = render(TEAM, [
-      person("m-ivy", "Ivy Ho", { editable: false, hasLogin: true, login: invited }), // given in the dashboard
+      // Made in the dashboard.
+      person("m-ivy", "Ivy Ho", { editable: false, hasLogin: true, ownerResendsInvite: true, login: invited }),
       person("m-ben", "Ben Kho", { editable: false, hasLogin: true, canResendInvite: true, login: invited }),
+      // A Master Admin's unused invite: no Resend invite, but the note isn't about them.
+      person("m-ada", "Ada Boss", { role: "hq", roleLabel: "Master Admin", editable: false, hasLogin: true, login: invited }),
       person("m-cat", "Cat Ng", { editable: false, hasLogin: true, login: { state: "ready" } }),
       person("m-dan", "Dan Lim", { editable: false, hasLogin: true }), // couldn't be read
     ]);
     expect(row(html, "Ivy Ho")).toContain(note);
     expect(row(html, "Ivy Ho")).not.toContain("Resend invite");
-    for (const name of ["Ben Kho", "Cat Ng", "Dan Lim"]) expect(row(html, name)).not.toContain(note);
+    for (const name of ["Ben Kho", "Ada Boss", "Cat Ng", "Dan Lim"]) expect(row(html, name)).not.toContain(note);
   });
 
   it("shows the sign-in status before who gave the login and who changed the sign-in email", () => {
