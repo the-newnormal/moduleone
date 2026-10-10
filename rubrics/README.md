@@ -130,7 +130,7 @@ session stores the coach's fingerprint in `live_checkin_sessions.coach_rubric`, 
 from the coach's instructions plus every weight, setting and question in `coach.md`. So:
 
 - any change to a rubric's wording, weights or settings gives a new fingerprint, and so does a
-  change to the fixed rules around it in code. A change to a note alone doesn't;
+  change to the fixed rules around it in code. Rewording an existing note doesn't;
 - grades and sessions can always be split into "before" and "after" a change;
 - hashing the `.md` file yourself will **not** give the fingerprint, because it covers the
   instructions built from the file, not the file.
@@ -319,8 +319,8 @@ short follow-up questions appear on screen as they talk.
    - its suggestion: the topic most worth asking next, its own wording for the question, and the
      member's exact words that wording quotes, if any.
 
-   Claude is sent only the text so far and the ids of topics already asked. It never sees the
-   weights or settings.
+   Claude is sent only the text so far and the ids of topics already asked or skipped. It never
+   sees the weights or settings.
 5. **The policy decides.** Plain code ([`src/lib/coach/policy.ts`](../src/lib/coach/policy.ts))
    adds the read to what it knew (each topic keeps the highest level any read gave it; the mood
    only ever gets heavier) and picks the next thing to show: a question, a closing line, or
@@ -398,8 +398,8 @@ At each call the policy goes down this list and stops at the first that applies:
 
 1. **Distress** (they say plainly they are not coping): the "After a hard moment" line, once.
    Nothing is asked after that, and Claude isn't called again.
-2. **A closing line is already on screen** ("Everything covered", "Time is nearly up" or "After a
-   hard moment"): nothing new.
+2. **A closing line has been shown** ("Everything covered", "Time is nearly up" or "After a hard
+   moment"): nothing new; it stays on screen.
 3. **360 s or more**: "Time is nearly up".
 4. **They are wrapping up but an area hasn't come up at all** (its key topic is still none, and can
    still be asked): "Before you finish," followed by that key topic's question, once per
@@ -574,7 +574,7 @@ Weights (0.05 to 3, per topic) set how much each topic matters against the other
 | Least score worth asking | 0.45 | 0–5 | The floor while some area's key topic isn't done | fewer questions | more questions, including weak ones |
 | Least score worth asking once every area is touched | 0.6 | 0–5 | The floor once every key topic is done | ends sooner with "Everything covered" | more depth questions |
 | Least score worth asking in a hard week | 0.7 | 0–5 | The lowest floor in a hard week | fewer questions in a hard week | as many as usual (it never lowers the other floors) |
-| Only key topics after (seconds) | 270 | 30–600 | From then on, only an untouched area's key topic is asked | more time for depth | breadth only, sooner |
+| Only key topics after (seconds) | 270 | 30–600 | From then on, only key topics are asked | more time for depth | breadth only, sooner |
 | No new questions after (seconds) | 360 | 30–600 | Then "Time is nearly up" | questions later into long recordings | earlier close; not earlier than the setting above |
 | Silence before showing a new question (seconds) | 2.5 | 0.5–10 | Pause needed to show a waiting question | fewer interruptions, later questions | questions show at shorter pauses |
 | Silence that means they have stopped (seconds) | 6 | 1–30 | Pause after which a waiting question shows regardless | longer waits when they stop | quicker help when stuck; not shorter than the setting above |
@@ -593,8 +593,8 @@ judgement, and members are told that nobody sees that record in the app. So:
 
 - look at totals and shares, never at one person's rows; never join to `members` or select ids;
 - don't export the results with anything that identifies anyone;
-- sessions never submitted are deleted after 14 days, so look back four weeks at most for
-  unsubmitted ones.
+- sessions never submitted are deleted after 14 days, so any count that includes them (`sessions`
+  in query 1) covers only the last 14 days.
 
 ### What each live session records
 
@@ -637,8 +637,8 @@ Starting targets are a first guess: revisit them after the first month.
 | Coverage at finish, per topic | How many sessions ended with each topic at each level | | 3 |
 | Cost per check-in | All processing costs ÷ check-ins | live adds about US$0.05 for a 3-minute check-in, mostly live transcription | `/admin/costs` (Per check-in); 4 for coach detail |
 | Scores by rubric version | Mean scores and each score's count, by `rubric_version` | moves only where an edit meant it to | 5, 6 |
-| Reviews naming an unanswered area | Reviews containing "unanswered" | lower with live than with fixed questions | 5, 7: `names_unanswered` |
-| Live versus fixed | Mean scores, share red and green, excellence 1, minutes, by mode | live no worse on any | 7 |
+| Reviews naming an unanswered area | Reviews containing "unanswered" | no higher with live than with fixed questions | 5, 7: `names_unanswered` |
+| Live versus fixed | Mean scores, share red and green, excellence 1, minutes, by mode | no gap you can't explain | 7 |
 | Morale drift | Mean morale by week and mode | must not rise just because follow-ups were asked | 8 |
 | Coach and grader agree | The coach's excellence coverage against the excellence score | none or declined should mostly be a 1 | 9 |
 
