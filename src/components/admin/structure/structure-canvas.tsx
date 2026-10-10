@@ -44,8 +44,10 @@ import { ArchivedSection, type Report } from "./archived-list";
 import { type Dragged, type DropPlan, type PlacePlan, placeAction, planDrop } from "./canvas-drop";
 import { canvasPeopleOf, itemAt, layoutStructure, NO_TEAM_ID, personNodeId } from "./canvas-layout";
 import { CanvasContext, type CanvasNode, dragging, flowNodes, NODE_TYPES, PERSON_HINT_ID } from "./canvas-nodes";
+import { findCentreX, type SearchMatch } from "./canvas-search";
 import type { StructureRow } from "./counts";
 import { type EditorDialog, menuButton, nodeSelector, type StructureActions } from "./editor-context";
+import { FindBox } from "./find-box";
 import { NoTeamPanel } from "./no-team-panel";
 import { NodePanel } from "./node-panel";
 import { ArchiveDialog, MoveDialog, NodeFormDialog } from "./node-dialogs";
@@ -162,6 +164,35 @@ function Canvas({ rows, members, leads, grants, logins = null, adminMemberId, ac
     if (id === NO_TEAM_ID) focusSoon("[data-no-team-button]", "#structure-heading");
     else if (id) focusSoon(nodeSelector(id), "#structure-heading");
   }, [panelId]);
+
+  // ---------- finding ----------
+
+  // Only what the chart draws a box for: a node "Not in the tree" (listed under the chart) has
+  // none to pan to, nor do the people in it. The search leaves out people whose node isn't here.
+  const charted = useMemo(() => {
+    const drawn = new Set(layout.items.flatMap((i) => (i.type === "node" ? [i.id] : [])));
+    return view.filter((r) => drawn.has(r.id));
+  }, [layout, view]);
+
+  // A match from "Find a person or team": pan its box into view, then open its panel. A person's
+  // panel is their node's (or No team's), as when their box is picked; their own box is panned to
+  // only while people are shown, else their node's (No team has no box then). The box is centred
+  // in what the side panel leaves visible (findCentreX).
+  const findOnChart = (match: SearchMatch) => {
+    const target = match.type === "node" ? match.id : showPeople ? personNodeId(match.id) : match.teamId;
+    const item = target === null ? undefined : layout.items.find((i) => i.id === target);
+    const box = pane.current;
+    if (item && box) {
+      const zoom = Math.max(flow.getZoom(), 0.8);
+      const cx = item.x + item.width / 2;
+      const cy = item.y + item.height / 2;
+      flow.setViewport(
+        { x: findCentreX(box.clientWidth, item.width * zoom) - cx * zoom, y: box.clientHeight / 2 - cy * zoom, zoom },
+        { duration: 300 },
+      );
+    }
+    openPanel(match.type === "node" ? match.id : (match.teamId ?? NO_TEAM_ID));
+  };
 
   // ---------- moving ----------
 
@@ -395,6 +426,7 @@ function Canvas({ rows, members, leads, grants, logins = null, adminMemberId, ac
           <Button variant="outline" data-no-team-button onClick={() => openPanel(NO_TEAM_ID)}>
             No team ({noTeamCount})
           </Button>
+          <FindBox rows={charted} members={people} onPick={findOnChart} />
           {saving && <span className="text-sm text-muted-foreground">Saving…</span>}
           {drag?.plan && (
             <span
