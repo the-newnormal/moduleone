@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { askCoach, endLive, isLiveStartReady, startLive } from "./api";
-import { LIVE_COACH_PATH, LIVE_END_PATH, LIVE_START_PATH, type CoachRequest } from "./contract";
+import { askCoach, connectLive, endLive, isLiveStartReady, startLive } from "./api";
+import { LIVE_COACH_PATH, LIVE_CONNECT_PATH, LIVE_END_PATH, LIVE_START_PATH, type CoachRequest } from "./contract";
 
 const fetchMock = vi.fn();
 
@@ -26,7 +26,6 @@ const manualRedirect = () => ({ type: "opaqueredirect", status: 0, redirected: f
 const READY = {
   status: "ready",
   sessionId: "8b0e6f4a-3c1d-4e2f-9a7b-1c2d3e4f5a6b",
-  clientSecret: "ek_test",
   sttModel: "gpt-live-transcribe",
   opening: "How was your week, and how is the team doing?",
   pacing: { showAfterSilenceMs: 1500, stoppedSilenceMs: 5000, minQuestionMs: 20000, minWordsPerQuestion: 25, firstFollowUpAfterMs: 45000 },
@@ -88,7 +87,7 @@ describe("startLive", () => {
     ["a JSON array", () => Promise.resolve(jsonResponse([READY]))],
     ["an unknown status", () => Promise.resolve(jsonResponse({ status: "maybe" }))],
     ["an error without a code", () => Promise.resolve(jsonResponse({ status: "error" }, 500))],
-    ["ready without a key", () => Promise.resolve(jsonResponse({ ...READY, clientSecret: "" }))],
+    ["ready without a session", () => Promise.resolve(jsonResponse({ ...READY, sessionId: "" }))],
     ["ready without the pacing", () => Promise.resolve(jsonResponse({ ...READY, pacing: undefined }))],
     ["ready with broken pacing", () => Promise.resolve(jsonResponse({ ...READY, pacing: { ...READY.pacing, minQuestionMs: "20s" } }))],
   ])("answers null for %s", async (_label, respond) => {
@@ -96,6 +95,30 @@ describe("startLive", () => {
     const result = await startLive();
     expect(result).toBeNull();
     expect(isLiveStartReady(result)).toBe(false);
+  });
+});
+
+describe("connectLive", () => {
+  const REQUEST = { sessionId: READY.sessionId, offer: "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n" };
+
+  it("sends the offer for the session and passes on OpenAI's answer", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ status: "connected", answer: "v=0\r\nanswer" }));
+    expect(await connectLive(REQUEST)).toEqual({ status: "connected", answer: "v=0\r\nanswer" });
+    expect(fetchMock.mock.calls[0][0]).toBe(LIVE_CONNECT_PATH);
+    expect(JSON.parse(sentInit().body as string)).toEqual(REQUEST);
+  });
+
+  it("passes on a refusal", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ status: "error", code: "no_session" }, 404));
+    expect(await connectLive(REQUEST)).toEqual({ status: "error", code: "no_session" });
+  });
+
+  it.each([
+    ["connected without an answer", { status: "connected", answer: "" }],
+    ["an unknown status", { status: "maybe" }],
+  ])("answers null for %s", async (_label, body) => {
+    fetchMock.mockResolvedValue(jsonResponse(body));
+    expect(await connectLive(REQUEST)).toBeNull();
   });
 });
 

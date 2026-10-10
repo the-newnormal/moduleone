@@ -81,7 +81,8 @@ select is((select count(*)::int from pg_policies where schemaname = 'public' and
   'there is no policy: nobody reads it through the API');
 select columns_are('public', 'live_checkin_sessions',
   array['id', 'member_id', 'week_start', 'started_at', 'expires_at', 'stt_model', 'coach_model', 'coach_rubric',
-        'coach_calls', 'last_coach_at', 'coach_state', 'recorded_ms', 'ended_at', 'audio_path', 'checkin_id'],
+        'coach_calls', 'last_coach_at', 'coach_state', 'recorded_ms', 'ended_at', 'audio_path', 'checkin_id',
+        'connected_at'],
   'live_checkin_sessions has exactly the expected columns (no transcript, no questions)');
 select table_privs_are('public', 'live_checkin_sessions', 'anon', array[]::text[], 'anon has no privileges');
 select table_privs_are('public', 'live_checkin_sessions', 'authenticated', array[]::text[],

@@ -348,8 +348,8 @@ export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?
       settle(null);
       return setState({ step: "idle", problem: "Couldn't start the microphone. Try again." });
     }
-    // Only now asks for a live session (leaving the page stops it): its transcription key must be
-    // used within 30 seconds, and the browser's microphone prompt can stay open longer than that.
+    // Only now asks for a live session (leaving the page stops it), so a refused or abandoned
+    // microphone prompt starts none.
     coach.begin();
     coach.attach(stream);
     setState({ step: "recording", question: 0 });

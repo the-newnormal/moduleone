@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONNECT_TIMEOUT_MS } from "./pacing";
-import { connectLiveTranscription, REALTIME_CALLS_URL, toTranscriptEvent } from "./transport";
+import { connectLiveTranscription, toTranscriptEvent } from "./transport";
 
 // The SDK's WebRTC connection is replaced by a fake that behaves like it where this module relies on
 // it: events go to subscribers, close() reports a local close once, a failed setup reports a close
@@ -70,7 +70,10 @@ const { FakeRtc } = vi.hoisted(() => {
 
 vi.mock("openai/realtime/webrtc", () => ({ OpenAIRealtimeWebRTC: FakeRtc }));
 
+// The browser never calls OpenAI itself: fetch is watched to prove it, and the offer goes to
+// `exchange` (the connect route, in the app).
 const fetchMock = vi.fn();
+const exchange = vi.fn<(offer: string, signal: AbortSignal) => Promise<string>>();
 
 function microphone() {
   const clone = { stop: vi.fn() };
@@ -83,7 +86,7 @@ async function connected(extra: { signal?: AbortSignal } = {}) {
   const mic = microphone();
   const onEvent = vi.fn();
   const onFailure = vi.fn();
-  const connection = await connectLiveTranscription({ stream: mic.stream, clientSecret: "ek_test", onEvent, onFailure, ...extra });
+  const connection = await connectLiveTranscription({ stream: mic.stream, exchange, onEvent, onFailure, ...extra });
   const rtc = FakeRtc.instances.at(-1)!;
   return { ...mic, onEvent, onFailure, connection, rtc };
 }
@@ -91,31 +94,25 @@ async function connected(extra: { signal?: AbortSignal } = {}) {
 beforeEach(() => {
   FakeRtc.instances = [];
   FakeRtc.duringSetup = null;
-  fetchMock.mockResolvedValue(new Response("v=0 answer", { status: 201, headers: { "content-type": "application/sdp" } }));
+  exchange.mockResolvedValue("v=0 answer");
   vi.stubGlobal("fetch", fetchMock);
 });
 afterEach(() => {
   fetchMock.mockReset();
+  exchange.mockReset();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
 describe("connectLiveTranscription", () => {
-  it("sends a copy of the microphone track and exchanges the offer with the short-lived key", async () => {
+  it("sends a copy of the microphone track and hands the offer to the server, never to OpenAI", async () => {
     const { rtc, clone, original } = await connected();
     expect(original.clone).toHaveBeenCalledTimes(1);
     expect(rtc.peerConnection.addTrack).toHaveBeenCalledWith(clone);
     expect(rtc.options?.timeoutMs).toBe(CONNECT_TIMEOUT_MS);
+    expect(exchange).toHaveBeenCalledExactlyOnceWith("v=0 offer", expect.any(AbortSignal));
     expect(rtc.answer).toBe("v=0 answer");
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(REALTIME_CALLS_URL);
-    expect(init).toMatchObject({
-      method: "POST",
-      body: "v=0 offer",
-      headers: { Authorization: "Bearer ek_test", "Content-Type": "application/sdp" },
-      credentials: "omit",
-    });
-    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("passes on transcription events and nothing else", async () => {
@@ -197,13 +194,13 @@ describe("connectLiveTranscription", () => {
     expect(onFailure).not.toHaveBeenCalled();
   });
 
-  it("rejects, and lets the copy go, when the key is refused", async () => {
-    fetchMock.mockResolvedValue(new Response("unauthorised", { status: 401 }));
+  it("rejects, and lets the copy go, when the server won't connect it", async () => {
+    exchange.mockRejectedValue(new Error("live transcription: the server didn't connect it"));
     const mic = microphone();
     const onFailure = vi.fn();
-    await expect(
-      connectLiveTranscription({ stream: mic.stream, clientSecret: "ek_old", onEvent: vi.fn(), onFailure }),
-    ).rejects.toThrow("(401)");
+    await expect(connectLiveTranscription({ stream: mic.stream, exchange, onEvent: vi.fn(), onFailure })).rejects.toThrow(
+      "didn't connect",
+    );
     expect(mic.clone.stop).toHaveBeenCalled();
     expect(mic.original.stop).not.toHaveBeenCalled();
     expect(onFailure).not.toHaveBeenCalled();
@@ -213,9 +210,7 @@ describe("connectLiveTranscription", () => {
     FakeRtc.duringSetup = (rtc) => rtc.finish("remote");
     const mic = microphone();
     const onFailure = vi.fn();
-    await expect(
-      connectLiveTranscription({ stream: mic.stream, clientSecret: "ek_test", onEvent: vi.fn(), onFailure }),
-    ).rejects.toThrow();
+    await expect(connectLiveTranscription({ stream: mic.stream, exchange, onEvent: vi.fn(), onFailure })).rejects.toThrow();
     expect(mic.clone.stop).toHaveBeenCalled();
     expect(onFailure).not.toHaveBeenCalled();
   });
@@ -224,10 +219,10 @@ describe("connectLiveTranscription", () => {
     const ended = { getAudioTracks: () => [{ readyState: "ended", clone: vi.fn() }] } as unknown as MediaStream;
     const none = { getAudioTracks: () => [] } as unknown as MediaStream;
     for (const stream of [ended, none]) {
-      await expect(connectLiveTranscription({ stream, clientSecret: "ek_test", onEvent: vi.fn(), onFailure: vi.fn() })).rejects.toThrow();
+      await expect(connectLiveTranscription({ stream, exchange, onEvent: vi.fn(), onFailure: vi.fn() })).rejects.toThrow();
     }
     expect(FakeRtc.instances).toHaveLength(0);
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(exchange).not.toHaveBeenCalled();
   });
 });
 

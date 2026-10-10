@@ -335,21 +335,22 @@ short follow-up questions appear on screen as they talk.
 
 ### End to end
 
-1. **Start.** Once the recording has started (so after the browser's microphone prompt, which can
-   stay open longer than the key below lasts), the browser asks the server for a live session; a
-   refused microphone starts none. The server checks live check-ins are on, `coach.md` can be
-   used, the member has accepted the current privacy notice and hasn't submitted this week, and
-   they have started fewer than 12 sessions in 24 hours. It then creates the session and gets a
-   short-lived OpenAI key, which can be used to connect for 30 seconds (a session that has
-   connected carries on after it expires). Until it expires, a member who dug the key out of their
-   browser could open more than one transcription session with it, on Normal's OpenAI bill:
-   [#34](https://github.com/the-newnormal/moduleone/issues/34) tracks this, and the planned
-   containment is a separate OpenAI project with a budget. The opening question from `coach.md`
-   is on screen from before Start is pressed:
+1. **Start.** Once the recording has started (so after the browser's microphone prompt), the
+   browser asks the server for a live session; a refused microphone starts none. The server checks
+   live check-ins are on, `coach.md` can be used, the member has accepted the current privacy
+   notice and hasn't submitted this week, and they have started fewer than 12 sessions in 24 hours,
+   then creates the session. Then the browser sends its WebRTC offer for live transcription to the
+   server (`/portal/checkin/live/connect`), which claims the session's one connection
+   (`connected_at`, migration 0012), opens the transcription session with OpenAI itself and sends
+   OpenAI's answer back. So no OpenAI key, not even a short-lived one, ever reaches the browser,
+   and each live session opens at most one transcription session (this closed
+   [#34](https://github.com/the-newnormal/moduleone/issues/34)). The opening question from
+   `coach.md` is on screen from before Start is pressed:
    *"Talk me through your week: what you worked on, what came of it, and how you're feeling about
    the team."*
-2. **Live text.** While the recording runs as usual, the browser sends a copy of the microphone to
-   OpenAI's realtime transcription (`STT_LIVE_MODEL`) and gets text back as they speak.
+2. **Live text.** While the recording runs as usual, the browser sends a copy of the microphone
+   straight to OpenAI's realtime transcription (`STT_LIVE_MODEL`) over that connection and gets
+   text back as they speak.
 3. **A coach call.** When they pause after saying enough new words (details under
    [pacing](#when-the-browser-calls-the-coach)), the browser sends the text so far to the server.
 4. **Claude's read.** If there are enough new words since its last read, Claude (`COACH_MODEL`,
@@ -685,7 +686,8 @@ words Claude had read, and the areas the latest read moved. Whether a read found
 trying to give instructions is used in that call only and never kept.
 
 The row also has `coach_rubric` (the fingerprint), `coach_model`, `stt_model`, `started_at`,
-`recorded_ms` (how long live transcription ran) and `checkin_id` (the check-in it became, once
+`recorded_ms` (how long live transcription ran), `connected_at` (when its one transcription
+connection was opened; empty if it never connected) and `checkin_id` (the check-in it became, once
 submitted). A session with no coach call at all has `coach_state = '{}'`. Coverage and mood are as
 of the last read, so anything said after it isn't in `coverage`.
 

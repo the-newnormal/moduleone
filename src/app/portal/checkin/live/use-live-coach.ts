@@ -7,12 +7,13 @@
 // createLiveCoach is the whole flow over plain callbacks, with its browser parts passed in (the
 // start, coach and end calls, the transcription connection, the level meter and the clock), so it
 // runs in tests with fakes and fake timers. useLiveCoach gives it to the recorder.
-// Nothing here logs or keeps what was said beyond the transcript it sends to the coach, and the
-// short-lived transcription key goes only to the transport.
+// Nothing here logs or keeps what was said beyond the transcript it sends to the coach. No key ever
+// reaches the browser: the transport's WebRTC offer goes to the connect route, and the server opens
+// the transcription.
 
 import { useEffect, useState } from "react";
 import type { Pacing, Touched } from "@/lib/coach/types";
-import { askCoach, endLive, isLiveStartReady, startLive } from "./api";
+import { askCoach, connectLive, endLive, isLiveStartReady, startLive } from "./api";
 import { MAX_TRANSCRIPT_CHARS, type CoachResponse, type LiveErrorCode, type LiveStartResponse, type ShownOffer } from "./contract";
 import {
   CONNECT_TIMEOUT_MS,
@@ -38,6 +39,8 @@ export type LiveView = { mode: "live"; offer: ShownOffer; touched: Touched } | {
 export type LiveCoachDeps = {
   start: () => Promise<LiveStartResponse | null>;
   connect: typeof connectLiveTranscription;
+  // The session's WebRTC offer to the server, OpenAI's answer back.
+  exchange: typeof connectLive;
   ask: typeof askCoach;
   end: typeof endLive;
   meter: typeof startLevelMeter;
@@ -48,6 +51,7 @@ export type LiveCoachDeps = {
 const LIVE_COACH_DEPS: LiveCoachDeps = {
   start: () => startLive(),
   connect: connectLiveTranscription,
+  exchange: connectLive,
   ask: askCoach,
   end: endLive,
   meter: startLevelMeter,
@@ -89,8 +93,8 @@ export function canSkip(view: LiveView | null): boolean {
 }
 
 export type LiveCoachController = {
-  // The recording has started: asks for a live session (not while the browser's microphone prompt
-  // is open, which can outlast the session's 30-second transcription key). attach follows at once.
+  // The recording has started: asks for a live session (never while the browser's microphone prompt
+  // is open, so a refused microphone starts none). attach follows at once.
   begin(): void;
   // The recording has started with this stream: transcribe it live (a copy of its track).
   attach(stream: MediaStream): void;
@@ -110,8 +114,6 @@ type Run = {
   fallen: boolean;
   abort: AbortController;
   sessionId: string | null;
-  // The short-lived transcription key, until it is handed to the transport.
-  secret: string | null;
   pacing: Pacing | null;
   endSent: boolean;
   stream: MediaStream | null;
@@ -157,7 +159,6 @@ function newRun(opening: string): Run {
     fallen: false,
     abort: new AbortController(),
     sessionId: null,
-    secret: null,
     pacing: null,
     endSent: false,
     stream: null,
@@ -230,7 +231,6 @@ export function createLiveCoach({
       r.connection = null;
       r.closedAt = deps.now();
     }
-    r.secret = null;
   }
 
   // Ends the session with how long live transcription heard the recording (for its cost), once.
@@ -273,22 +273,25 @@ export function createLiveCoach({
     }
     if (!isLiveStartReady(response)) return fallback(r);
     r.sessionId = response.sessionId;
-    r.secret = response.clientSecret;
     r.pacing = response.pacing;
     connect(r);
   }
 
-  // Once there is both a key and a stream.
+  // Once there is both a session and a stream: the offer goes to the server (once per session), which
+  // opens the transcription and sends OpenAI's answer back.
   function connect(r: Run) {
-    const { stream, secret } = r;
-    if (!stream || !secret || r.connecting || !active(r)) return;
+    const { stream, sessionId } = r;
+    if (!stream || sessionId === null || r.connecting || !active(r)) return;
     r.connecting = true;
-    r.secret = null;
     armDeadline(r);
     deps
       .connect({
         stream,
-        clientSecret: secret,
+        exchange: async (offer, signal) => {
+          const reply = await deps.exchange({ sessionId, offer }, signal);
+          if (reply?.status !== "connected") throw new Error("live transcription: the server didn't connect it");
+          return reply.answer;
+        },
         signal: r.abort.signal,
         onEvent: (event) => heard(r, event),
         onFailure: () => fallback(r),

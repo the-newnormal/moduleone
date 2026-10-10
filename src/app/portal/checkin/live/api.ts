@@ -6,10 +6,13 @@
 import { AREAS, OFFER_KINDS } from "@/lib/coach/types";
 import {
   LIVE_COACH_PATH,
+  LIVE_CONNECT_PATH,
   LIVE_END_PATH,
   LIVE_START_PATH,
   type CoachRequest,
   type CoachResponse,
+  type ConnectRequest,
+  type ConnectResponse,
   type EndRequest,
   type LiveError,
   type LiveStartResponse,
@@ -35,12 +38,15 @@ function isStart(body: Json): body is LiveStartResponse {
   const pacing = body.pacing;
   return (
     isText(body.sessionId) &&
-    isText(body.clientSecret) &&
     isText(body.sttModel) &&
     isText(body.opening) &&
     isObject(pacing) &&
     PACING_FIELDS.every((field) => typeof pacing[field] === "number" && Number.isFinite(pacing[field]))
   );
+}
+
+function isConnect(body: Json): body is ConnectResponse {
+  return isLiveError(body) || (body.status === "connected" && isText(body.answer));
 }
 
 function isCoach(body: Json): body is CoachResponse {
@@ -83,10 +89,17 @@ async function post(path: string, body: unknown, init: { signal?: AbortSignal; k
   }
 }
 
-// Starts a live session: the key for live transcription, the opening question and the pacing.
+// Starts a live session: its id, the opening question and the pacing.
 export async function startLive(signal?: AbortSignal): Promise<LiveStartResponse | null> {
   const body = await post(LIVE_START_PATH, {}, { signal });
   return body && isStart(body) ? body : null;
+}
+
+// The browser's WebRTC offer in, OpenAI's answer out: the server opens the session's live
+// transcription.
+export async function connectLive(request: ConnectRequest, signal?: AbortSignal): Promise<ConnectResponse | null> {
+  const body = await post(LIVE_CONNECT_PATH, request, { signal });
+  return body && isConnect(body) ? body : null;
 }
 
 // The transcript so far in, what to show next out.

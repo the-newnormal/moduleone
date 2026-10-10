@@ -33,7 +33,6 @@ const PACING: Pacing = {
 const READY: LiveReady = {
   status: "ready",
   sessionId: SESSION,
-  clientSecret: "ek_test_only",
   sttModel: "gpt-live-transcribe",
   opening: OPENING,
   pacing: PACING,
@@ -68,7 +67,7 @@ function deferred<T>() {
 const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
 
 // Each fake can be given another implementation; the end call and the clock are always these.
-function setup(overrides: Partial<Pick<LiveCoachDeps, "start" | "connect" | "ask" | "meter">> = {}) {
+function setup(overrides: Partial<Pick<LiveCoachDeps, "start" | "connect" | "exchange" | "ask" | "meter">> = {}) {
   const views: LiveView[] = [];
   let level = QUIET;
   let item = 0;
@@ -88,6 +87,7 @@ function setup(overrides: Partial<Pick<LiveCoachDeps, "start" | "connect" | "ask
           return connection;
         }),
     ),
+    exchange: vi.fn<LiveCoachDeps["exchange"]>(overrides.exchange ?? (async () => ({ status: "connected", answer: "v=0 answer" }))),
     ask: vi.fn<LiveCoachDeps["ask"]>(overrides.ask ?? (async () => ok(null))),
     end: vi.fn<LiveCoachDeps["end"]>(),
     meter: vi.fn<LiveCoachDeps["meter"]>(
@@ -164,7 +164,26 @@ describe("starting", () => {
       touched: { activity: false, excellence: false, morale: false },
     });
     expect(live.deps.connect).toHaveBeenCalledOnce();
-    expect(live.deps.connect.mock.calls[0][0]).toMatchObject({ stream: STREAM, clientSecret: "ek_test_only" });
+    expect(live.deps.connect.mock.calls[0][0]).toMatchObject({ stream: STREAM });
+  });
+
+  it("sends the transcription's offer to the server for this session, and passes its answer back", async () => {
+    const live = setup();
+    await live.record();
+    const { exchange } = live.deps.connect.mock.calls[0][0];
+    const signal = new AbortController().signal;
+    expect(await exchange("v=0 offer", signal)).toBe("v=0 answer");
+    expect(live.deps.exchange).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, offer: "v=0 offer" }, signal);
+  });
+
+  it.each([
+    ["refuses it", { status: "error", code: "no_session" } as const],
+    ["can't be reached", null],
+  ])("fails the connection when the server %s", async (_label, reply) => {
+    const live = setup({ exchange: vi.fn(async () => reply) });
+    await live.record();
+    const { exchange } = live.deps.connect.mock.calls[0][0];
+    await expect(exchange("v=0 offer", new AbortController().signal)).rejects.toThrow("didn't connect");
   });
 
   it.each([

@@ -3,6 +3,7 @@ import { recordCosts, type Usage } from "@/lib/costs/record";
 import { createServiceRoleClient, MissingServiceKeyError } from "@/lib/supabase/admin";
 import {
   claimCoachCall,
+  connectLiveSession,
   endLiveSession,
   linkLiveCheckin,
   linkLiveTake,
@@ -190,6 +191,27 @@ describe("claimCoachCall", () => {
     rpcResult = { data: null, error: { code: "PGRST301", message: "JWT expired" } };
     expect(await claimCoachCall(SESSION, MEMBER)).toBe("unavailable");
     expect(console.error).toHaveBeenCalledExactlyOnceWith("live session: claim failed", { code: "PGRST301" });
+  });
+});
+
+describe("connectLiveSession", () => {
+  it("claims the session's one transcription connection for the member", async () => {
+    rpcResult = { data: true, error: null };
+    expect(await connectLiveSession(SESSION, MEMBER)).toBe(true);
+    expect(rpc).toHaveBeenCalledExactlyOnceWith("connect_live_checkin_session", { p_session_id: SESSION, p_member_id: MEMBER });
+    expect(rpcSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("is no_session when it isn't theirs, is over, or has connected already, logging nothing", async () => {
+    rpcResult = { data: false, error: null };
+    expect(await connectLiveSession(SESSION, MEMBER)).toBe("no_session");
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("is unavailable on an error, logging only the code", async () => {
+    rpcResult = { data: null, error: { code: "57014", message: `canceling statement for ${MEMBER}` } };
+    expect(await connectLiveSession(SESSION, MEMBER)).toBe("unavailable");
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("live session: connect failed", { code: "57014" });
   });
 });
 

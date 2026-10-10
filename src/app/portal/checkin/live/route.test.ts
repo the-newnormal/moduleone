@@ -1,24 +1,21 @@
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { endLiveSession, startLiveSession } from "@/lib/checkin/live-sessions";
+import { startLiveSession } from "@/lib/checkin/live-sessions";
 import { noticeAccepted, sessionMember, type Session } from "@/lib/checkin/session";
 import { parseCoachRubric } from "@/lib/coach/rubric";
-import { LiveTranscriptionError, mintLiveTranscriptionKey } from "@/lib/stt/live";
+import { mintLiveTranscriptionKey, openLiveTranscription } from "@/lib/stt/live";
 import { POST } from "./route";
 
 // The coach's prompt and rubric are the real ones, read from rubrics/coach.md.
 vi.mock("@/lib/checkin/session", () => ({ sessionMember: vi.fn(), noticeAccepted: vi.fn() }));
-vi.mock("@/lib/checkin/live-sessions", () => ({ startLiveSession: vi.fn(), endLiveSession: vi.fn() }));
-vi.mock("@/lib/stt/live", async () => ({
-  ...(await vi.importActual<typeof import("@/lib/stt/live")>("@/lib/stt/live")),
-  mintLiveTranscriptionKey: vi.fn(),
-}));
+vi.mock("@/lib/checkin/live-sessions", () => ({ startLiveSession: vi.fn() }));
+// Watched only to show the start route never touches OpenAI: the connect route opens the transcription.
+vi.mock("@/lib/stt/live", () => ({ mintLiveTranscriptionKey: vi.fn(), openLiveTranscription: vi.fn() }));
 
 const ORIGIN = "http://localhost:3000";
 const MEMBER = "3e3b0000-0000-4000-8000-000000000003";
 const OTHER = "3e3b0000-0000-4000-8000-000000000002";
 const SESSION_ID = "1f5e0000-0000-4000-8000-000000000001";
-const CLIENT_SECRET = "ek_68af2d1c9e5b4a7f";
 const SESSION = {
   supabase: {},
   authUserId: "5eed0000-0000-4000-8000-000000000003",
@@ -44,10 +41,8 @@ beforeEach(() => {
   vi.mocked(sessionMember).mockReset().mockResolvedValue(SESSION);
   vi.mocked(noticeAccepted).mockReset().mockResolvedValue(true);
   vi.mocked(startLiveSession).mockReset().mockResolvedValue({ id: SESSION_ID });
-  vi.mocked(endLiveSession).mockReset().mockResolvedValue(true);
-  vi.mocked(mintLiveTranscriptionKey)
-    .mockReset()
-    .mockResolvedValue({ value: CLIENT_SECRET, expiresAt: 1_791_432_060, model: "gpt-live-transcribe" });
+  vi.mocked(mintLiveTranscriptionKey).mockReset();
+  vi.mocked(openLiveTranscription).mockReset();
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -57,14 +52,13 @@ afterEach(() => {
 });
 
 describe("POST /portal/checkin/live", () => {
-  it("starts a session and hands the browser its key, the opening question and the pacing", async () => {
+  it("starts a session and hands the browser its id, the opening question and the pacing: no key", async () => {
     const response = await POST(post());
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.json()).toEqual({
       status: "ready",
       sessionId: SESSION_ID,
-      clientSecret: CLIENT_SECRET,
       sttModel: "gpt-live-transcribe",
       opening: RUBRIC.opening,
       pacing: {
@@ -97,12 +91,10 @@ describe("POST /portal/checkin/live", () => {
     );
   });
 
-  it("mints the key only once the session has started, with the request's signal", async () => {
+  it("never mints a key or opens a transcription (the connect route does, once per session)", async () => {
     await POST(post());
-    expect(vi.mocked(startLiveSession).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(mintLiveTranscriptionKey).mock.invocationCallOrder[0],
-    );
-    expect(mintLiveTranscriptionKey).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal));
+    expect(mintLiveTranscriptionKey).not.toHaveBeenCalled();
+    expect(openLiveTranscription).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -125,7 +117,6 @@ describe("POST /portal/checkin/live", () => {
     expect(await response.json()).toEqual({ status: "off" });
     expect(sessionMember).not.toHaveBeenCalled();
     expect(startLiveSession).not.toHaveBeenCalled();
-    expect(mintLiveTranscriptionKey).not.toHaveBeenCalled();
   });
 
   it("refuses a signed-out caller", async () => {
@@ -143,42 +134,17 @@ describe("POST /portal/checkin/live", () => {
     expect(await response.json()).toEqual({ status: "error", code: "notice_required" });
     expect(noticeAccepted).toHaveBeenCalledExactlyOnceWith(SESSION);
     expect(startLiveSession).not.toHaveBeenCalled();
-    expect(mintLiveTranscriptionKey).not.toHaveBeenCalled();
   });
 
   it.each([
     ["submitted", 409],
     ["too_many_sessions", 429],
     ["unavailable", 503],
-  ] as const)("refuses when the session can't start (%s), minting no key", async (problem, status) => {
+  ] as const)("refuses when the session can't start (%s)", async (problem, status) => {
     vi.mocked(startLiveSession).mockResolvedValue(problem);
     const response = await POST(post());
     expect(response.status).toBe(status);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.json()).toEqual({ status: "error", code: problem });
-    expect(mintLiveTranscriptionKey).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["a setup problem", true],
-    ["a passing outage", false],
-  ])("ends the session with nothing transcribed when the key can't be minted (%s)", async (_label, config) => {
-    vi.mocked(mintLiveTranscriptionKey).mockRejectedValue(
-      new LiveTranscriptionError("Couldn't start live transcription (401).", {
-        config,
-        cause: new Error("Incorrect API key provided: sk-proj-abc123"),
-      }),
-    );
-    const response = await POST(post());
-    expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ status: "error", code: "unavailable" });
-    expect(endLiveSession).toHaveBeenCalledExactlyOnceWith(SESSION_ID, MEMBER, 0);
-    expect(console.error).toHaveBeenCalledExactlyOnceWith("live: minting the transcription key failed", { config });
-    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toMatch(/sk-proj|ek_/);
-  });
-
-  it("never logs the key it hands out", async () => {
-    await POST(post());
-    expect(console.error).not.toHaveBeenCalled();
   });
 });

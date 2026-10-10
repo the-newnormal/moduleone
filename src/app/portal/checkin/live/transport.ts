@@ -1,14 +1,14 @@
-// The browser's connection to OpenAI's realtime transcription, over WebRTC, with the short-lived key
-// from the start route. It sends a copy of the microphone track (the recording keeps the original)
-// and hands back transcript events (transcript.ts). Only "openai/realtime/webrtc" is imported: the
+// The browser's connection to OpenAI's realtime transcription, over WebRTC. The offer goes to the
+// server (exchange: the connect route), which opens the session with OpenAI and returns its answer,
+// so the browser never holds a key; the audio then goes straight to OpenAI. It sends a copy of the
+// microphone track (the recording keeps the original) and hands back transcript events
+// (transcript.ts). Only "openai/realtime/webrtc" is imported: the
 // rest of the OpenAI client is server code and shouldn't reach the browser bundle.
 // Nothing here logs what was said: transcript text is passed on and never written anywhere.
 
 import { OpenAIRealtimeWebRTC } from "openai/realtime/webrtc";
 import { CONNECT_TIMEOUT_MS } from "./pacing";
 import type { TranscriptEvent } from "./transcript";
-
-export const REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
 
 export type LiveConnection = {
   // Ends the current turn: what they said since the last commit is transcribed as one item.
@@ -41,19 +41,20 @@ export function toTranscriptEvent(event: { type: string }): TranscriptEvent | nu
 // Committing with nothing new in the buffer is answered with this error, and does no harm.
 const EMPTY_COMMIT = "input_audio_buffer_commit_empty";
 
-// Connects, or rejects (no microphone track, no WebRTC, a refused key, CONNECT_TIMEOUT_MS passing,
+// Connects, or rejects (no microphone track, no WebRTC, the offer refused, CONNECT_TIMEOUT_MS passing,
 // `signal` aborting). Once connected, onFailure is called at most once if the connection is lost;
 // after that, or after close(), no more events arrive. Aborting `signal` later closes it too.
 export async function connectLiveTranscription({
   stream,
-  clientSecret,
+  exchange,
   onEvent,
   onFailure,
   signal,
   timeoutMs = CONNECT_TIMEOUT_MS,
 }: {
   stream: MediaStream;
-  clientSecret: string;
+  // Sends the WebRTC offer (SDP) on and resolves to the answer, or rejects.
+  exchange: (offer: string, signal: AbortSignal) => Promise<string>;
   onEvent: (event: TranscriptEvent) => void;
   onFailure: () => void;
   signal?: AbortSignal;
@@ -112,18 +113,7 @@ export async function connectLiveTranscription({
     await rtc.connect({
       signal,
       timeoutMs,
-      exchangeSdp: async (offer, { signal: exchange }) => {
-        const response = await fetch(REALTIME_CALLS_URL, {
-          method: "POST",
-          body: offer,
-          headers: { Authorization: `Bearer ${clientSecret}`, "Content-Type": "application/sdp" },
-          signal: exchange,
-          cache: "no-store",
-          credentials: "omit",
-        });
-        if (!response.ok) throw new Error(`live transcription: connecting failed (${response.status})`);
-        return response.text();
-      },
+      exchangeSdp: (offer, { signal: exchanging }) => exchange(offer, exchanging),
     });
   } catch (error) {
     shut();

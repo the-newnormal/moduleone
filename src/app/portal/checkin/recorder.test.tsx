@@ -119,7 +119,6 @@ const OPENING = "Talk me through your week: what you worked on, what came of it,
 const READY: LiveReady = {
   status: "ready",
   sessionId: SESSION,
-  clientSecret: "ek_test_only",
   sttModel: "gpt-live-transcribe",
   opening: OPENING,
   pacing: { showAfterSilenceMs: 1500, stoppedSilenceMs: 3000, minQuestionMs: 8000, minWordsPerQuestion: 15, firstFollowUpAfterMs: 20_000 },

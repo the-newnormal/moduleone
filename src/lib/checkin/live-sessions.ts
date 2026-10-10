@@ -65,6 +65,17 @@ export async function startLiveSession(
   return { id: data };
 }
 
+// Claims the session's one live transcription connection (connect_live_checkin_session, 0012): true
+// the first time for the member's own open session, "no_session" if it isn't theirs, has ended or
+// expired, or has connected already. So each session opens at most one OpenAI transcription session.
+export async function connectLiveSession(sessionId: string, memberId: string): Promise<true | LiveSessionProblem> {
+  const { data, error } = await admin()
+    .rpc("connect_live_checkin_session", { p_session_id: sessionId, p_member_id: memberId })
+    .abortSignal(AbortSignal.timeout(SAVE_MS));
+  if (error) return problem("connect", error);
+  return data === true ? true : "no_session";
+}
+
 export type Claim = { state: unknown; startedAt: string; callNumber: number };
 
 export async function claimCoachCall(sessionId: string, memberId: string): Promise<Claim | LiveSessionProblem> {
