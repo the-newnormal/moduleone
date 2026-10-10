@@ -13,7 +13,9 @@ export function currentWeekStart(now: Date = new Date()): string {
   return monday.toISOString().slice(0, 10);
 }
 
-// The three questions, in the order the recorder shows them.
+// The three areas a check-in covers, each with the question the recorder once asked about it. The
+// recorder now asks one open question (below); the grader is still told these, as check-ins recorded
+// earlier answered them one at a time.
 export const QUESTIONS = [
   { id: "activity", text: "What have you done this week?" },
   { id: "excellence", text: "Where did you / your team use your superpower?" },
@@ -21,3 +23,8 @@ export const QUESTIONS = [
 ] as const;
 
 export type QuestionId = (typeof QUESTIONS)[number]["id"];
+
+// The one open question a check-in asks when rubrics/coach.md can't be used (its "## Opening
+// question" is asked otherwise): the shipped file's wording.
+export const DEFAULT_OPENING_QUESTION =
+  "Talk me through your week: what you worked on, what came of it, and how you're feeling about the team.";

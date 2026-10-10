@@ -62,6 +62,14 @@ describe("LivePrompt", () => {
     expect(document.querySelector("p")?.className).toContain("text-white/75");
   });
 
+  it("shows only the question and Finish when no follow-ups are coming", async () => {
+    await render(prompt({ touched: null }));
+    expect(document.querySelector("h3")?.textContent).toBe(OPENING.text);
+    expect(text()).not.toContain("a follow-up may appear");
+    expect(document.querySelector("ul")).toBeNull();
+    expect([...document.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Finish"]);
+  });
+
   it("drops the how-to line for a closing line", async () => {
     await render(prompt({ offer: COVERED }));
     expect(document.querySelector("h3")?.textContent).toBe(COVERED.text);

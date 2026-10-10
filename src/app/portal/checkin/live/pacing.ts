@@ -1,5 +1,5 @@
 // When the recorder ends a transcription turn, asks the coach for a read, and shows the next
-// question; and when it gives up on live coaching and goes back to the three fixed questions. Pure
+// question; and when it gives up on live coaching and carries on without follow-ups. Pure
 // decisions over plain numbers, all in milliseconds on one clock (liveClock), so they can be tested
 // without a browser. The coach's own pacing (how long to wait before showing a question) comes from
 // rubrics/coach.md through the start response; the rest is fixed here.
@@ -111,7 +111,7 @@ export function shouldShow({
   );
 }
 
-// --- Falling back to the fixed questions --------------------------------------------------------
+// --- Giving up on follow-ups --------------------------------------------------------------------
 // Live transcription must connect within this long.
 export const CONNECT_TIMEOUT_MS = 8000;
 // This many coach calls failing one after another (no answer, or an error) ends live coaching.

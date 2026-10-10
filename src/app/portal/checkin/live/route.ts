@@ -8,8 +8,8 @@ import { json, liveMember, readJson, refuse } from "./respond";
 
 // Starts a live check-in for the signed-in member: a session row (which caps what the coach may
 // spend, and allows one live transcription connection, opened through the connect route). The
-// browser falls back to the three fixed questions on anything but "ready", and records exactly as
-// before either way.
+// browser carries on without follow-ups on anything but "ready", and records exactly the same
+// either way.
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 

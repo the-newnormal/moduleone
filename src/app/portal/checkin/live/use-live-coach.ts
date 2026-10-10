@@ -2,7 +2,7 @@
 // (transport.ts), the transcript so far goes to the coach every few seconds (api.ts), and the
 // question it picks is shown when they pause (pacing.ts). The recording itself never waits on any
 // of this, and anything going wrong ends live coaching for the rest of the take: the recorder then
-// shows the three fixed questions, exactly as without live check-ins.
+// keeps the question on screen, with no more follow-ups, as without live check-ins.
 //
 // createLiveCoach is the whole flow over plain callbacks, with its browser parts passed in (the
 // start, coach and end calls, the transcription connection, the level meter and the clock), so it
@@ -33,8 +33,8 @@ import { emptyVoice, silenceMs, spokenMs, startLevelMeter, voiceStep, type Voice
 export type LiveOptions = { opening: string };
 
 // What the recorder shows: live questions (what is on screen, and which areas they have touched
-// on), or the fixed questions once live coaching has stopped working.
-export type LiveView = { mode: "live"; offer: ShownOffer; touched: Touched } | { mode: "fallback" };
+// on), or, once live coaching has stopped working, the question that was on screen, kept there.
+export type LiveView = { mode: "live"; offer: ShownOffer; touched: Touched } | { mode: "fallback"; offer: ShownOffer };
 
 export type LiveCoachDeps = {
   start: () => Promise<LiveStartResponse | null>;
@@ -73,12 +73,12 @@ export const COACH_TIMEOUT_MS = 15_000;
 // live-sessions.ts); a little more here, so a quick "Different question" isn't turned away.
 export const MIN_ASK_GAP_MS = 1200;
 
-// Answers that will never change for this take: carry on with the fixed questions straight away.
+// Answers that will never change for this take: carry on without follow-ups straight away.
 const FINAL: readonly LiveErrorCode[] = ["submitted", "session_over", "no_session", "signed_out", "no_member", "too_many_calls"];
 
 const NOTHING_TOUCHED: Touched = { activity: false, excellence: false, morale: false };
 
-function openingOffer(opening: string): ShownOffer {
+export function openingOffer(opening: string): ShownOffer {
   return { id: OPENING_OFFER_ID, kind: "question", text: opening };
 }
 
@@ -241,13 +241,14 @@ export function createLiveCoach({
     deps.end({ sessionId: r.sessionId, recordedMs: Math.round(heardMs), shown: r.shown.id });
   }
 
-  // One way, for the rest of the take: the recorder shows the fixed questions from the first.
+  // One way, for the rest of the take: the recorder keeps the question on screen, with no more
+  // follow-ups.
   function fallback(r: Run) {
     if (!active(r)) return;
     r.fallen = true;
     shutdown(r);
     endSession(r);
-    onView({ mode: "fallback" });
+    onView({ mode: "fallback", offer: r.shown });
   }
 
   function failed(r: Run) {

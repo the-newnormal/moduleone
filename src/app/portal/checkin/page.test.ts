@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { noticeSections } from "@/lib/checkin/notice";
 import { processCheckin } from "@/lib/checkin/process";
+import { DEFAULT_OPENING_QUESTION, QUESTIONS } from "@/lib/checkin/week";
 import { coachRubric } from "@/lib/coach/rubric";
 import { RubricError } from "@/lib/rubrics/markdown";
 import { createClient } from "@/lib/supabase/server";
@@ -167,20 +168,20 @@ describe("/portal/checkin", () => {
     );
   });
 
-  it("shows the recorder when there's nothing yet", async () => {
+  it("shows the recorder when there's nothing yet, with the one open question", async () => {
     const html = await render();
     expect(html).toContain("Turn on my camera"); // they record looking at themselves, so the camera comes first
-    expect(html).toContain("What have you done this week?");
-    expect(html).toContain("Where did you / your team use your superpower?");
-    expect(html).toContain("How are you feeling about the team?");
+    expect(html).toContain(renderToStaticMarkup(coachRubric().opening));
+    for (const { text: question } of QUESTIONS) expect(html).not.toContain(renderToStaticMarkup(question));
   });
 
-  it("shows the three fixed questions while live check-ins are off", async () => {
+  it("asks the one open question, without follow-ups, while live check-ins are off", async () => {
     vi.stubEnv("LIVE_CHECKIN", "off");
     const html = await render();
-    expect(html).toContain("What have you done this week?");
-    expect(html).not.toContain(coachRubric().opening.slice(0, 20));
+    expect(html).toContain(renderToStaticMarkup(coachRubric().opening));
+    expect(html).toContain("There&#x27;s one question.");
     expect(html).not.toContain("We&#x27;ll start with one question");
+    expect(html).not.toContain("What have you done this week?");
   });
 
   it("starts with the coach's one open question while live check-ins are on", async () => {
@@ -192,15 +193,17 @@ describe("/portal/checkin", () => {
     expect(html).not.toContain("What have you done this week?");
   });
 
-  it("falls back to the fixed questions when rubrics/coach.md can't be used", async () => {
+  it("asks the built-in opening question, without follow-ups, when rubrics/coach.md can't be used", async () => {
     vi.stubEnv("LIVE_CHECKIN", "on");
     vi.mocked(coachRubric).mockImplementationOnce(() => {
       throw new RubricError("rubrics/coach.md", ['"## Opening question" is missing.']);
     });
     const html = await render();
     expect(html).toContain("Turn on my camera");
-    expect(html).toContain("What have you done this week?");
+    expect(html).toContain(renderToStaticMarkup(DEFAULT_OPENING_QUESTION));
+    expect(html).toContain("There&#x27;s one question.");
     expect(html).not.toContain("We&#x27;ll start with one question");
+    expect(html).not.toContain("What have you done this week?");
   });
 
   it("shows the draft with playback, its length and when it was recorded", async () => {

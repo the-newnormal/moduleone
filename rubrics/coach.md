@@ -171,7 +171,7 @@ Their own feelings alone are morale_feeling, not this.
 
 How many follow-ups there are and how they are chosen:
 
-- Most follow-up questions: 4
+- Most follow-up questions: 6
 - Most follow-ups per area: 2
 - Brief answer counts as: 0.6
 - Bonus for an untouched area: 0.5
@@ -189,5 +189,5 @@ How the screen paces them:
 - Silence that means they have stopped (seconds): 6
 - Least time a question stays up (seconds): 20
 - Least words said to a question before the next: 20
-- No follow-up before (seconds): 45
+- No follow-up before (seconds): 25
 - Longest question (characters): 140

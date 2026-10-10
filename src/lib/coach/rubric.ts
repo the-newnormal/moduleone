@@ -1,7 +1,7 @@
 // The follow-up question rubric, read from rubrics/coach.md: the file people edit to change what the
 // live check-in asks and when. parseCoachRubric checks the file's shape and every number's range (a
 // test runs it on every pull request); a broken file turns the live coach off, and the recorder
-// falls back to the three fixed questions, rather than coaching with half a rubric.
+// asks a built-in opening question with no follow-ups, rather than coaching with half a rubric.
 
 import coachFile from "../../../rubrics/coach.md";
 import { decimal, keyValue, OUTSIDE_SECTIONS, RubricError, splitSections, withoutNotes, yesNo } from "../rubrics/markdown";

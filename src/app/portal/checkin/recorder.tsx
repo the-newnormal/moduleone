@@ -5,13 +5,14 @@ import { useRouter } from "next/navigation";
 import { useEffect, useEffectEvent, useRef, useState, useTransition, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { baseMimeType, extensionFor } from "@/lib/checkin/audio";
-import { QUESTIONS } from "@/lib/checkin/week";
+import { DEFAULT_OPENING_QUESTION } from "@/lib/checkin/week";
 import { createClient } from "@/lib/supabase/client";
 import { prepareRecording, saveDraft } from "./actions";
 import { CameraStage, ON_STAGE_MAIN, STAGE_PILL } from "./camera-stage";
 import { formatClock } from "./format";
 import { LivePrompt } from "./live/live-prompt";
-import { canSkip, OPENING_OFFER_ID, useLiveCoach, type LiveOptions, type LiveView } from "./live/use-live-coach";
+import type { ShownOffer } from "./live/contract";
+import { canSkip, OPENING_OFFER_ID, openingOffer, useLiveCoach } from "./live/use-live-coach";
 import { currentSave, holdFailedTake, holdRecording, releaseSave, trackSave, wasDeleted } from "./pending-save";
 import { saveTake, type ReadyToUpload, type SaveOutcome, type Take } from "./take";
 
@@ -30,12 +31,12 @@ const LAST_MINUTE = "One minute left. The recording stops at 10 minutes.";
 const AWAY = "Your phone may have paused the recording while you were away. Listen back before you submit.";
 const CAMERA_ASKING = "If your browser asks about the camera, answer it to go on. On a computer, it's by the address bar.";
 const CAMERA_STOPPED = "Your camera stopped before the recording began. Turn it on again, or record without it.";
-const FELL_BACK = "Live questions aren't available, so here are this week's three questions.";
+const FELL_BACK = "Follow-up questions have stopped. Keep going, and press Finish when you're done.";
 
 type State =
   | { step: "idle"; problem: string | null }
   | { step: "starting" }
-  | { step: "recording"; question: number }
+  | { step: "recording" }
   | { step: "saving" }
   | SaveOutcome;
 
@@ -123,9 +124,8 @@ function microphoneProblem(error: unknown): string {
   return "Couldn't start the microphone. Try again.";
 }
 
-// What the live region says for the question on screen in a live check-in.
-function liveAnnouncement(view: Extract<LiveView, { mode: "live" }>): string {
-  const { offer } = view;
+// What the live region says for the question on screen.
+function questionAnnouncement(offer: ShownOffer): string {
   if (offer.kind !== "question") return offer.text;
   return offer.id === OPENING_OFFER_ID ? `Recording. ${offer.text}` : `Follow-up question: ${offer.text}`;
 }
@@ -186,9 +186,18 @@ function stopAndTrack(live: Media) {
 
 // heldOnly: shown under a draft (see saved-take.tsx) only for a take this tab still holds, saving or
 // failed, or the news that it wasn't kept; it can't start a recording, and shows nothing otherwise.
-// live: live check-ins are on (page.tsx): one open question, with follow-ups from the live coach
-// (live/use-live-coach.ts), and the three fixed questions again if live coaching stops working.
-export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?: LiveOptions }) {
+// opening: the one open question the check-in asks (page.tsx). live: live check-ins are on, so
+// follow-up questions from the live coach (live/use-live-coach.ts) appear as the member talks; if
+// live coaching stops working, the question on screen stays and the take carries on.
+export function Recorder({
+  heldOnly = false,
+  opening = DEFAULT_OPENING_QUESTION,
+  live = false,
+}: {
+  heldOnly?: boolean;
+  opening?: string;
+  live?: boolean;
+}) {
   // The save this recorder came back to, if any (see pending-save.ts). Read once, so the first
   // render and the effect that waits for it agree even if the save settles in between.
   const [returnedTo] = useState(currentSave);
@@ -199,7 +208,7 @@ export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?
   const [away, setAway] = useState(false);
   const media = useRef<Media | null>(null);
   // Never waited on: the recording starts, carries on and is saved the same with or without it.
-  const { view: liveView, coach } = useLiveCoach(heldOnly ? undefined : live);
+  const { view: liveView, coach } = useLiveCoach(live && !heldOnly ? { opening } : undefined);
   // The member's camera, which they need on to start: it comes on by itself when the recorder is
   // ready and the browser allows it without asking, or when they turn it on. Off once the take ends.
   const camera = useRef<CameraState>({ stream: null, asked: 0 });
@@ -326,14 +335,6 @@ export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?
   // A failed take shown here (with Try again) is safe only in this page: Sign out asks first.
   const failedShown = state.step === "failed" && !state.updated;
   useEffect(() => (failedShown ? holdFailedTake() : undefined), [failedShown]);
-
-  // The fixed questions taking over from live ones replace the buttons; if one of them had focus,
-  // it goes to the new main button rather than falling to the page. Otherwise focus stays put.
-  const fellBack = liveView?.mode === "fallback";
-  useEffect(() => {
-    if (!fellBack || !recording) return;
-    if (!document.activeElement || document.activeElement === document.body) primary.current?.focus();
-  }, [fellBack, recording]);
 
   // With the camera on, the recorder is a stage over the page (see CameraStage).
   const staged = mirror !== null && (state.step === "idle" || state.step === "starting" || state.step === "recording");
@@ -536,11 +537,7 @@ export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?
     // microphone prompt starts none.
     coach.begin();
     coach.attach(stream);
-    setState({ step: "recording", question: 0 });
-  }
-
-  function nextQuestion() {
-    setState((s) => (s.step === "recording" ? { ...s, question: Math.min(s.question + 1, QUESTIONS.length - 1) } : s));
+    setState({ step: "recording" });
   }
 
   function discard() {
@@ -556,9 +553,12 @@ export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?
     startRefresh(() => router.refresh());
   }
 
-  // While live, the coach's question on screen; once live coaching has stopped working (or without
-  // it), the three fixed questions, from the first.
+  // The question on screen while recording: the live coach's, with the areas touched on while
+  // follow-ups are coming; once live coaching has stopped working, the one it last showed; without
+  // live check-ins, the opening question.
   const coached = liveView?.mode === "live" ? liveView : null;
+  const fellBack = liveView?.mode === "fallback";
+  const offer = liveView?.offer ?? openingOffer(opening);
   const announcement =
     state.step === "idle"
       ? cameraNote === "asking"
@@ -567,11 +567,7 @@ export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?
       : state.step === "starting"
         ? "Waiting for your microphone…"
         : state.step === "recording"
-          ? elapsedMs >= WARN_MS
-            ? LAST_MINUTE
-            : coached
-              ? liveAnnouncement(coached)
-              : `Recording. Question ${state.question + 1} of ${QUESTIONS.length}: ${QUESTIONS[state.question].text}`
+          ? questionAnnouncement(offer)
           : state.step === "saving"
             ? "Saving your recording…"
             : state.step === "saved"
@@ -581,14 +577,16 @@ export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?
   // Kept on screen until the take is saved (or can't be). In the live region it is a node of its
   // own, so it is announced when it appears and not again with every later step.
   const awayNote = away && unsaved;
-  // Said once, quietly, as the fixed questions take over.
+  // Said once, quietly, as follow-ups stop.
   const fellBackNote = state.step === "recording" && fellBack;
-  const lastMinute = elapsedMs >= WARN_MS;
+  // A node of its own in the live region too, so a question shown in the last minute is still read.
+  const lastMinute = state.step === "recording" && elapsedMs >= WARN_MS;
 
   return (
     <div className="grid gap-4">
       <p aria-live="polite" className="sr-only">
         <span>{announcement}</span>
+        {lastMinute && <span> {LAST_MINUTE}</span>}
         {awayNote && <span> {AWAY}</span>}
         {fellBackNote && <span> {FELL_BACK}</span>}
       </p>
@@ -606,24 +604,15 @@ export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?
             </p>
           ) : (
             <p className="text-sm leading-6">
-              You&apos;ll see three questions, one at a time. Answer each one out loud, then move on. About a
-              minute each is plenty; the recording stops at 10 minutes. You can listen back before you
-              submit.
+              There&apos;s one question. Answer it out loud, in your own words, then press Finish. A few
+              minutes is plenty; the recording stops at 10 minutes. You can listen back before you submit.
             </p>
           )}
           <p className="text-sm text-muted-foreground">
             You record with your camera on, so you see yourself as you talk. Only your voice is recorded;
             the picture isn&apos;t saved.
           </p>
-          {live ? (
-            <p className="text-lg leading-snug">{live.opening}</p>
-          ) : (
-            <ol className="grid list-decimal gap-1 pl-5 text-sm">
-              {QUESTIONS.map((q) => (
-                <li key={q.id}>{q.text}</li>
-              ))}
-            </ol>
-          )}
+          <p className="text-lg leading-snug">{opening}</p>
         </>
       )}
 
@@ -676,7 +665,7 @@ export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?
       {state.step === "recording" && !staged && (
         <>
           <div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
-            <span>{coached ? "Recording" : `Question ${state.question + 1} of ${QUESTIONS.length}`}</span>
+            <span>Recording</span>
             <span className="flex items-center gap-2 font-mono tabular-nums">
               <span aria-hidden="true" className="size-2 animate-pulse rounded-full bg-destructive" />
               <span role="timer" aria-label="Time recorded">
@@ -684,32 +673,17 @@ export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?
               </span>
             </span>
           </div>
-          {coached ? (
-            <LivePrompt
-              offer={coached.offer}
-              touched={coached.touched}
-              canSkip={canSkip(coached)}
-              onSkip={coach.skip}
-              onFinish={finish}
-              finishRef={primary}
-            >
-              {lastMinute && <p className="rounded-md bg-muted px-3 py-2 text-sm">{LAST_MINUTE}</p>}
-            </LivePrompt>
-          ) : (
-            <>
-              <h3 className="text-2xl leading-snug">{QUESTIONS[state.question].text}</h3>
-              {fellBackNote && <p className="text-sm text-muted-foreground">{FELL_BACK}</p>}
-              {lastMinute && <p className="rounded-md bg-muted px-3 py-2 text-sm">{LAST_MINUTE}</p>}
-              <Button
-                ref={primary}
-                type="button"
-                onClick={state.question < QUESTIONS.length - 1 ? nextQuestion : finish}
-                className="justify-self-start"
-              >
-                {state.question < QUESTIONS.length - 1 ? "Next question" : "Finish"}
-              </Button>
-            </>
-          )}
+          <LivePrompt
+            offer={offer}
+            touched={coached?.touched ?? null}
+            canSkip={canSkip(liveView)}
+            onSkip={coach.skip}
+            onFinish={finish}
+            finishRef={primary}
+          >
+            {fellBackNote && <p className="text-sm text-muted-foreground">{FELL_BACK}</p>}
+            {lastMinute && <p className="rounded-md bg-muted px-3 py-2 text-sm">{LAST_MINUTE}</p>}
+          </LivePrompt>
         </>
       )}
 
@@ -754,9 +728,7 @@ export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?
           top={
             state.step === "recording" && (
               <>
-                <span className={STAGE_PILL}>
-                  {coached ? "Recording" : `Question ${state.question + 1} of ${QUESTIONS.length}`}
-                </span>
+                <span className={STAGE_PILL}>Recording</span>
                 <span className={`${STAGE_PILL} flex items-center gap-2 font-mono tabular-nums`}>
                   <span aria-hidden="true" className="size-2 animate-pulse rounded-full bg-destructive" />
                   <span role="timer" aria-label="Time recorded">
@@ -770,19 +742,13 @@ export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?
           {state.step === "idle" && (
             <>
               <p className="text-2xl leading-snug font-medium sm:text-3xl">Ready when you are.</p>
-              {live ? (
-                <>
-                  <p className="text-lg leading-snug">{live.opening}</p>
-                  <p className="text-sm text-white/75">
-                    We&apos;ll start with this question; follow-ups may appear when you pause. Only your voice is
-                    recorded; the picture isn&apos;t saved.
-                  </p>
-                </>
-              ) : (
-                <p className="text-sm text-white/75">
-                  The questions appear here, one at a time. Only your voice is recorded; the picture isn&apos;t saved.
-                </p>
-              )}
+              <p className="text-lg leading-snug">{opening}</p>
+              <p className="text-sm text-white/75">
+                {live
+                  ? "We'll start with this question; follow-ups may appear when you pause."
+                  : "Answer it out loud, then press Finish."}{" "}
+                Only your voice is recorded; the picture isn&apos;t saved.
+              </p>
               {state.problem && (
                 <p role="alert" className="text-sm font-medium">
                   {state.problem}
@@ -806,36 +772,21 @@ export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?
               Waiting for your microphone…
             </p>
           )}
-          {state.step === "recording" &&
-            (coached ? (
-              <LivePrompt
-                offer={coached.offer}
-                touched={coached.touched}
-                canSkip={canSkip(coached)}
-                onSkip={coach.skip}
-                onFinish={finish}
-                finishRef={primary}
-                onStage
-              >
-                {lastMinute && <p className="text-sm text-white/80">{LAST_MINUTE}</p>}
-                {awayNote && <p className="text-sm text-white/80">{AWAY}</p>}
-              </LivePrompt>
-            ) : (
-              <>
-                <h3 className="text-2xl leading-snug font-medium sm:text-4xl">{QUESTIONS[state.question].text}</h3>
-                {fellBackNote && <p className="text-sm text-white/75">{FELL_BACK}</p>}
-                {lastMinute && <p className="text-sm text-white/80">{LAST_MINUTE}</p>}
-                {awayNote && <p className="text-sm text-white/80">{AWAY}</p>}
-                <Button
-                  ref={primary}
-                  type="button"
-                  onClick={state.question < QUESTIONS.length - 1 ? nextQuestion : finish}
-                  className={`${ON_STAGE_MAIN} justify-self-start`}
-                >
-                  {state.question < QUESTIONS.length - 1 ? "Next question" : "Finish"}
-                </Button>
-              </>
-            ))}
+          {state.step === "recording" && (
+            <LivePrompt
+              offer={offer}
+              touched={coached?.touched ?? null}
+              canSkip={canSkip(liveView)}
+              onSkip={coach.skip}
+              onFinish={finish}
+              finishRef={primary}
+              onStage
+            >
+              {fellBackNote && <p className="text-sm text-white/75">{FELL_BACK}</p>}
+              {lastMinute && <p className="text-sm text-white/80">{LAST_MINUTE}</p>}
+              {awayNote && <p className="text-sm text-white/80">{AWAY}</p>}
+            </LivePrompt>
+          )}
         </CameraStage>
       )}
 

@@ -34,7 +34,7 @@ export async function POST(request: Request): Promise<Response> {
     const answer = await openLiveTranscription(offer, request.signal);
     return json({ status: "connected", answer } satisfies ConnectResponse);
   } catch (error) {
-    // The session stays claimed: the recorder carries on with the fixed questions for this take.
+    // The session stays claimed: the recorder carries on without follow-ups for this take.
     // Only this module's own messages (a status code at most), never anything else's.
     const known = error instanceof LiveTranscriptionError;
     console.error("live: connecting the transcription failed", {

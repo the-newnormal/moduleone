@@ -7,7 +7,7 @@ import { sttConfig } from "@/lib/stt/config";
 import type { SttProvider } from "@/lib/stt/types";
 import { liveCheckinEnabled } from "./live-config";
 
-const NOTICE_REVISION = "2026-10-09";
+const NOTICE_REVISION = "2026-10-10";
 // The live check-in's wording has its own revision, so switching it on or off changes the version
 // either way, and the wording without it stays exactly as members accepted it.
 const LIVE_NOTICE_REVISION = "2026-10-10";
@@ -83,7 +83,7 @@ export function noticeSections(env: Env = process.env): NoticeSection[] {
       heading: "What we record",
       body: live
         ? `Your spoken answers about your week. ${START_AND_FINISH} ${LIVE.record}`
-        : `Your spoken answers to three questions about your week. ${START_AND_FINISH}`,
+        : `Your spoken answer to one question about your week. ${START_AND_FINISH}`,
     },
     {
       heading: "Why",

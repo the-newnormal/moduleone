@@ -38,7 +38,7 @@ Stack: **Next.js (App Router) + TypeScript + Tailwind + shadcn/ui + Supabase + V
 
 ## The thing to build (MVP by Friday)
 1. Supabase magic-link auth → portal.
-2. Weekly check-in page: "Start" records audio and auto-prompts 3 questions on screen
+2. Weekly check-in page: "Start" records audio under one open question on screen (`rubrics/coach.md`'s opening question); with live check-ins on, follow-up questions appear as the member talks, for whichever of the three areas they haven't covered (once asked as three fixed questions):
    - "What have you done this week?" → activity
    - "Where did you / your team use your superpower?" → excellence
    - "How are you feeling about the team?" → morale

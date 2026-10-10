@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_OPENING_QUESTION, QUESTIONS } from "@/lib/checkin/week";
 import { button, click, queryButton, render, settle, text } from "@/test/dom";
 import type { LiveReady } from "./live/api";
 import type { SaveOutcome, Take } from "./take";
@@ -120,8 +121,6 @@ async function record() {
   await settle();
 }
 async function finish() {
-  await click(button("Next question"));
-  await click(button("Next question"));
   await click(button("Finish"));
 }
 
@@ -204,8 +203,8 @@ describe("the camera", () => {
     expect(FakeRecorder.last?.stream).toBe(microphone);
     expect(FakeRecorder.last?.state).toBe("recording");
     expect(video()).toBeNull();
-    expect(text(page.container)).toContain("Question 1 of 3");
-    expect(document.activeElement).toBe(button("Next question"));
+    expect(page.container.querySelector("h3")?.textContent).toBe(DEFAULT_OPENING_QUESTION);
+    expect(document.activeElement).toBe(button("Finish"));
     await finish();
     expect(text(page.container)).toContain("Saving your recording");
     vi.unstubAllGlobals();
@@ -317,9 +316,9 @@ describe("the camera", () => {
     expect(getUserMedia.mock.lastCall?.[0]).not.toHaveProperty("video");
     expect(FakeRecorder.last?.stream).toBe(microphone); // the camera never reaches the recorder
     expect(video()).toBe(mirror); // the same mirror, carried on into the recording
-    expect(stage?.textContent).toContain("Question 1 of 3");
-    expect(stage?.querySelector("h3")?.textContent).toBe("What have you done this week?");
-    expect(stage?.contains(button("Next question"))).toBe(true);
+    expect(stage?.textContent).toContain("Recording");
+    expect(stage?.querySelector("h3")?.textContent).toBe(DEFAULT_OPENING_QUESTION);
+    expect(stage?.contains(button("Finish"))).toBe(true);
 
     await finish();
     expect(video()).toBeNull(); // gone at Finish
@@ -583,8 +582,8 @@ describe("the camera", () => {
     await lens.fire("ended"); // unplugged, or taken by another app
     expect(video()).toBeNull();
     expect(FakeRecorder.last?.state).toBe("recording");
-    expect(text(page.container)).toContain("Question 1 of 3");
-    expect(document.activeElement).toBe(button("Next question"));
+    expect(page.container.querySelector("h3")?.textContent).toBe(DEFAULT_OPENING_QUESTION);
+    expect(document.activeElement).toBe(button("Finish"));
     await finish();
     expect(text(page.container)).toContain("Saving your recording");
     vi.unstubAllGlobals();
@@ -663,6 +662,67 @@ describe("the camera", () => {
   });
 });
 
+// Every check-in asks one open question (page.tsx); without live check-ins, nothing follows it up.
+describe("the one question", () => {
+  const QUESTION = "How did your week go, and how's the team?";
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("is the only question, before and during the take, with Finish and nothing else to press", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    devices();
+    fakes.startLive.mockClear();
+    const { Recorder } = await load();
+    const page = await render(<Recorder opening={QUESTION} />);
+    expect(text(page.container)).toContain("There's one question.");
+    expect(text(page.container)).toContain(QUESTION);
+    for (const { text: question } of QUESTIONS) expect(text()).not.toContain(question);
+
+    await turnOnCamera();
+    const stage = video()?.parentElement;
+    expect(stage?.textContent).toContain(QUESTION);
+    expect(stage?.textContent).toContain("Answer it out loud, then press Finish.");
+
+    await record();
+    expect(stage?.querySelector("h3")?.textContent).toBe(QUESTION);
+    expect(document.activeElement).toBe(button("Finish"));
+    expect(queryButton("Next question")).toBeNull();
+    expect(queryButton("Different question")).toBeNull();
+    expect(stage?.querySelector("ul")).toBeNull(); // no areas to tick off: nothing follows it up
+    expect(stage?.textContent).not.toContain("a follow-up may appear");
+    expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe(`Recording. ${QUESTION}`);
+    expect(fakes.startLive).not.toHaveBeenCalled();
+    for (const { text: question } of QUESTIONS) expect(text()).not.toContain(question);
+  });
+
+  it("asks the built-in opening question when the page gives none", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    devices();
+    const { Recorder } = await load();
+    const page = await render(<Recorder />);
+    expect(text(page.container)).toContain(DEFAULT_OPENING_QUESTION);
+  });
+
+  it("keeps the question in the live region beside the one-minute warning, so a later question is still read", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    devices(undefined, "granted");
+    const { Recorder } = await load();
+    await render(<Recorder opening={QUESTION} />);
+    await settle();
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    await record();
+    await act(async () => {
+      vi.advanceTimersByTime(9 * 60 * 1000 + 500);
+    });
+    const spans = [...document.querySelectorAll('[aria-live="polite"] > span')].map((span) => span.textContent?.trim());
+    expect(spans).toEqual([`Recording. ${QUESTION}`, "One minute left. The recording stops at 10 minutes."]);
+    expect(video()?.parentElement?.textContent).toContain("One minute left.");
+  });
+});
+
 const SESSION = "5e550000-0000-4000-8000-000000000001";
 const OPENING = "Talk me through your week: what you worked on, what came of it, and how you're feeling about the team.";
 const READY: LiveReady = {
@@ -699,7 +759,7 @@ describe("a live check-in", () => {
     const found = liveDevices();
     fakes.startLive.mockResolvedValue(start);
     const { Recorder, ...saves } = await load();
-    const page = await render(<Recorder live={{ opening: OPENING }} />);
+    const page = await render(<Recorder opening={OPENING} live />);
     await turnOnCamera();
     await record();
     return { ...found, ...saves, page };
@@ -732,7 +792,7 @@ describe("a live check-in", () => {
   it("starts with the one open question, not the three fixed ones, and the camera first", async () => {
     liveDevices();
     const { Recorder } = await load();
-    await render(<Recorder live={{ opening: OPENING }} />);
+    await render(<Recorder opening={OPENING} live />);
     expect(text()).toContain("We'll start with one question.");
     expect(text()).toContain("You record with your camera on");
     expect(text()).toContain(OPENING);
@@ -744,7 +804,7 @@ describe("a live check-in", () => {
   it("shows the open question on the stage before the take, and asks for no live session yet", async () => {
     liveDevices(undefined, "granted");
     const { Recorder } = await load();
-    await render(<Recorder live={{ opening: OPENING }} />);
+    await render(<Recorder opening={OPENING} live />);
     await settle();
     expect(stage()?.textContent).toContain("Ready when you are.");
     expect(stage()?.textContent).toContain(OPENING);
@@ -780,7 +840,7 @@ describe("a live check-in", () => {
       constraints.video ? Promise.resolve(cameraStream()) : new Promise((resolve) => (allow = () => resolve(microphone))),
     );
     const { Recorder } = await load();
-    await render(<Recorder live={{ opening: OPENING }} />);
+    await render(<Recorder opening={OPENING} live />);
     await turnOnCamera();
     await record();
     expect(text()).toContain("Waiting for your microphone…");
@@ -800,7 +860,7 @@ describe("a live check-in", () => {
       throw new DOMException("denied", "NotAllowedError");
     });
     const { Recorder } = await load();
-    await render(<Recorder live={{ opening: OPENING }} />);
+    await render(<Recorder opening={OPENING} live />);
     await turnOnCamera();
     await record();
     expect(button("Start recording")).toBeTruthy();
@@ -818,7 +878,7 @@ describe("a live check-in", () => {
       constraints.video ? Promise.resolve(camera) : new Promise((resolve) => (allowMic = resolve)),
     );
     const { Recorder } = await load();
-    await render(<Recorder live={{ opening: OPENING }} />);
+    await render(<Recorder opening={OPENING} live />);
     await turnOnCamera();
     await click(button("Start recording"));
     await lens.fire("ended");
@@ -828,15 +888,16 @@ describe("a live check-in", () => {
     expect(fakes.startLive).not.toHaveBeenCalled();
   });
 
-  it("goes back to the three fixed questions on the stage when live questions aren't available", async () => {
+  it("keeps the question on the stage, and says follow-ups have stopped, when live questions aren't available", async () => {
     await startRecording({ status: "off" });
-    expect(stage()?.textContent).toContain("Question 1 of 3");
-    expect(stage()?.querySelector("h3")?.textContent).toBe("What have you done this week?");
-    expect(stage()?.textContent).toContain("Live questions aren't available, so here are this week's three questions.");
-    expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain("Live questions aren't available");
-    await click(button("Next question"));
-    await click(button("Next question"));
+    expect(stage()?.querySelector("h3")?.textContent).toBe(OPENING);
+    expect(stage()?.textContent).toContain("Follow-up questions have stopped. Keep going, and press Finish when you're done.");
+    expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain("Follow-up questions have stopped.");
+    expect(stage()?.textContent).not.toContain("Not yet: What you did"); // no chips once nothing is following up
+    expect(stage()?.textContent).not.toContain("a follow-up may appear");
     expect(stage()?.contains(button("Finish"))).toBe(true);
+    expect(queryButton("Next question")).toBeNull();
+    for (const { text: question } of QUESTIONS) expect(text()).not.toContain(question);
     expect(fakes.connectLiveTranscription).not.toHaveBeenCalled();
   });
 
@@ -844,7 +905,7 @@ describe("a live check-in", () => {
     const lens = fakeTrack();
     liveDevices(async () => cameraStream(lens));
     const { Recorder } = await load();
-    await render(<Recorder live={{ opening: OPENING }} />);
+    await render(<Recorder opening={OPENING} live />);
     await turnOnCamera();
     await record();
     saving();
@@ -870,7 +931,7 @@ describe("a live check-in", () => {
     const lens = fakeTrack();
     liveDevices(async () => cameraStream(lens));
     const { Recorder } = await load();
-    const page = await render(<Recorder live={{ opening: OPENING }} />);
+    const page = await render(<Recorder opening={OPENING} live />);
     await turnOnCamera();
     await record();
     await lens.fire("ended"); // unplugged, or taken by another app
@@ -892,7 +953,7 @@ describe("a live check-in", () => {
       throw new DOMException("none", "NotFoundError");
     });
     const { Recorder } = await load();
-    const page = await render(<Recorder live={{ opening: OPENING }} />);
+    const page = await render(<Recorder opening={OPENING} live />);
     await turnOnCamera();
     await click(button("Record without camera"));
     await settle();
@@ -908,7 +969,7 @@ describe("a live check-in", () => {
     const lens = fakeTrack();
     liveDevices(async () => cameraStream(lens), "granted");
     const { Recorder, finishRecording, currentSave } = await load();
-    await render(<Recorder live={{ opening: OPENING }} />);
+    await render(<Recorder opening={OPENING} live />);
     await settle();
     await record();
     await settle();
@@ -923,7 +984,7 @@ describe("a live check-in", () => {
     const lens = fakeTrack();
     liveDevices(async () => cameraStream(lens));
     const { Recorder } = await load();
-    const page = await render(<Recorder live={{ opening: OPENING }} />);
+    const page = await render(<Recorder opening={OPENING} live />);
     await turnOnCamera();
     await record();
     await settle();
