@@ -322,6 +322,25 @@ describe("while they talk", () => {
     expect(live.view()).toMatchObject({ mode: "live", offer: QUESTION_1 });
   });
 
+  it.each([
+    ["shows its question instead", QUESTION_2, QUESTION_2],
+    ["shows nothing new when it finds nothing worth asking", null, { id: 0 }],
+  ] as const)("holds an offer back while a newer read, which has heard more, is out, then %s", async (_label, newerOffer, shown) => {
+    const newer = deferred<CoachResponse>();
+    const ask = vi.fn<LiveCoachDeps["ask"]>().mockResolvedValueOnce(ok(QUESTION_1)).mockImplementationOnce(() => newer.promise);
+    const live = setup({ ask });
+    await firstRead(live); // QUESTION_1 waits: too early for a follow-up
+    expect(live.view()).toMatchObject({ offer: { id: 0 } });
+    await live.speak(16_000);
+    live.say(MORE);
+    await live.pause(5000); // the second read is asked for and doesn't answer yet
+    expect(ask).toHaveBeenCalledTimes(2);
+    expect(live.view()).toMatchObject({ offer: { id: 0 } }); // not QUESTION_1, though its time has come
+    newer.resolve(ok(newerOffer));
+    await live.pause(500);
+    expect(live.view()).toMatchObject({ mode: "live", offer: shown });
+  });
+
   it("keeps the follow-up on screen when live coaching stops", async () => {
     const live = setup();
     live.deps.ask.mockResolvedValueOnce(ok(QUESTION_1));

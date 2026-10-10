@@ -458,6 +458,8 @@ export function createLiveCoach({
         elapsedMs: at - r.startedAt,
         onOpening: r.shown.id === OPENING_OFFER_ID,
         offerRequestedAt: r.pending.requestedAt,
+        // Any read still out was asked for after the pending offer's, which has answered.
+        newerReadOut: r.call !== null,
       })
     ) {
       show(r, r.pending.offer);

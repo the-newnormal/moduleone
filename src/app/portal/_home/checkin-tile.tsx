@@ -35,7 +35,7 @@ export function CheckinTile({ week, thisWeek }: { week: MyWeek; thisWeek: string
             <State
               tag={<Tag tone="outline">Not started</Tag>}
               heading="Record this week's check-in"
-              body={<p>A few minutes, one question. {deadline}</p>}
+              body={<p>A few minutes, starting with one question. {deadline}</p>}
               action={
                 <Button asChild variant="accent" className="h-12 w-full px-6 text-[15px] has-[>svg]:px-6 sm:h-10 sm:w-fit">
                   <Link href="/portal/checkin">

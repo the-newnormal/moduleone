@@ -74,7 +74,9 @@ export function shouldRead({
 
 // --- Showing the next question ------------------------------------------------------------------
 // Never while they speak. The offer waiting to be shown must come from a read asked for after the
-// question on screen appeared (an older one answers a question they have moved past). Then it shows
+// question on screen appeared (an older one answers a question they have moved past), and no newer
+// read may still be out: that one has heard more, and its answer replaces the offer or drops it, so
+// they aren't asked about something they have just covered. Then it shows
 // once they have clearly stopped, or after a shorter pause once the current question has had its
 // time and enough words, and the opening question has had longer still.
 export function shouldShow({
@@ -87,6 +89,7 @@ export function shouldShow({
   elapsedMs,
   onOpening,
   offerRequestedAt,
+  newerReadOut,
 }: {
   now: number;
   speaking: boolean;
@@ -100,8 +103,10 @@ export function shouldShow({
   onOpening: boolean;
   // When the read behind the offer waiting to be shown was asked for; null when none is waiting.
   offerRequestedAt: number | null;
+  // A coach read asked for after that one hasn't answered yet.
+  newerReadOut: boolean;
 }): boolean {
-  if (speaking || offerRequestedAt === null || offerRequestedAt < shownAt) return false;
+  if (speaking || newerReadOut || offerRequestedAt === null || offerRequestedAt < shownAt) return false;
   if (silenceMs >= pacing.stoppedSilenceMs) return true;
   return (
     silenceMs >= pacing.showAfterSilenceMs &&

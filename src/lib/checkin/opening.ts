@@ -11,7 +11,11 @@ export function checkinQuestion(): { opening: string; live: boolean } {
   try {
     return { opening: coachRubric().opening, live: liveCheckinEnabled() };
   } catch (error) {
-    if (error instanceof RubricError) return { opening: DEFAULT_OPENING_QUESTION, live: false };
-    throw error;
+    if (!(error instanceof RubricError)) throw error;
+    // With live check-ins off nothing else reads the file, so this is where a broken one shows.
+    console.error("checkin: rubrics/coach.md can't be used; asking the built-in opening question until it is fixed", {
+      problems: error.problems,
+    });
+    return { opening: DEFAULT_OPENING_QUESTION, live: false };
   }
 }

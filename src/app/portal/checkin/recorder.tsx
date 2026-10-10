@@ -577,8 +577,8 @@ export function Recorder({
   // Kept on screen until the take is saved (or can't be). In the live region it is a node of its
   // own, so it is announced when it appears and not again with every later step.
   const awayNote = away && unsaved;
-  // Said once, quietly, as follow-ups stop.
-  const fellBackNote = state.step === "recording" && fellBack;
+  // Said once, quietly, as follow-ups stop under a question; a closing line already says to finish.
+  const fellBackNote = state.step === "recording" && fellBack && offer.kind === "question";
   // A node of its own in the live region too, so a question shown in the last minute is still read.
   const lastMinute = state.step === "recording" && elapsedMs >= WARN_MS;
 

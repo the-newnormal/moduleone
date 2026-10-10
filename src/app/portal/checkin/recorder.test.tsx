@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_OPENING_QUESTION, QUESTIONS } from "@/lib/checkin/week";
 import { button, click, queryButton, render, settle, text } from "@/test/dom";
 import type { LiveReady } from "./live/api";
+import type { ShownOffer } from "./live/contract";
 import type { SaveOutcome, Take } from "./take";
 
 // The recorder beside the app bar's Sign out: a take whose save failed is safe only in this page,
@@ -992,5 +993,78 @@ describe("a live check-in", () => {
     expect(fakes.endLive).toHaveBeenCalledOnce();
     expect(lens.stop).toHaveBeenCalled();
     expect(FakeRecorder.last?.state).toBe("inactive"); // the take is finished and saved, as Finish would
+  });
+
+  // The real coach, on fake timers, taken as far as showing `offer`: the microphone's level, a
+  // transcribed answer, a pause, and the coach's answer. Then live coaching can be made to stop.
+  async function coachedTake(offer: ShownOffer) {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"] });
+    const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+    liveDevices(undefined, "granted");
+    let level = 0.002;
+    fakes.startLevelMeter.mockImplementation((_stream: MediaStream, onLevel: (level: number, now: number) => void) => {
+      const timer = setInterval(() => onLevel(level, performance.now()), 50);
+      return () => clearInterval(timer);
+    });
+    let onEvent: ((event: unknown) => void) | null = null;
+    let onFailure: (() => void) | null = null;
+    fakes.connectLiveTranscription.mockImplementation(async (options: { onEvent: (event: unknown) => void; onFailure: () => void }) => {
+      onEvent = options.onEvent;
+      onFailure = options.onFailure;
+      return connection;
+    });
+    // No waiting on the opening question, so the test needn't run for long.
+    fakes.startLive.mockResolvedValue({
+      ...READY,
+      pacing: { showAfterSilenceMs: 500, stoppedSilenceMs: 1000, minQuestionMs: 0, minWordsPerQuestion: 0, firstFollowUpAfterMs: 0 },
+    });
+    fakes.askCoach.mockResolvedValue({ status: "ok", degraded: false, offer, touched: { activity: true, excellence: false, morale: false } });
+    const { Recorder } = await load();
+    await render(<Recorder opening={OPENING} live />);
+    await advance(0); // the camera, allowed before, comes on by itself
+    await click(button("Start recording"));
+    await advance(500); // quiet: the meter learns the room
+    level = 0.2;
+    await advance(3000); // talking
+    act(() => {
+      onEvent?.({ type: "committed", itemId: "item_1", previousItemId: null });
+      onEvent?.({
+        type: "completed",
+        itemId: "item_1",
+        transcript: "This week I mostly worked on the vendor onboarding for the Jurong site and we got the first three suppliers through the checks.",
+      });
+    });
+    level = 0.002;
+    await advance(3000); // a pause: the coach is asked, and its answer shown
+    return { stop: () => act(() => onFailure?.()) };
+  }
+
+  it("keeps a follow-up on screen, without Different question or the areas, when live coaching stops after it", async () => {
+    try {
+      const take = await coachedTake({ id: 2, kind: "question", text: "What came of the vendor onboarding?" });
+      expect(stage()?.querySelector("h3")?.textContent).toBe("What came of the vendor onboarding?");
+      expect(button("Different question")).toBeTruthy();
+      take.stop();
+      expect(stage()?.querySelector("h3")?.textContent).toBe("What came of the vendor onboarding?"); // not back to the opening
+      expect(queryButton("Different question")).toBeNull();
+      expect(stage()?.querySelector("ul")).toBeNull();
+      expect(stage()?.textContent).toContain("Follow-up questions have stopped.");
+      expect(document.activeElement).toBe(button("Finish"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("adds no note to keep going under a closing line when live coaching stops after it", async () => {
+    try {
+      const closing = "Thank you for sharing that. Say as much or as little as you like, and press Finish whenever you're ready.";
+      const take = await coachedTake({ id: 2, kind: "closing", text: closing }); // the line after a hard moment
+      expect(stage()?.querySelector("h3")?.textContent).toBe(closing);
+      take.stop();
+      expect(stage()?.querySelector("h3")?.textContent).toBe(closing);
+      expect(text()).not.toContain("Follow-up questions have stopped.");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

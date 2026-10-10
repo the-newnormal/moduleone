@@ -83,8 +83,9 @@ Some rules are not in these files, so that no edit here can weaken them:
 If a broken file ever reached production anyway: grading stops with the reason `grading_rubric`
 in `checkins.processing_error`, without using up the check-in's attempts, and those check-ins are
 graded once the fix is deployed; a broken `coach.md` switches live check-ins off, and until it's
-fixed members get a built-in opening question with the same wording as the shipped one
-(`DEFAULT_OPENING_QUESTION` in `src/lib/checkin/week.ts`) and no follow-ups.
+fixed members get a built-in opening question and no follow-ups. The built-in question
+(`DEFAULT_OPENING_QUESTION` in `src/lib/checkin/week.ts`) keeps the wording `coach.md` was first
+shipped with: editing the opening question here doesn't change it, so the two can differ.
 
 ### Rules for `grading.md`
 
@@ -589,7 +590,9 @@ records it (`linesShown` holds `covered`).
 ### Pacing on screen
 
 A question waiting to be shown never appears while they speak, and only if the read behind it was
-asked for after the question on screen appeared. Then it appears either:
+asked for after the question on screen appeared. While a newer read is still out, it waits: that
+read has heard more, so its answer replaces the question waiting (or drops it, if nothing is worth
+asking now), and they aren't asked about something they have just covered. Then it appears either:
 
 - after **2.5 s** of silence, once the question on screen has been up at least **20 s** and they
   have said at least **20 words** since it appeared (and, while the opening question is up, they
