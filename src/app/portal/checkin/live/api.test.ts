@@ -138,11 +138,18 @@ describe("askCoach", () => {
 describe("endLive", () => {
   it("sends with keepalive and doesn't wait", async () => {
     fetchMock.mockResolvedValue(jsonResponse({ status: "ended" }));
-    expect(endLive({ sessionId: READY.sessionId, recordedMs: 184_000 })).toBeUndefined();
+    expect(endLive({ sessionId: READY.sessionId, recordedMs: 184_000, shown: 2 })).toBeUndefined();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(fetchMock.mock.calls[0][0]).toBe(LIVE_END_PATH);
     expect(sentInit()).toMatchObject({ method: "POST", keepalive: true, cache: "no-store", credentials: "same-origin" });
-    expect(JSON.parse(sentInit().body as string)).toEqual({ sessionId: READY.sessionId, recordedMs: 184_000 });
+    expect(JSON.parse(sentInit().body as string)).toEqual({ sessionId: READY.sessionId, recordedMs: 184_000, shown: 2 });
+  });
+
+  it("sends shown as null when no coach offer was on screen", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ status: "ended" }));
+    endLive({ sessionId: READY.sessionId, recordedMs: 0, shown: null });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(JSON.parse(sentInit().body as string)).toEqual({ sessionId: READY.sessionId, recordedMs: 0, shown: null });
   });
 
   it("swallows failures", async () => {
@@ -150,11 +157,11 @@ describe("endLive", () => {
     process.on("unhandledRejection", unhandled);
     try {
       fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
-      endLive({ sessionId: READY.sessionId, recordedMs: 1000 });
+      endLive({ sessionId: READY.sessionId, recordedMs: 1000, shown: 0 });
       fetchMock.mockImplementationOnce(() => {
         throw new TypeError("keepalive body too large");
       });
-      expect(() => endLive({ sessionId: READY.sessionId, recordedMs: 1000 })).not.toThrow();
+      expect(() => endLive({ sessionId: READY.sessionId, recordedMs: 1000, shown: 0 })).not.toThrow();
       await new Promise((resolve) => setTimeout(resolve, 10));
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(unhandled).not.toHaveBeenCalled();

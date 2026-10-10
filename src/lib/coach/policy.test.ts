@@ -77,6 +77,7 @@ const question = (topic: string | null, more: Partial<Omit<OfferRecord, "id" | "
   topic,
   source: "bank",
   beforeYouFinish: false,
+  rejected: false,
   ...more,
 });
 const lineOf = (kind: "covered" | "late" | "closing"): Omit<OfferRecord, "id"> => ({
@@ -84,6 +85,7 @@ const lineOf = (kind: "covered" | "late" | "closing"): Omit<OfferRecord, "id"> =
   topic: null,
   source: "line",
   beforeYouFinish: false,
+  rejected: false,
 });
 
 // Candidates as [id, score], scores rounded so sums like 0.4 + 0.2 compare exactly.
@@ -103,12 +105,14 @@ describe("initialState and parseState", () => {
     const state = initialState();
     expect(state.v).toBe(1);
     expect(state.current).toBe(OPENING_OFFER_ID);
-    expect(state.offers).toEqual([{ id: OPENING_OFFER_ID, kind: "question", topic: null, source: "line", beforeYouFinish: false }]);
+    expect(state.offers).toEqual([
+      { id: OPENING_OFFER_ID, kind: "question", topic: null, source: "line", beforeYouFinish: false, rejected: false },
+    ]);
     expect(state.nextOfferId).toBe(OPENING_OFFER_ID + 1);
     expect(state).toMatchObject({ coverage: {}, tone: "neutral", asked: [], skipped: [], followUps: 0, perArea: {}, skipsInARow: 0 });
     expect(state.linesShown).toEqual([]);
     expect(state.flow).toEqual([]);
-    expect(Object.values(state.counts).every((count) => count === 0)).toBe(true);
+    expect(state.counts).toEqual({ reads: 0, failures: 0, tailored: 0, bank: 0, rejected: 0, latencyMs: 0, slowestMs: 0 });
   });
 
   it("gives a new state each time", () => {
@@ -145,10 +149,29 @@ describe("initialState and parseState", () => {
     ["a fractional count", { ...initialState(), followUps: 1.5 }],
     ["an unknown area in the flow", { ...initialState(), flow: ["finance"] }],
     ["an unknown line", { ...initialState(), linesShown: ["goodbye"] }],
-    ["an offer of an unknown kind", { ...initialState(), offers: [{ id: 0, kind: "poll", topic: null, source: "line", beforeYouFinish: false }] }],
+    [
+      "an offer of an unknown kind",
+      { ...initialState(), offers: [{ id: 0, kind: "poll", topic: null, source: "line", beforeYouFinish: false, rejected: false }] },
+    ],
+    // Before offers said whether Claude's wording had been turned down, when the counts still kept
+    // reads that flagged instructions: such a session starts over.
+    [
+      "a state from before offers kept whether Claude's wording was turned down",
+      {
+        ...initialState(),
+        offers: [{ id: 0, kind: "question", topic: null, source: "line", beforeYouFinish: false }],
+        counts: { ...initialState().counts, instructions: 1 },
+      },
+    ],
     ["a next offer id of 0", { ...initialState(), nextOfferId: 0 }],
   ])("starts over from %s", (_label, stored) => {
     expect(parseState(stored)).toEqual(initialState());
+  });
+
+  it("never reads back a count of reads that flagged instructions", () => {
+    const parsed = parseState({ ...initialState(), counts: { ...initialState().counts, instructions: 2 } });
+    expect(parsed).toEqual(initialState());
+    expect(parsed.counts).not.toHaveProperty("instructions");
   });
 });
 
@@ -201,10 +224,13 @@ describe("mergeRead", () => {
     expect(merged.coverage).toEqual({ morale_feeling: "brief" });
   });
 
-  it("counts the reads that flagged instructions in the transcript", () => {
-    const once = mergeRead(initialState(), read({ instructionsInTranscript: true }), R);
-    expect(once.counts.instructions).toBe(1);
-    expect(mergeRead(once, read(), R).counts.instructions).toBe(1);
+  // Whether a member's words seemed to give the app instructions is used in the call (no tailored
+  // wording) and never kept.
+  it("keeps nothing of a read that flagged instructions in the transcript", () => {
+    const flagged = mergeRead(initialState(), read({ instructionsInTranscript: true, coverage: { activity_work: "brief" } }), R);
+    expect(flagged).toEqual(mergeRead(initialState(), read({ coverage: { activity_work: "brief" } }), R));
+    expect(flagged.counts).not.toHaveProperty("instructions");
+    expect(JSON.stringify(flagged)).not.toMatch(/instruction/i);
   });
 
   it("leaves the state it was given alone", () => {
@@ -239,7 +265,14 @@ describe("acknowledge", () => {
 
   it("counts Claude's wording as tailored", () => {
     const [state, id] = withOffer(initialState(), question("activity_work", { source: "tailored" }));
-    expect(acknowledge(state, id, R).counts).toMatchObject({ tailored: 1, bank: 0 });
+    expect(acknowledge(state, id, R).counts).toMatchObject({ tailored: 1, bank: 0, rejected: 0 });
+  });
+
+  it("counts the rubric's question shown in place of Claude's turned-down wording as bank and rejected, once", () => {
+    const [state, id] = withOffer(initialState(), question("activity_work", { rejected: true }));
+    const shown = acknowledge(state, id, R);
+    expect(shown.counts).toMatchObject({ tailored: 0, bank: 1, rejected: 1 });
+    expect(acknowledge(shown, id, R)).toBe(shown);
   });
 
   it("changes nothing when the offer on screen is reported again", () => {
@@ -447,6 +480,31 @@ describe("candidates", () => {
     ]);
   });
 
+  it("treats scores equal on paper as equal, so the tie goes to the key topic", () => {
+    // excellence_strength: 0.4 and the flow bonus of 0.2, which floating point makes a hair over 0.6;
+    // morale_feeling: a key topic only touched on, so 1.0 × 0.6. Equal on paper.
+    expect(0.4 + 0.2).not.toBe(0.6);
+    const state = stateWith({
+      coverage: {
+        activity_work: "clear",
+        activity_outcome: "clear",
+        activity_more: "clear",
+        excellence_moment: "clear",
+        excellence_impact: "clear",
+        morale_feeling: "brief",
+      },
+      flow: ["excellence"],
+    });
+    // Exact scores, not rounded by the test.
+    expect(candidates(state, R, 60).map((c) => [c.topic.id, c.score])).toEqual([
+      ["morale_feeling", 0.6],
+      ["excellence_strength", 0.6],
+      ["morale_reason", 0.5],
+      ["morale_team", 0.4],
+    ]);
+    expect(decide(state).offer).toMatchObject({ kind: "question", topic: "morale_feeling", source: "bank" });
+  });
+
   it("then by area order, then by the file's order", () => {
     const rubric = rubricWith({}, [
       ...R.topics,
@@ -483,6 +541,20 @@ describe("floor", () => {
     expect(floor(stateWith({ tone: "hard_week" }), rubric)).toBe(0.5);
     expect(floor(stateWith({ tone: "hard_week", coverage: KEYS_CLEAR }), rubric)).toBe(0.6);
   });
+
+  it("lets through a score equal to it on paper", () => {
+    // excellence_impact: 0.7 and a flow bonus of 0.1, which floating point makes a hair under 0.8.
+    expect(0.7 + 0.1).toBeLessThan(0.8);
+    const rubric = rubricWith({ flowBonus: 0.1, minScoreAfterKeys: 0.8 });
+    const state = stateWith({ coverage: { ...ALL_CLEAR, excellence_impact: "none" }, flow: ["excellence"] });
+    expect(floor(state, rubric)).toBe(0.8);
+    expect(candidates(state, rubric, 60).map((c) => [c.topic.id, c.score])).toEqual([["excellence_impact", 0.8]]);
+    expect(decide(state, { rubric }).offer).toMatchObject({ kind: "question", topic: "excellence_impact" });
+    // A floor any higher still turns it away.
+    expect(decide(state, { rubric: rubricWith({ flowBonus: 0.1, minScoreAfterKeys: 0.800001 }) }).offer).toMatchObject({
+      kind: "covered",
+    });
+  });
 });
 
 describe("nextOffer", () => {
@@ -490,7 +562,14 @@ describe("nextOffer", () => {
     const decision = decide(initialState());
     expect(decision.offer).toEqual({ id: 1, kind: "question", topic: "activity_work", source: "bank", text: ask("activity_work") });
     expect(decision.state.nextOfferId).toBe(2);
-    expect(decision.state.offers.at(-1)).toEqual({ id: 1, kind: "question", topic: "activity_work", source: "bank", beforeYouFinish: false });
+    expect(decision.state.offers.at(-1)).toEqual({
+      id: 1,
+      kind: "question",
+      topic: "activity_work",
+      source: "bank",
+      beforeYouFinish: false,
+      rejected: false,
+    });
   });
 
   it("uses the hard-week wording in a hard week, where the topic has one", () => {
@@ -599,8 +678,24 @@ describe("nextOffer with Claude's wording", () => {
     });
   });
 
+  it("uses it for a topic exactly the slack below the best, on paper", () => {
+    // excellence_impact: 0.7 and the flow bonus of 0.2, a hair under 0.9 in floating point; the best
+    // scores 1.0, and the slack is 0.1.
+    expect(0.7 + 0.2).toBeLessThan(0.9);
+    const impact = { target: "excellence_impact", question: IMPACT, quote: "the client call" };
+    expect(tailoredBy(impact, base, rubricWith({ tailorSlack: 0.1 })).offer).toMatchObject({
+      topic: "excellence_impact",
+      source: "tailored",
+    });
+    // A slack any smaller leaves it out.
+    expect(tailoredBy(impact, base, rubricWith({ tailorSlack: 0.099999 })).offer).toMatchObject({
+      topic: "activity_outcome",
+      source: "bank",
+    });
+  });
+
   it("trims it", () => {
-    expect(tailoredBy({ target: "activity_outcome", question: `  ${OUTCOME}  ` }).offer?.text).toBe(OUTCOME);
+    expect(tailoredBy({ target: "activity_outcome", question: `  ${OUTCOME}  `, quote: "vendor onboarding" }).offer?.text).toBe(OUTCOME);
   });
 
   it.each<[string, Partial<CoachRead>]>([
@@ -609,20 +704,40 @@ describe("nextOffer with Claude's wording", () => {
     ["no topic", { target: null, question: OUTCOME }],
     ["no question", { target: "activity_outcome", question: "" }],
     ["a transcript that tried to give instructions", { target: "activity_outcome", question: OUTCOME, instructionsInTranscript: true }],
-  ])("asks the best topic in the rubric's words for %s", (_label, overrides) => {
+  ])("asks the best topic in the rubric's words for %s, not counting it as turned down", (_label, overrides) => {
     const decision = tailoredBy(overrides);
     expect(decision.offer).toMatchObject({ topic: "activity_outcome", source: "bank", text: ask("activity_outcome") });
-    expect(decision.state.counts.rejected).toBe(0);
+    expect(decision.state.offers.at(-1)).toMatchObject({ id: decision.offer!.id, rejected: false });
+    expect(show(decision).counts).toMatchObject({ tailored: 0, bank: 1, rejected: 0 });
   });
 
   it.each<[string, Partial<CoachRead>]>([
     ["breaks the question style", { target: "activity_outcome", question: "Why did the vendor onboarding take so long?" }],
     ["quotes words they never said", { target: "activity_outcome", question: OUTCOME, quote: "vendor onboarding at Tuas" }],
     ["is too long", { target: "activity_outcome", question: `Where did ${"the vendor onboarding and ".repeat(5)}the deck get to?` }],
-  ])("turns down wording that %s, and counts it", (_label, overrides) => {
+    ["says they mentioned something without quoting it", { target: "activity_outcome", question: OUTCOME, quote: "" }],
+    ["gives a quote it doesn't use", { target: "activity_outcome", question: "Where did the Jurong site work get to?", quote: "vendor onboarding" }],
+    ["puts words they never said in quotes", { target: "activity_outcome", question: "Where did \u201cthe Tuas warehouse\u201d get to?" }],
+  ])("turns down wording that %s, and counts it once the rubric's question is shown", (_label, overrides) => {
     const decision = tailoredBy(overrides);
     expect(decision.offer).toMatchObject({ topic: "activity_outcome", source: "bank", text: ask("activity_outcome") });
-    expect(decision.state.counts.rejected).toBe(1);
+    expect(decision.state.offers.at(-1)).toMatchObject({ id: decision.offer!.id, source: "bank", rejected: true });
+    // Not yet: only what reaches the screen is counted, like tailored and bank.
+    expect(decision.state.counts.rejected).toBe(0);
+    expect(show(decision).counts).toMatchObject({ tailored: 0, bank: 1, rejected: 1 });
+  });
+
+  it("never counts turned-down wording whose question doesn't reach the screen", () => {
+    const turnedDown = tailoredBy({ target: "activity_outcome", question: "Why did the vendor onboarding take so long?" });
+    // A newer call replaces it before the browser shows it, and again; neither counts the first.
+    const again = tailoredBy({ target: "activity_outcome", question: "Why did the deck take so long?" }, turnedDown.state);
+    const next = decide(again.state, { transcript: TRANSCRIPT });
+    expect(next.offer).toMatchObject({ topic: "activity_outcome", source: "bank" });
+    expect(next.state.counts.rejected).toBe(0);
+    const state = show(next);
+    expect(state.counts).toMatchObject({ bank: 1, rejected: 0 });
+    // Nor when it comes back on screen after its topic was asked.
+    expect(acknowledge(state, turnedDown.offer!.id, R).counts).toMatchObject({ bank: 1, rejected: 0 });
   });
 
   it("never uses it for a topic that doesn't allow it", () => {
@@ -630,7 +745,7 @@ describe("nextOffer with Claude's wording", () => {
     const state = stateWith({ coverage: { ...ALL_CLEAR, morale_reason: "none", morale_team: "none" }, flow: ["morale"] });
     const decision = tailoredBy({ target: "morale_reason", question: "What's behind how you feel about the team this week?" }, state);
     expect(decision.offer).toMatchObject({ topic: "morale_reason", source: "bank", text: ask("morale_reason") });
-    expect(decision.state.counts.rejected).toBe(0);
+    expect(show(decision).counts).toMatchObject({ bank: 1, rejected: 0 });
   });
 
   it("never uses it for morale with the real rubric", () => {
@@ -723,9 +838,20 @@ describe("validateQuestion", () => {
   it.each<[string, string, string, string | null]>([
     ["a plain question", "Where did the vendor onboarding get to by Friday?", "", null],
     ["a question quoting their words", "You mentioned the vendor onboarding: where did that get to?", "vendor onboarding", null],
-    ["a quote in another case, with other punctuation", "You mentioned the Jurong site: where did that get to?", "Vendor onboarding, for the JURONG site!", null],
+    [
+      "a quote in another case, with other punctuation",
+      "You mentioned the vendor onboarding for the Jurong site: where did that get to?",
+      "Vendor onboarding, for the JURONG site!",
+      null,
+    ],
     ["a question with spaces around it", "  Where did the budget deck for Finance end up?  ", "", null],
     ["a quote that is only punctuation", "Where did the budget deck for Finance end up?", "...", null],
+    ["an apostrophe", "What's left to do on the vendor onboarding?", "", null],
+    ["a curly apostrophe", "What\u2019s left on the budget deck for Finance?", "", null],
+    ["a question asking what they say, not claiming they said it", "What did you say to Finance about the budget deck?", "", null],
+    ["their words in double quotes", 'Where did "the vendor onboarding" get to by Friday?', "", null],
+    ["their words in curly quotes, in another case", "Where did \u201cthe Q3 Budget Deck\u201d end up?", "", null],
+    ["the quote, also in double quotes", 'You mentioned "the vendor onboarding": where did that get to?', "the vendor onboarding", null],
 
     ["a question under twelve characters", "Which one?", "", "too_short"],
     ["a question over the longest allowed", long, "", "too_long"],
@@ -753,6 +879,21 @@ describe("validateQuestion", () => {
 
     ["a quote they never said", "You mentioned the Tuas site: where did that get to?", "the Tuas site", "quote_not_said"],
     ["a quote cut out of a word", "You mentioned the onboarding: where did that get to?", "endor onboarding", "quote_not_said"],
+    ["a quote the question doesn't use", "Where did the Jurong site work get to?", "vendor onboarding", "quote_not_in_question"],
+    ["a quote only partly in the question", "You mentioned the onboarding: where did that get to?", "vendor onboarding", "quote_not_in_question"],
+    ["\"you said\" without a quote", "You said the deck went out Friday: who picked it up?", "", "claims_without_quote"],
+    ["\"you mentioned\" without a quote", "You mentioned the vendor onboarding: where did that get to?", "", "claims_without_quote"],
+    ["\"you told\" without a quote", "What came of the deck you told Finance about?", "", "claims_without_quote"],
+    ["\"you called\" without a quote, in capitals", "What came of what YOU CALLED the Jurong site?", "", "claims_without_quote"],
+    ["words in double quotes they never said", 'Where did "the Tuas warehouse" get to?', "", "quote_not_said"],
+    ["words in curly quotes they never said", "Where did \u201cthe Tuas warehouse\u201d get to?", "", "quote_not_said"],
+    ["words in double quotes cut out of a word", 'Where did "endor onboarding" get to?', "", "quote_not_said"],
+    [
+      "a true quote, with other words in double quotes they never said",
+      'You mentioned the vendor onboarding: did "the Tuas team" pitch in?',
+      "vendor onboarding",
+      "quote_not_said",
+    ],
     [
       "a quote of over eight words",
       "You mentioned the onboarding: where did that get to?",
@@ -897,6 +1038,10 @@ function simulate(rubric: CoachRubric, seed: number) {
     expect(new Set(newlyAsked).size, where).toBe(newlyAsked.length);
     expect(state.offers.length, where).toBeLessThanOrEqual(4);
     expect(state.offers.some((o) => o.id === state.current), where).toBe(true);
+    // Each topic is counted once, when its question first reaches the screen, and a turned-down
+    // wording only with the rubric's question that was shown instead.
+    expect(state.counts.tailored + state.counts.bank, where).toBe(state.asked.length + state.skipped.length);
+    expect(state.counts.rejected, where).toBeLessThanOrEqual(state.counts.bank);
   }
   return state;
 }
@@ -907,8 +1052,14 @@ describe("anti-nagging, over many made-up check-ins", () => {
     ["rubrics/coach.md", REAL],
   ])("never asks a topic twice or past the limits, with %s", (_label, rubric) => {
     let questions = 0;
-    for (let seed = 1; seed <= 300; seed++) questions += simulate(rubric, seed).followUps;
-    // The simulation does ask things: otherwise it would prove nothing.
+    let rejected = 0;
+    for (let seed = 1; seed <= 300; seed++) {
+      const state = simulate(rubric, seed);
+      questions += state.followUps;
+      rejected += state.counts.rejected;
+    }
+    // The simulation does ask things, and turns wording down: otherwise it would prove nothing.
     expect(questions).toBeGreaterThan(300);
+    expect(rejected).toBeGreaterThan(0);
   });
 });

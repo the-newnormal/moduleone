@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { createRef } from "react";
+import { act, createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { button, click, queryButton, render, text } from "@/test/dom";
 import type { Touched } from "@/lib/coach/types";
@@ -69,6 +69,36 @@ describe("LivePrompt", () => {
     await page.rerender(prompt({ offer: COVERED, canSkip: false, finishRef }));
     expect(queryButton("Different question")).toBeNull();
     expect(document.activeElement).toBe(button("Finish"));
+  });
+
+  it("moves focus to Finish when a closing line arrives while they have tabbed to Different question", async () => {
+    const onSkip = vi.fn();
+    const finishRef = createRef<HTMLButtonElement>();
+    const page = await render(prompt({ offer: FOLLOW_UP, canSkip: true, onSkip, finishRef }));
+    await act(async () => button("Different question").focus());
+    await page.rerender(prompt({ offer: COVERED, canSkip: false, onSkip, finishRef }));
+    expect(queryButton("Different question")).toBeNull();
+    expect(document.activeElement).toBe(button("Finish"));
+    expect(onSkip).not.toHaveBeenCalled();
+  });
+
+  it("doesn't pull focus to Finish once they have moved off Different question", async () => {
+    const finishRef = createRef<HTMLButtonElement>();
+    const withHelp = (props: Partial<Parameters<typeof LivePrompt>[0]>) => (
+      <>
+        {prompt({ finishRef, ...props })}
+        <a href="#help">Help</a>
+      </>
+    );
+    const page = await render(withHelp({ offer: FOLLOW_UP, canSkip: true }));
+    const help = document.querySelector<HTMLAnchorElement>('a[href="#help"]')!;
+    await act(async () => button("Different question").focus());
+    await act(async () => help.focus());
+    // Then off the controls altogether (a click on the page, say).
+    await act(async () => help.blur());
+    expect(document.activeElement).toBe(document.body);
+    await page.rerender(withHelp({ offer: COVERED, canSkip: false }));
+    expect(document.activeElement).toBe(document.body);
   });
 
   it("leaves focus alone when a new question simply replaces the last", async () => {

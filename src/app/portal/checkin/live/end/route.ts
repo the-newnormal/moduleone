@@ -24,7 +24,12 @@ export async function POST(request: Request): Promise<Response> {
   if (typeof session === "string") return refuse(session);
   const { sessionId, recordedMs, shown } = body.data;
   const memberId = session.member.id;
-  if (shown !== null) await countShown(sessionId, memberId, shown, recordedMs);
+  if (shown !== null) {
+    // Never let the statistics stop the session ending (and its minutes being logged).
+    await countShown(sessionId, memberId, shown, recordedMs).catch((error: unknown) =>
+      console.error("live end: counting the last offer failed", { error: error instanceof Error ? error.name : "unknown" }),
+    );
+  }
   await endLiveSession(sessionId, memberId, recordedMs);
   return json({ status: "ended" } satisfies EndResponse);
 }

@@ -209,7 +209,8 @@ describe("a live check-in", () => {
     );
 
     await click(button("Finish"));
-    expect(fakes.endLive).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: expect.any(Number) });
+    // The opening question was still on screen.
+    expect(fakes.endLive).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: expect.any(Number), shown: 0 });
     expect(connection.close).toHaveBeenCalled();
     await act(async () => {
       FakeRecorder.last?.ondataavailable?.({ data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }) });

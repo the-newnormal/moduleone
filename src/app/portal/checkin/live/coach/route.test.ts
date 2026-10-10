@@ -223,7 +223,7 @@ describe("POST /portal/checkin/live/coach", () => {
       ...initialState(),
       offers: [
         ...initialState().offers,
-        { id: 1, kind: "question", topic: "excellence_moment", source: "bank", beforeYouFinish: false },
+        { id: 1, kind: "question", topic: "excellence_moment", source: "bank", beforeYouFinish: false, rejected: false },
       ],
       nextOfferId: 2,
     };

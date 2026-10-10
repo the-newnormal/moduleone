@@ -198,7 +198,7 @@ describe("starting", () => {
     expect(live.view()?.mode).toBe("live");
     await advance(250);
     expect(live.view()).toEqual({ mode: "fallback" });
-    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: 0 });
+    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: 0, shown: 0 });
     expect(live.meterStopped).toHaveBeenCalled();
   });
 
@@ -216,7 +216,8 @@ describe("starting", () => {
     expect(live.coach.stop()).toBeNull();
     start.resolve(READY);
     await advance(0);
-    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: 0 });
+    // Nothing of this session's was ever on screen.
+    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: 0, shown: null });
     expect(live.deps.connect).not.toHaveBeenCalled();
   });
 });
@@ -372,7 +373,7 @@ describe("falling back", () => {
     expect(live.deps.ask).toHaveBeenCalledTimes(2);
     expect(live.view()).toEqual({ mode: "fallback" });
     expect(live.connection.close).toHaveBeenCalledOnce();
-    expect(live.deps.end).toHaveBeenCalledOnce();
+    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: expect.any(Number), shown: 0 });
     expect(live.coach.stop()).toBe(SESSION); // the take still records which session it was
     expect(live.deps.end).toHaveBeenCalledOnce();
   });
@@ -433,7 +434,7 @@ describe("finishing", () => {
     await live.record();
     await live.pause(30_000);
     expect(live.coach.stop()).toBe(SESSION);
-    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: 30_000 });
+    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: 30_000, shown: 0 });
     expect(live.connection.close).toHaveBeenCalledOnce();
     expect(live.meterStopped).toHaveBeenCalledOnce();
     expect(live.signal()?.aborted).toBe(true);
@@ -445,6 +446,40 @@ describe("finishing", () => {
     expect(live.deps.end).toHaveBeenCalledOnce();
     expect(live.deps.ask).not.toHaveBeenCalled();
     expect(live.connection.commit).not.toHaveBeenCalled();
+  });
+
+  // The last question or closing line often reaches the screen with no coach call after it, so the
+  // end call says what was on screen for the coach to count.
+  it("ends the session with the follow-up on screen", async () => {
+    const live = setup();
+    live.deps.ask.mockResolvedValueOnce(ok(QUESTION_1));
+    await firstRead(live);
+    await live.pause(2000);
+    expect(live.view()).toMatchObject({ offer: QUESTION_1 });
+    live.coach.stop();
+    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: expect.any(Number), shown: 1 });
+  });
+
+  it("ends the session with what is on screen, not an offer still waiting for a pause", async () => {
+    const live = setup();
+    live.deps.ask.mockResolvedValueOnce(ok(QUESTION_1));
+    await firstRead(live);
+    // The coach has answered with a question, which waits while they keep talking.
+    expect(live.deps.ask).toHaveBeenCalledOnce();
+    await live.speak(5000);
+    expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 } });
+    live.coach.stop();
+    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: expect.any(Number), shown: 0 });
+  });
+
+  it("ends the session with the closing line on screen", async () => {
+    const live = setup();
+    live.deps.ask.mockResolvedValueOnce(ok(COVERED));
+    await firstRead(live);
+    await live.pause(2000);
+    expect(live.view()).toMatchObject({ offer: COVERED });
+    live.coach.stop();
+    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: expect.any(Number), shown: COVERED.id });
   });
 
   it("drops a coach answer that arrives after Finish", async () => {
@@ -497,7 +532,7 @@ describe("useLiveCoach", () => {
     expect(live.deps.connect).toHaveBeenCalledOnce();
 
     await page.rerender(null);
-    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: 5000 });
+    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: 5000, shown: 0 });
     expect(live.connection.close).toHaveBeenCalledOnce();
     expect(live.meterStopped).toHaveBeenCalledOnce();
     vi.useRealTimers();
@@ -522,7 +557,7 @@ describe("useLiveCoach", () => {
     act(() => {
       window.dispatchEvent(new Event("pagehide"));
     });
-    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: 2000 });
+    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: 2000, shown: 0 });
     expect(live.connection.close).toHaveBeenCalledOnce();
     vi.useRealTimers();
   });

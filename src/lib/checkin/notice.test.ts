@@ -134,6 +134,16 @@ describe("the privacy notice with the live check-in on", () => {
     expect(body).toContain("That record never includes your words, and nobody sees it in the app.");
   });
 
+  // The record keeps the coach's reading of the mood, including "not coping" (distress), which also
+  // stops the questions: the notice names every reading it can hold.
+  it("names each reading of the mood the record keeps, the not-coping one too", () => {
+    const body = section(live, "Who sees what");
+    expect(body).toContain(
+      "whether it sounded like a hard week or like you weren't coping (it then stops asking questions), with your check-in.",
+    );
+    expect(section({}, "Who sees what")).not.toContain("coping");
+  });
+
   it("says how long the topics record is kept when the take isn't submitted", () => {
     expect(section(live, "How long we keep it")).toBe(
       "Recordings are deleted after 90 days. Transcripts and scores are kept as part of your team's check-in history. If you don't submit, the record of which topics you were asked about is deleted after 14 days.",

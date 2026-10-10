@@ -8,6 +8,7 @@ import {
   linkLiveTake,
   MAX_COACH_CALLS,
   MIN_COACH_INTERVAL_MS,
+  readOpenSession,
   recordCoachCost,
   saveCoachState,
   startLiveSession,
@@ -40,11 +41,11 @@ type Query = {
 };
 
 // The service-role client: rpc(...).abortSignal(...) answers with rpcResult, and from() records
-// each select or update with its filters. A select ends in maybeSingle() (reads[table]); an update
-// is awaitable after any number of filters (updateResult).
+// each select or update with its filters. A select ends in maybeSingle() (reads[table], which
+// rejects when it is an Error); an update is awaitable after any number of filters (updateResult).
 let rpcResult: Result;
 let rpcSignal: AbortSignal | null;
-let reads: Record<string, Result>;
+let reads: Record<string, Result | Error>;
 let updateResult: Result | Error;
 let queries: Query[];
 const rpc = vi.fn<(name: string, args: Record<string, unknown>) => { abortSignal: (signal: AbortSignal) => Promise<Result> }>(
@@ -63,7 +64,11 @@ function from(table: string) {
       eq: (column: string, value: unknown) => (query.filters.push(["eq", column, value]), builder),
       is: (column: string, value: unknown) => (query.filters.push(["is", column, value]), builder),
       abortSignal: (signal: AbortSignal) => ((query.signal = signal), builder),
-      maybeSingle: async () => reads[table] ?? { data: null, error: null },
+      maybeSingle: async () => {
+        const result = reads[table] ?? { data: null, error: null };
+        if (result instanceof Error) throw result;
+        return result;
+      },
       then: (resolve: (r: Result) => void, reject: (e: unknown) => void) =>
         updateResult instanceof Error ? reject(updateResult) : resolve(updateResult),
     };
@@ -219,6 +224,55 @@ describe("saveCoachState", () => {
     rpcResult = { data: null, error: { code: "57014", message: "timeout" } };
     expect(await saveCoachState(SESSION, MEMBER, 7, state, 1000)).toBe(false);
     expect(console.error).toHaveBeenCalledExactlyOnceWith("live session: save failed", { code: "57014" });
+  });
+});
+
+describe("readOpenSession", () => {
+  const state = { v: 1, coverage: { activity_work: "clear" } };
+
+  it("reads the state and latest call number of the member's session, while it is open", async () => {
+    reads.live_checkin_sessions = { data: { coach_state: state, coach_calls: 9 }, error: null };
+    expect(await readOpenSession(SESSION, MEMBER)).toEqual({ state, callNumber: 9 });
+    expect(queries).toEqual([
+      {
+        table: "live_checkin_sessions",
+        op: "select",
+        values: "coach_state, coach_calls",
+        filters: [
+          ["eq", "id", SESSION],
+          ["eq", "member_id", MEMBER],
+          ["is", "ended_at", null],
+        ],
+        signal: expect.any(AbortSignal),
+      },
+    ]);
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("is null when no open session of theirs matches (ended, or another member's), logging nothing", async () => {
+    reads.live_checkin_sessions = { data: null, error: null };
+    expect(await readOpenSession(SESSION, MEMBER)).toBeNull();
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("is null on an error, logging only the code", async () => {
+    reads.live_checkin_sessions = { data: null, error: { code: "57014", message: `canceling statement for ${SESSION}` } };
+    expect(await readOpenSession(SESSION, MEMBER)).toBeNull();
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("live session: read failed", { code: "57014" });
+  });
+
+  it("is null when the read rejects, logging only the error's name", async () => {
+    reads.live_checkin_sessions = Object.assign(new Error(`timed out reading ${SESSION}`), { name: "TimeoutError" });
+    await expect(readOpenSession(SESSION, MEMBER)).resolves.toBeNull();
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("live session: read failed", { error: "TimeoutError" });
+  });
+
+  it("is null when the client can't be made, logging only the error's name", async () => {
+    vi.mocked(createServiceRoleClient).mockImplementation(() => {
+      throw new MissingServiceKeyError();
+    });
+    await expect(readOpenSession(SESSION, MEMBER)).resolves.toBeNull();
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("live session: read failed", { error: "MissingServiceKeyError" });
   });
 });
 
@@ -415,12 +469,14 @@ describe("logs", () => {
     await startLiveSession(MEMBER, { stt: "openai:gpt-live-transcribe", coach: "claude-haiku-5-5", coachRubric: "3f9a1c0b7d2e" });
     await claimCoachCall(SESSION, MEMBER);
     await saveCoachState(SESSION, MEMBER, 1, {}, 0);
+    reads.live_checkin_sessions = { data: null, error: { code: "XX000", message: `${MEMBER} ${SESSION}` } };
+    await readOpenSession(SESSION, MEMBER);
     await endLiveSession(SESSION, MEMBER, 0);
     await tidyLiveSessions();
     updateResult = { data: null, error: { code: "XX000", message: `${MEMBER} ${PATH}` } };
     await linkLiveTake(SESSION, MEMBER, PATH);
     await linkLiveCheckin(MEMBER, PATH, CHECKIN);
-    expect(console.error).toHaveBeenCalledTimes(7);
+    expect(console.error).toHaveBeenCalledTimes(8);
     for (const secret of [MEMBER, SESSION, PATH, CHECKIN]) expect(logged()).not.toContain(secret);
   });
 });
