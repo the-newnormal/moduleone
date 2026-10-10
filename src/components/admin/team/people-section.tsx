@@ -138,7 +138,7 @@ export function PersonRow({
         {person.loginGiven && <p className="text-xs text-muted-foreground">{person.loginGiven}</p>}
         {person.ownerResendsInvite && (
           <p className="text-xs text-muted-foreground">
-            This login wasn&apos;t given in Module One, so only the project owner can send its invite again.
+            This login wasn&apos;t given in Module One, so only the project owner can send it an invite.
           </p>
         )}
         {person.emailChanged && <p className="text-xs text-muted-foreground">{person.emailChanged}</p>}

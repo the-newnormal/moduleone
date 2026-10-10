@@ -224,14 +224,14 @@ describe("PeopleSection", () => {
     // A login the project owner made without an invite: nobody can sign in with it yet.
     expect(row(html, "Ivy Ho")).toBe(
       "Ivy Ho Member Can't sign in yet No invite has been sent " +
-        "This login wasn't given in Module One, so only the project owner can send its invite again.",
+        "This login wasn't given in Module One, so only the project owner can send it an invite.",
     );
     expect(row(html, "Dan Lim")).toBe("Dan Lim Member Active");
     expect(text(html)).not.toMatch(/Invite sent|Last signed in/);
   });
 
   it("says only the project owner can send an unused invite again when its login wasn't given in Module One", () => {
-    const note = "only the project owner can send its invite again";
+    const note = "only the project owner can send it an invite";
     const invited = { state: "invited", sentAt: "1 Oct 2026, 9:15 am", expired: true } as const;
     const html = render(TEAM, [
       // Made in the dashboard.
