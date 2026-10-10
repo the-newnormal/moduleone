@@ -74,6 +74,15 @@ function pickMimeType(): string | null {
 
 function cameraProblem(error: unknown): string {
   const name = error instanceof Error ? error.name : "";
+  const message = error instanceof Error ? error.message : "";
+  // Chrome's words for a camera the computer itself blocks for the browser (a Mac's privacy
+  // settings), and for a question closed without an answer: the site setting can't fix either.
+  if (name === "NotAllowedError" && message === "Permission denied by system") {
+    return "Your computer doesn't let this browser use the camera. Allow it in your computer's privacy settings (on a Mac: System Settings, Privacy & Security, Camera), then try again.";
+  }
+  if (name === "NotAllowedError" && message === "Permission dismissed") {
+    return "The camera question was closed. Turn on your camera again, and choose Allow when asked.";
+  }
   if (name === "NotAllowedError" || name === "SecurityError") {
     return "Camera access is blocked. Allow it for this site in your browser's settings, then try again.";
   }
@@ -405,8 +414,9 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
   }
 
   // Ready for a take, where the browser allows the camera without asking (allowed here before):
-  // it comes on by itself, so the member goes straight to seeing themselves.
-  const ready = state.step === "idle" && !heldOnly;
+  // it comes on by itself, so the member goes straight to seeing themselves. Not while the page
+  // refreshes to show a newer draft (Show my draft), which usually takes this recorder away.
+  const ready = state.step === "idle" && !heldOnly && !refreshing;
   // asked unchanged: nothing turned the camera on or off meanwhile (the member's Turn on included).
   const cameraByItself = useEffectEvent((asked: number) => {
     if (camera.current.asked === asked) void turnCameraOn(false);
@@ -542,7 +552,7 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
     state.step === "idle"
       ? cameraNote === "asking"
         ? CAMERA_ASKING
-        : (cameraNote?.problem ?? "")
+        : "" // a camera problem is announced by its own alert, as a microphone problem is
       : state.step === "starting"
         ? "Waiting for your microphone…"
         : state.step === "recording"

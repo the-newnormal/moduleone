@@ -257,7 +257,8 @@ describe("the camera", () => {
     await turnOnCamera();
     const blocked = "Camera access is blocked. Allow it for this site in your browser's settings, then try again.";
     expect(text(page.container)).toContain(blocked);
-    expect(text(document.querySelector("[aria-live]") ?? undefined)).toContain(blocked); // screen readers hear it
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe(blocked); // screen readers hear it,
+    expect(text(document.querySelector("[aria-live]") ?? undefined)).not.toContain(blocked); // once
     expect(button("Turn on my camera")).toBeTruthy(); // to try again once allowed
     expect([...document.querySelectorAll("button")].some((b) => b.textContent === "Start recording")).toBe(false);
     expect(getUserMedia.mock.calls.some(([constraints]) => constraints.audio)).toBe(false); // no microphone either
@@ -277,6 +278,39 @@ describe("the camera", () => {
     error = new DOMException("busy", "NotReadableError");
     await turnOnCamera();
     expect(text(page.container)).toContain("Your camera is busy in another app. Close that app, then try again.");
+    vi.unstubAllGlobals();
+  });
+
+  it("says when the computer blocks the camera for the browser, or the browser's question was closed", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    // Chrome's words for each: the site setting can't fix either.
+    let error = new DOMException("Permission denied by system", "NotAllowedError");
+    devices(async () => {
+      throw error;
+    });
+    const { Recorder } = await load();
+    const page = await render(<Recorder />);
+    await turnOnCamera();
+    expect(text(page.container)).toContain("Your computer doesn't let this browser use the camera.");
+    expect(text(page.container)).not.toContain("Allow it for this site");
+    error = new DOMException("Permission dismissed", "NotAllowedError");
+    await turnOnCamera();
+    expect(text(page.container)).toContain("The camera question was closed. Turn on your camera again, and choose Allow when asked.");
+    vi.unstubAllGlobals();
+  });
+
+  it("doesn't come on by itself while the page refreshes to show a newer draft", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    const { cameraAsks } = devices(undefined, "granted");
+    const { Recorder, trackSave } = await load();
+    void trackSave(Promise.resolve<SaveOutcome>({ step: "superseded" })); // a newer draft was saved elsewhere
+    await render(<Recorder />);
+    await settle();
+    router.refresh.mockReturnValueOnce(new Promise(() => {})); // the newer draft is still on its way
+    await click(button("Show my draft"));
+    await settle();
+    expect(cameraAsks()).toBe(0);
+    expect(video()).toBeNull();
     vi.unstubAllGlobals();
   });
 
