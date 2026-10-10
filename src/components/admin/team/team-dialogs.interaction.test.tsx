@@ -42,6 +42,7 @@ const person = (id: string, name: string, changes: Partial<Person> = {}): Person
   canGiveLogin: true,
   ownerGivesLogin: false,
   canResendInvite: false,
+  ownerResendsInvite: false,
   emailChanged: null,
   canChangeEmail: false,
   canRemove: false,
@@ -49,6 +50,8 @@ const person = (id: string, name: string, changes: Partial<Person> = {}): Person
   otherLeads: [],
   leadsHere: false,
   leadsDomain: null,
+  // Has a login whose state the page couldn't read, unless a test says which.
+  login: changes.hasLogin ? { state: "unknown" } : { state: "none" },
   ...changes,
 });
 

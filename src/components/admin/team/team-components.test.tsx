@@ -76,6 +76,7 @@ const person = (id: string, name: string, changes: Partial<Person> = {}): Person
   canGiveLogin: false,
   ownerGivesLogin: false,
   canResendInvite: false,
+  ownerResendsInvite: false,
   emailChanged: null,
   canChangeEmail: false,
   canRemove: false,
@@ -83,6 +84,8 @@ const person = (id: string, name: string, changes: Partial<Person> = {}): Person
   otherLeads: [],
   leadsHere: false,
   leadsDomain: null,
+  // Has a login whose state the page couldn't read, unless a test says which.
+  login: changes.hasLogin ? { state: "unknown" } : { state: "none" },
   ...changes,
 });
 
@@ -115,6 +118,48 @@ function row(html: string, name: string) {
   return item;
 }
 
+// Normal's Tag tones, by the classes that make each one (src/components/normal/tag.tsx).
+const TAG_TONES = {
+  outline: ["border-line-strong", "bg-transparent"],
+  neutral: ["border-border", "bg-card"],
+  warning: ["bg-sun-soft", "text-warning-ink"],
+  success: ["bg-success-soft", "text-success"],
+} as const;
+
+// The login tag in one person's row: the element right after their role badge, its words, and
+// which of Normal's Tag tones its classes make (exactly one, when it's right).
+function loginTag(html: string, name: string) {
+  const item = (html.match(/<li[\s\S]*?<\/li>/g) ?? []).find((li) => text(li).startsWith(name));
+  const tag = item?.match(/<span data-slot="badge"[^>]*>[^<]*<\/span><span class="([^"]*)">([^<]*)<\/span>/);
+  if (!tag) throw new Error(`no login tag after the role badge for ${name}`);
+  const classes = tag[1].split(/\s+/);
+  const tones = Object.entries(TAG_TONES)
+    .filter(([, needs]) => needs.every((c) => classes.includes(c)))
+    .map(([tone]) => tone);
+  return { label: tag[2], tones };
+}
+
+// One person in each sign-in state, as buildTeamView makes them (dates already formatted). Not
+// editable, so their rows carry no buttons.
+const SIGNED_IN: Person[] = [
+  person("m-ana", "Ana Lee", { editable: false }),
+  person("m-ivy", "Ivy Ho", {
+    editable: false,
+    hasLogin: true,
+    canResendInvite: true,
+    login: { state: "invited", sentAt: "8 Oct 2026, 3:04 pm", expired: false },
+  }),
+  person("m-ben", "Ben Kho", {
+    editable: false,
+    hasLogin: true,
+    canResendInvite: true,
+    login: { state: "invited", sentAt: "1 Oct 2026, 9:15 am", expired: true },
+  }),
+  person("m-cat", "Cat Ng", { editable: false, hasLogin: true, login: { state: "ready" } }),
+  person("m-dan", "Dan Lim", { editable: false, hasLogin: true, login: { state: "active", lastSignedInOn: "8 Oct 2026" } }),
+  person("m-eve", "Eve Tan", { editable: false, hasLogin: true }), // couldn't be read
+];
+
 // Dialog parts need a Dialog around them (closed dialogs render nothing, so tests render the
 // content on its own).
 const inDialog = (content: React.ReactNode) => renderToStaticMarkup(<Dialog>{content}</Dialog>);
@@ -138,12 +183,108 @@ describe("PeopleSection", () => {
 
   it("shows each person's role label and whether they can sign in", () => {
     const html = render();
-    expect(row(html, "Hana Lim")).toContain("Master Admin Can sign in");
+    expect(row(html, "Hana Lim")).toContain("Master Admin Has a login");
     expect(row(html, "Ada Boss")).toContain("Master Admin No login yet");
-    expect(row(html, "Leo Tan")).toContain("Leader Can sign in");
+    expect(row(html, "Leo Tan")).toContain("Leader Has a login");
     expect(row(html, "Zed Ong")).toContain("Member No login yet");
     expect(text(html)).toContain("People (5)");
     expect(text(html)).not.toMatch(/\bhq\b/);
+  });
+
+  it("shows each sign-in status right after the role, with when the invite went out or when they last signed in", () => {
+    const html = render(TEAM, SIGNED_IN);
+    expect(row(html, "Ana Lee")).toBe("Ana Lee Member No login yet");
+    expect(row(html, "Ivy Ho")).toBe("Ivy Ho Member Invite not used Invite sent 8 Oct 2026, 3:04 pm Resend invite (Ivy Ho)");
+    expect(row(html, "Ben Kho")).toBe("Ben Kho Member Invite expired Invite sent 1 Oct 2026, 9:15 am Resend invite (Ben Kho)");
+    expect(row(html, "Cat Ng")).toBe("Cat Ng Member Never signed in Their login is ready: they sign in at the login page");
+    expect(row(html, "Dan Lim")).toBe("Dan Lim Member Active Last signed in with a link on 8 Oct 2026");
+    expect(row(html, "Eve Tan")).toBe("Eve Tan Member Has a login");
+  });
+
+  it("colours the sign-in status with Normal's Tag tones: warning for an invite, success for Active, neutral otherwise", () => {
+    const html = render(TEAM, SIGNED_IN);
+    expect(loginTag(html, "Ana Lee")).toEqual({ label: "No login yet", tones: ["neutral"] });
+    expect(loginTag(html, "Ivy Ho")).toEqual({ label: "Invite not used", tones: ["warning"] });
+    expect(loginTag(html, "Ben Kho")).toEqual({ label: "Invite expired", tones: ["warning"] });
+    expect(loginTag(html, "Cat Ng")).toEqual({ label: "Never signed in", tones: ["neutral"] });
+    expect(loginTag(html, "Dan Lim")).toEqual({ label: "Active", tones: ["success"] });
+    expect(loginTag(html, "Eve Tan")).toEqual({ label: "Has a login", tones: ["neutral"] });
+  });
+
+  it("shows the sign-in status without a date when there's none to show", () => {
+    const html = render(TEAM, [
+      person("m-ivy", "Ivy Ho", {
+        editable: false,
+        hasLogin: true,
+        ownerResendsInvite: true,
+        login: { state: "invited", sentAt: null, expired: false },
+      }),
+      person("m-dan", "Dan Lim", { editable: false, hasLogin: true, login: { state: "active", lastSignedInOn: null } }),
+    ]);
+    // A login the project owner made without an invite: nobody can sign in with it yet.
+    expect(row(html, "Ivy Ho")).toBe(
+      "Ivy Ho Member Can't sign in yet No invite has been sent " +
+        "This login wasn't given in Module One, so only the project owner can send it an invite.",
+    );
+    expect(row(html, "Dan Lim")).toBe("Dan Lim Member Active");
+    expect(text(html)).not.toMatch(/Invite sent|Last signed in/);
+  });
+
+  it("says only the project owner can send an unused invite again when its login wasn't given in Module One", () => {
+    const note = "only the project owner can send it an invite";
+    const invited = { state: "invited", sentAt: "1 Oct 2026, 9:15 am", expired: true } as const;
+    const html = render(TEAM, [
+      // Made in the dashboard.
+      person("m-ivy", "Ivy Ho", { editable: false, hasLogin: true, ownerResendsInvite: true, login: invited }),
+      person("m-ben", "Ben Kho", { editable: false, hasLogin: true, canResendInvite: true, login: invited }),
+      // A Master Admin's unused invite: no Resend invite, but the note isn't about them.
+      person("m-ada", "Ada Boss", { role: "hq", roleLabel: "Master Admin", editable: false, hasLogin: true, login: invited }),
+      person("m-cat", "Cat Ng", { editable: false, hasLogin: true, login: { state: "ready" } }),
+      person("m-dan", "Dan Lim", { editable: false, hasLogin: true }), // couldn't be read
+    ]);
+    expect(row(html, "Ivy Ho")).toContain(note);
+    expect(row(html, "Ivy Ho")).not.toContain("Resend invite");
+    for (const name of ["Ben Kho", "Ada Boss", "Cat Ng", "Dan Lim"]) expect(row(html, name)).not.toContain(note);
+  });
+
+  it("shows the sign-in status before who gave the login and who changed the sign-in email", () => {
+    const html = render(TEAM, [
+      person("m-mei", "Mei Wong", {
+        role: "leader",
+        roleLabel: "Leader",
+        title: "Lab lead",
+        editable: false,
+        hasLogin: true,
+        login: { state: "active", lastSignedInOn: "8 Oct 2026" },
+        loginGiven: "Login given by Hana Lim on 1 Oct 2026",
+        emailChanged: "Sign-in email changed by Ada Boss on 2 Oct 2026",
+      }),
+    ]);
+    expect(row(html, "Mei Wong")).toBe(
+      "Mei Wong · Lab lead Leader Active Last signed in with a link on 8 Oct 2026 Login given by Hana Lim on 1 Oct 2026 Sign-in email changed by Ada Boss on 2 Oct 2026",
+    );
+  });
+
+  it("offers Resend invite on an expired invite it may resend, and not on a login that's been used", () => {
+    const html = render(TEAM, [
+      person("m-ben", "Ben Kho", {
+        editable: false,
+        hasLogin: true,
+        login: { state: "invited", sentAt: "1 Oct 2026, 9:15 am", expired: true },
+        loginGiven: "Login given by Hana Lim on 1 Oct 2026",
+        canResendInvite: true,
+      }),
+      person("m-dan", "Dan Lim", {
+        editable: false,
+        hasLogin: true,
+        login: { state: "active", lastSignedInOn: "8 Oct 2026" },
+        loginGiven: "Login given by Hana Lim on 1 Oct 2026",
+      }),
+    ]);
+    expect(row(html, "Ben Kho")).toBe(
+      "Ben Kho Member Invite expired Invite sent 1 Oct 2026, 9:15 am Login given by Hana Lim on 1 Oct 2026 Resend invite (Ben Kho)",
+    );
+    expect(row(html, "Dan Lim")).not.toContain("Resend invite");
   });
 
   it("offers no Add people on the organisation node, and says only the project owner places people there (since 0006)", () => {
@@ -176,7 +317,7 @@ describe("PeopleSection", () => {
 
   it("marks the admin's own row and offers nothing on it or on other Master Admin rows", () => {
     const html = render();
-    expect(row(html, "Hana Lim")).toBe("Hana Lim (you) Master Admin Can sign in");
+    expect(row(html, "Hana Lim")).toBe("Hana Lim (you) Master Admin Has a login");
     expect(row(html, "Ada Boss")).toBe("Ada Boss Master Admin No login yet");
   });
 
@@ -222,7 +363,7 @@ describe("PeopleSection", () => {
       person("m-ivy", "Ivy Ho", { ownerKeeps: "grants", ownerGivesLogin: true }),
     ]);
     expect(row(html, "Gus Tay")).toContain(
-      "Can sign in They hold grants, so only the project owner can change their sign-in email or remove them.",
+      "Has a login They hold grants, so only the project owner can change their sign-in email or remove them.",
     );
     expect(row(html, "Ivy Ho")).toContain(
       "No login yet They hold grants, so the project owner gives them a login. Only the project owner can remove them.",
@@ -258,7 +399,7 @@ describe("PeopleSection", () => {
     expect(text(html)).toContain(
       "Only the project owner places people in the organisation, changes their sign-in email or removes them, since whoever sits here sees the check-ins of every division.",
     );
-    expect(row(html, "Vee Pang")).toBe("Vee Pang Leader Can sign in Resend invite (Vee Pang)");
+    expect(row(html, "Vee Pang")).toBe("Vee Pang Leader Has a login Resend invite (Vee Pang)");
   });
 
   it("says who changed someone's sign-in email and when, after who gave the login", () => {
@@ -270,7 +411,7 @@ describe("PeopleSection", () => {
       }),
     ]);
     expect(row(html, "Mei Wong")).toContain(
-      "Can sign in Login given by Hana Lim on 1 Oct 2026 Sign-in email changed by Ada Boss on 9 Oct 2026",
+      "Has a login Login given by Hana Lim on 1 Oct 2026 Sign-in email changed by Ada Boss on 9 Oct 2026",
     );
   });
 
