@@ -3,11 +3,12 @@
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { baseMimeType, draftPath, extensionFor, isOwnAudioPath, MAX_AUDIO_BYTES } from "@/lib/checkin/audio";
+import { linkLiveCheckin, linkLiveTake } from "@/lib/checkin/live-sessions";
 import { noticeVersion } from "@/lib/checkin/notice";
 import { processCheckin } from "@/lib/checkin/process";
 import { currentWeekStart } from "@/lib/checkin/week";
+import { noticeAccepted as hasAcceptedNotice, sessionMember as currentMember, type Session } from "@/lib/checkin/session";
 import { createServiceRoleClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
 import { UPLOAD_MAX_AGE_MS } from "./housekeeping";
 
 // Every action here is a public POST endpoint. Each one takes the member from the session (never
@@ -48,6 +49,7 @@ export type SubmitCheckinResult = Submitted | CheckinError;
 const PAGE = "/portal/checkin";
 const BUCKET = "checkin-audio";
 const MAX_DURATION_MS = 60 * 60 * 1000; // the database's range for duration_ms
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const MESSAGES: Record<CheckinErrorCode, string> = {
   signed_out: "Your session has ended. Sign in again.",
@@ -80,46 +82,15 @@ function noticeRequired(): CheckinError {
   return fail("notice_required");
 }
 
-type Session = {
-  supabase: Awaited<ReturnType<typeof createClient>>;
-  authUserId: string;
-  member: { id: string; team_id: string | null };
-};
-
-// The signed-in member, read through RLS (members_select lets a user read their own row).
+// The signed-in member (src/lib/checkin/session.ts), or the error the page shows.
 async function sessionMember(): Promise<Session | CheckinError> {
-  const supabase = await createClient();
-  const { data } = await supabase.auth.getClaims();
-  if (!data?.claims) return fail("signed_out");
-  const { data: member, error } = await supabase
-    .from("members")
-    .select("id, team_id")
-    .eq("auth_user_id", data.claims.sub)
-    .maybeSingle();
-  if (error) {
-    console.error("checkin: reading the member failed", { code: error.code });
-    return fail("failed");
-  }
-  if (!member) return fail("no_member");
-  return { supabase, authUserId: data.claims.sub, member };
+  const session = await currentMember();
+  return typeof session === "string" ? fail(session) : session;
 }
 
-// Whether the member has accepted the current privacy notice, with this login. Checked before
-// recording and again before submitting, because submitting is what sends the recording to the
-// transcription service, and a change of service changes the notice.
-async function noticeAccepted({ supabase, authUserId, member }: Session): Promise<boolean | CheckinError> {
-  const { data, error } = await supabase
-    .from("recording_notices")
-    .select("member_id")
-    .eq("member_id", member.id)
-    .eq("auth_user_id", authUserId)
-    .eq("notice_version", noticeVersion())
-    .maybeSingle();
-  if (error) {
-    console.error("checkin: reading the notice failed", { code: error.code });
-    return fail("failed");
-  }
-  return data !== null;
+async function noticeAccepted(session: Session): Promise<boolean | CheckinError> {
+  const accepted = await hasAcceptedNotice(session);
+  return accepted === "failed" ? fail("failed") : accepted;
 }
 
 // Errors raised by the 0004 functions: SQLSTATE P0001 with a stable message.
@@ -208,6 +179,8 @@ export async function saveDraft(input: {
   path: string;
   durationMs?: number;
   recordedAt?: number | null;
+  // The live check-in session the take was recorded in, if it was (src/lib/checkin/live-sessions.ts).
+  liveSessionId?: string | null;
 }): Promise<SaveDraftResult> {
   const session = await sessionMember();
   if ("status" in session) return session;
@@ -270,6 +243,9 @@ export async function saveDraft(input: {
     return fail("failed");
   }
   if (typeof replaced === "string" && replaced !== path) await removeFile(admin, memberId, replaced);
+  // Only ever the member's own session: the update matches their member id as well as the id given.
+  const liveSessionId = input?.liveSessionId;
+  if (typeof liveSessionId === "string" && UUID.test(liveSessionId)) await linkLiveTake(liveSessionId, memberId, path);
   revalidatePath(PAGE);
   return { status: "saved" };
 }
@@ -325,6 +301,8 @@ export async function submitCheckin(shown: string): Promise<SubmitCheckinResult>
     console.error("submitCheckin: submit_checkin_draft failed", { code: error?.code });
     return fail("failed");
   }
+  // The live session that recorded the take, if any, follows it to the check-in.
+  await linkLiveCheckin(session.member.id, shown, id);
   after(() => processCheckin(id));
   return submitted();
 }

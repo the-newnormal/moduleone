@@ -4,6 +4,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { noticeSections } from "@/lib/checkin/notice";
 import { processCheckin } from "@/lib/checkin/process";
+import { coachRubric } from "@/lib/coach/rubric";
+import { RubricError } from "@/lib/rubrics/markdown";
 import { createClient } from "@/lib/supabase/server";
 import { tidyMemberAudio } from "./housekeeping";
 import CheckinPage from "./page";
@@ -21,6 +23,11 @@ vi.mock("next/server", async (importOriginal) => ({
 }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/checkin/process", () => ({ processCheckin: vi.fn() }));
+// The real rubric, unless a test breaks it.
+vi.mock("@/lib/coach/rubric", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/coach/rubric")>();
+  return { ...actual, coachRubric: vi.fn(actual.coachRubric) };
+});
 vi.mock("./housekeeping", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./housekeeping")>()),
   tidyMemberAudio: vi.fn(),
@@ -112,6 +119,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 // Runs what the page scheduled with after().
@@ -165,6 +173,34 @@ describe("/portal/checkin", () => {
     expect(html).toContain("What have you done this week?");
     expect(html).toContain("Where did you / your team use your superpower?");
     expect(html).toContain("How are you feeling about the team?");
+  });
+
+  it("shows the three fixed questions while live check-ins are off", async () => {
+    vi.stubEnv("LIVE_CHECKIN", "off");
+    const html = await render();
+    expect(html).toContain("What have you done this week?");
+    expect(html).not.toContain(coachRubric().opening.slice(0, 20));
+    expect(html).not.toContain("We&#x27;ll start with one question");
+  });
+
+  it("starts with the coach's one open question while live check-ins are on", async () => {
+    vi.stubEnv("LIVE_CHECKIN", "on");
+    const html = await render();
+    expect(html).toContain("Start recording");
+    expect(html).toContain("We&#x27;ll start with one question");
+    expect(html).toContain(renderToStaticMarkup(coachRubric().opening));
+    expect(html).not.toContain("What have you done this week?");
+  });
+
+  it("falls back to the fixed questions when rubrics/coach.md can't be used", async () => {
+    vi.stubEnv("LIVE_CHECKIN", "on");
+    vi.mocked(coachRubric).mockImplementationOnce(() => {
+      throw new RubricError("rubrics/coach.md", ['"## Opening question" is missing.']);
+    });
+    const html = await render();
+    expect(html).toContain("Start recording");
+    expect(html).toContain("What have you done this week?");
+    expect(html).not.toContain("We&#x27;ll start with one question");
   });
 
   it("shows the draft with playback, its length and when it was recorded", async () => {

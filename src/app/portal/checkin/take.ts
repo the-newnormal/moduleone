@@ -6,7 +6,8 @@ import { OFFLINE_MESSAGE, updatedSinceLoad } from "./unreachable";
 // (Date.now()) and by its steady clock (performance.now()); serverRecordedAt is the same moment by
 // the server's clock, worked out on the first save (see onServerClock) and kept for retries. The
 // server keeps the newer take when an older one arrives late, comparing takes from different
-// devices, so it needs the one clock.
+// devices, so it needs the one clock. liveSessionId is the live check-in session the take was
+// recorded in (null, or left out, without one), so the server can follow the session to the check-in.
 export type Take = {
   blob: Blob;
   mimeType: string;
@@ -15,6 +16,7 @@ export type Take = {
   recordedAtMono: number;
   serverRecordedAt: number | null;
   uploadedPath: string | null;
+  liveSessionId?: string | null;
 };
 
 // Where saving a take ends. On "saved" the page re-renders with the draft (or the submitted
@@ -34,7 +36,12 @@ export type SaveSteps = {
   prepare: (mimeType: string) => Promise<PrepareRecordingResult>;
   // Uploads to the signed upload URL prepare made; resolves with Storage's error, if any.
   upload: (ready: ReadyToUpload, body: Blob) => Promise<{ error: unknown }>;
-  saveDraft: (input: { path: string; durationMs: number; recordedAt: number }) => Promise<SaveDraftResult>;
+  saveDraft: (input: {
+    path: string;
+    durationMs: number;
+    recordedAt: number;
+    liveSessionId: string | null;
+  }) => Promise<SaveDraftResult>;
   // The server's clock now, in ms (a plain request, never queued behind a server action).
   serverNow: () => Promise<number>;
   timeouts?: Timeouts;
@@ -125,7 +132,12 @@ export async function saveTake(take: Take, steps: SaveSteps): Promise<SaveOutcom
     }
     const saved = await within(
       timeouts.saveMs,
-      saveDraft({ path, durationMs: current.durationMs, recordedAt: current.serverRecordedAt }),
+      saveDraft({
+        path,
+        durationMs: current.durationMs,
+        recordedAt: current.serverRecordedAt,
+        liveSessionId: current.liveSessionId ?? null,
+      }),
     );
     // An upload kept from an earlier try that is now too old to save: the take itself is fine, so
     // upload it again rather than ask the member to record it again.

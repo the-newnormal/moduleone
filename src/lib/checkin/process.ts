@@ -1,6 +1,7 @@
 import "server-only";
+import { recordCosts } from "@/lib/costs/record";
 import { createServiceRoleClient } from "@/lib/supabase/admin";
-import { gradeCheckin, GradingError, type GradeUsage } from "@/lib/grader";
+import { gradeCheckin, GradingError } from "@/lib/grader";
 import { transcribe, TranscriptionError } from "@/lib/stt";
 
 export type ProcessOutcome = "graded" | "skipped" | "failed";
@@ -110,7 +111,7 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
         .update({ transcript: result.text, transcript_model: transcriptModel, transcript_warnings: result.warnings })
         .eq("id", checkinId)
         .abortSignal(AbortSignal.timeout(SAVE_MS)),
-      recordCost(admin, checkinId, [{ step: "transcription", model: transcriptModel, audio_ms: claim.audio_duration_ms }]),
+      recordCosts(admin, [{ step: "transcription", checkinId, model: transcriptModel, audioMs: claim.audio_duration_ms }]),
     ]);
     if (transcriptError) return fail("save_transcript_failed", transcriptError);
     transcript = result.text;
@@ -129,10 +130,12 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
   } catch (error) {
     if (!(error instanceof GradingError)) return fail("grading_error", error);
     // A configuration problem (no or a wrong ANTHROPIC_API_KEY, a model or request the API won't
-    // take) fails every check-in the same way until someone fixes it, and costs nothing to try
-    // again: no reply is generated. So it doesn't use up an attempt, and the first visit after the
+    // take, a broken rubrics/grading.md) fails every check-in the same way until someone fixes it,
+    // and costs nothing to try again: no reply is generated. So it doesn't use up an attempt, and the first visit after the
     // fix grades the check-in.
-    return fail(`grading_${error.reason}`, error, { giveBackAttempt: error.reason === "api" && !error.retryable });
+    return fail(`grading_${error.reason}`, error, {
+      giveBackAttempt: (error.reason === "api" && !error.retryable) || error.reason === "rubric",
+    });
   }
   // The grading call is paid for whether or not the save below changes a row, so its cost is
   // logged either way (processing_costs keeps no foreign key to the check-in, 0008).
@@ -146,6 +149,7 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
         category: grade.category,
         rubric_review: grade.review,
         grader_model: grade.model,
+        rubric_version: grade.rubricVersion,
         graded_at: new Date().toISOString(),
         processing_error: null,
       })
@@ -153,52 +157,15 @@ export async function processCheckin(checkinId: string): Promise<ProcessOutcome>
       .is("graded_at", null)
       .select("id")
       .abortSignal(AbortSignal.timeout(SAVE_MS)),
-    recordCost(
+    recordCosts(
       admin,
-      checkinId,
-      grade.attempts.map((attempt) => ({ step: "grading" as const, model: attempt.model, ...usageColumns(attempt.usage) })),
+      grade.attempts.map((attempt) => ({ step: "grading" as const, checkinId, model: attempt.model, usage: attempt.usage })),
     ),
   ]);
   if (gradeError) return fail("save_grade_failed", gradeError);
   // No row: a Master Admin reset the check-in meanwhile (0007), or another attempt graded it.
   if (!graded || graded.length === 0) return "skipped";
   return "graded";
-}
-
-type CostRow =
-  | { step: "transcription"; model: string; audio_ms: number | null }
-  | {
-      step: "grading";
-      model: string;
-      input_tokens: number;
-      output_tokens: number;
-      cache_read_tokens: number;
-      cache_write_tokens: number;
-    };
-
-function usageColumns(usage: GradeUsage) {
-  return {
-    input_tokens: usage.inputTokens,
-    output_tokens: usage.outputTokens,
-    cache_read_tokens: usage.cacheReadTokens,
-    cache_write_tokens: usage.cacheWriteTokens,
-  };
-}
-
-// Logs a paid call in processing_costs (0008) for the admin Costs page. Runs alongside the save
-// that follows the call, inside the same SAVE_MS, and never fails the check-in: a missing row
-// only makes the month's total a little low.
-async function recordCost(admin: ReturnType<typeof createServiceRoleClient>, checkinId: string, rows: CostRow[]): Promise<void> {
-  const step = rows[0]?.step;
-  try {
-    const { error } = await admin
-      .from("processing_costs")
-      .insert(rows.map((row) => ({ checkin_id: checkinId, ...row })))
-      .abortSignal(AbortSignal.timeout(SAVE_MS));
-    if (error) console.error("processCheckin: could not record the cost", { checkinId, step, code: error.code });
-  } catch (error) {
-    console.error("processCheckin: could not record the cost", { checkinId, step, error: describe(error) });
-  }
 }
 
 function mimeFromFilename(filename: string): string {
