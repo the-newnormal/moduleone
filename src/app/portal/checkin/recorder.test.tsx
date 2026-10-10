@@ -401,6 +401,83 @@ describe("the camera", () => {
     vi.unstubAllGlobals();
   });
 
+  it("keeps the take going in the card when the camera goes away mid-take", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    const lens = fakeTrack();
+    devices(async () => cameraStream(lens));
+    const { Recorder } = await load();
+    const page = await render(<Recorder />);
+    await turnOnCamera();
+    await record();
+    await lens.fire("ended"); // unplugged, or taken by another app
+    expect(video()).toBeNull();
+    expect(FakeRecorder.last?.state).toBe("recording");
+    expect(text(page.container)).toContain("Question 1 of 3");
+    expect(document.activeElement).toBe(button("Next question"));
+    await finish();
+    expect(text(page.container)).toContain("Saving your recording");
+    vi.unstubAllGlobals();
+  });
+
+  it("stays on, with the same picture, when the microphone can't start", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    const lens = fakeTrack();
+    const camera = cameraStream(lens);
+    const { getUserMedia, cameraAsks } = devices(async () => camera, "granted");
+    getUserMedia.mockImplementation(async (constraints: MediaStreamConstraints) => {
+      if (constraints.video) return camera;
+      throw new DOMException("blocked", "NotAllowedError");
+    });
+    const { Recorder } = await load();
+    await render(<Recorder />);
+    await settle();
+    const mirror = video();
+    await record();
+    expect(video()).toBe(mirror);
+    expect(lens.stop).not.toHaveBeenCalled();
+    expect(mirror?.parentElement?.textContent).toContain("Microphone access is blocked");
+    expect(cameraAsks()).toBe(1); // not a second camera over the first
+    vi.unstubAllGlobals();
+  });
+
+  it("comes back on by itself, where the browser allows it, after a take with nothing in it", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    const { cameraAsks } = devices(undefined, "granted");
+    const { Recorder } = await load();
+    await render(<Recorder />);
+    await settle();
+    await record();
+    await finish();
+    await act(async () => FakeRecorder.last?.onstop?.()); // no chunks: nothing was recorded
+    await settle();
+    expect(cameraAsks()).toBe(2);
+    expect(video()).not.toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it("turns off at the ten-minute limit, with the take", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    const lens = fakeTrack();
+    devices(async () => cameraStream(lens), "granted");
+    const { Recorder } = await load();
+    const page = await render(<Recorder />);
+    await settle();
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      await record();
+      await act(async () => {
+        vi.advanceTimersByTime(10 * 60 * 1000 + 500);
+      });
+      expect(FakeRecorder.last?.state).toBe("inactive");
+      expect(lens.stop).toHaveBeenCalled();
+      expect(video()).toBeNull();
+      expect(text(page.container)).toContain("Saving your recording");
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("takes the stage away when the camera goes away by itself, and asks to turn it on again", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     const lens = fakeTrack();

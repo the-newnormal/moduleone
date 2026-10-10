@@ -225,8 +225,8 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
   // The page was hidden, or the microphone muted, while recording, so the take may have a gap.
   const [away, setAway] = useState(false);
   const media = useRef<Media | null>(null);
-  // The camera, on only when the member chose it before starting, or by itself at Start where the
-  // browser won't ask (a question then would pop up mid-answer). Off once the recording ends.
+  // The member's camera, which they need on to start: it comes on by itself when the recorder is
+  // ready and the browser allows it without asking, or when they turn it on. Off once the take ends.
   const camera = useRef<CameraState>({ stream: null, asked: 0 });
   const [mirror, setMirror] = useState<MediaStream | null>(null);
   // A question an earlier recorder in this tab left open: wait for its answer too. Read once, so the
