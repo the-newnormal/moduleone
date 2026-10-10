@@ -5,9 +5,9 @@ import { describe, expect, it } from "vitest";
 
 // The service-role client (./admin.ts) bypasses RLS, so only the team page's login actions (Give
 // login, Resend invite, Change email, and Remove from Module One's login deletion), the check-in's
-// server code (which writes for the member it takes from the session) and the Master Admin's
-// delete and reset actions (which only remove the files the database handed back after checking
-// the caller) may use it. This scans every source file under src/ and fails if anything else imports
+// server code (which writes for the member it takes from the session, live check-in sessions
+// included), the cost log and the Master Admin's delete and reset actions (which only remove the
+// files the database handed back after checking the caller) may use it. This scans every source file under src/ and fails if anything else imports
 // it, mocks it, or reads the service key itself. To use it somewhere new, that has to be a reviewed
 // change to ALLOWED below.
 
@@ -26,6 +26,10 @@ const ALLOWED = new Set([
   "src/app/portal/checkin/housekeeping.test.ts",
   "src/lib/checkin/process.ts", // transcribing and grading a submitted check-in
   "src/lib/checkin/process.test.ts",
+  "src/lib/checkin/live-sessions.ts", // live check-in sessions, for the member the session names (0011)
+  "src/lib/checkin/live-sessions.test.ts",
+  "src/lib/costs/record.ts", // logging paid API calls in processing_costs (imports only the client's type)
+  "src/lib/costs/record.test.ts",
   "src/app/portal/dashboard/[teamId]/[week]/actions.ts", // removing files a Master Admin deleted (0007)
   "src/app/portal/dashboard/[teamId]/[week]/actions.test.ts",
 ]);
