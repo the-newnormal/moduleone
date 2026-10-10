@@ -65,7 +65,7 @@ describe("mintLiveTranscriptionKey", () => {
     expect(call.headers.get("authorization")).toBe("Bearer sk-test-live");
     expect(call.headers.get("content-type")).toMatch(/^application\/json/);
     expect(call.body).toEqual({
-      expires_after: { anchor: "created_at", seconds: 60 },
+      expires_after: { anchor: "created_at", seconds: 30 },
       session: {
         type: "transcription",
         audio: {

@@ -34,7 +34,8 @@ export type LiveStartResponse =
   | {
       status: "ready";
       sessionId: string;
-      // OpenAI's short-lived key ("ek_…"): opens one transcription session, for about a minute.
+      // OpenAI's short-lived key ("ek_…") for one transcription session; it can be used to connect for
+      // 30 seconds.
       clientSecret: string;
       sttModel: string;
       opening: string;

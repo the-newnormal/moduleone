@@ -8,9 +8,11 @@ import { liveSttModel } from "@/lib/checkin/live-config";
 // The browser connects to OpenAI's realtime API itself (Vercel functions can't hold a socket open),
 // with a short-lived key minted here, so OPENAI_API_KEY never leaves the server.
 
-// Long enough for the browser to connect. The key can open sessions only until then; one that has
-// started carries on (the recorder stops at 10 minutes).
-const KEY_TTL_SECONDS = 60;
+// Long enough for the browser to connect (it gives up after 8 s; see pacing.ts), and no longer: until
+// it expires the key can open more sessions than the one the recorder opens, on this account's bill
+// (a member who dug it out of their browser could), and OpenAI can't limit a key to one session.
+// A session that has started carries on after it (the recorder stops at 10 minutes).
+const KEY_TTL_SECONDS = 30;
 const TIMEOUT_MS = 10_000;
 
 export type LiveTranscriptionKey = { value: string; expiresAt: number; model: string };
