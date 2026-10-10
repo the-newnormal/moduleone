@@ -106,6 +106,32 @@ export async function saveCoachState(
   return data === true;
 }
 
+// The open session's state and its latest call number, for a last update as it ends (the end route
+// counts the offer that was on screen). Null if it isn't the member's, or has ended.
+export async function readOpenSession(
+  sessionId: string,
+  memberId: string,
+): Promise<{ state: unknown; callNumber: number } | null> {
+  try {
+    const { data, error } = await admin()
+      .from("live_checkin_sessions")
+      .select("coach_state, coach_calls")
+      .eq("id", sessionId)
+      .eq("member_id", memberId)
+      .is("ended_at", null)
+      .abortSignal(AbortSignal.timeout(SAVE_MS))
+      .maybeSingle();
+    if (error) {
+      problem("read", error);
+      return null;
+    }
+    return data ? { state: data.coach_state, callNumber: data.coach_calls } : null;
+  } catch (error) {
+    console.error("live session: read failed", { error: error instanceof Error ? error.name : "unknown" });
+    return null;
+  }
+}
+
 // Logs one coach read's tokens against the session.
 export async function recordCoachCost(sessionId: string, model: string, usage: Usage): Promise<void> {
   await recordCosts(admin(), [{ step: "coaching", liveSessionId: sessionId, model, usage }]);

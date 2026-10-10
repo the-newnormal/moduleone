@@ -11,7 +11,7 @@ import Anthropic, {
 } from "@anthropic-ai/sdk";
 import { GRADE_JSON_SCHEMA, parseGradeOutput } from "./output";
 import { RubricError } from "@/lib/rubrics/markdown";
-import { countWords, graderRubricVersion, graderSystemPrompt, transcriptMessage } from "./prompt";
+import { countWords, GRADER_EFFORT, graderRubricVersion, graderSystemPrompt, transcriptMessage } from "./prompt";
 import { GradingError, type Grade, type GradeAttempt } from "./types";
 
 export * from "./types";
@@ -106,7 +106,7 @@ export async function gradeCheckin(input: { transcript: string; model?: string; 
         // No `thinking` field: thinking is on by default on these models and effort sets its depth
         // (default medium; grading is a judgement call, so high).
         output_config: {
-          effort: "high",
+          effort: GRADER_EFFORT,
           format: { type: "json_schema", schema: GRADE_JSON_SCHEMA },
         },
         // The rubric is the same on every call and long enough to cache (over the 512-token

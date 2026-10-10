@@ -61,8 +61,9 @@ const KEPT = "Recordings are deleted after 90 days. Transcripts and scores are k
 // What the live check-in adds (LIVE_CHECKIN=on). While recording, the browser streams the audio
 // straight to OpenAI's realtime API, and the server sends the text so far to Anthropic for the next
 // question (src/lib/coach). Neither the live text nor the questions' wording is stored: the coach
-// keeps topic ids, coverage levels, its reading of the mood and counts (live_checkin_sessions, 0011),
-// which only the server reads, and the daily job deletes it after 14 days if the take is never
+// keeps topic ids, coverage levels, its reading of the mood (neutral, a hard week, or not coping) and
+// counts (live_checkin_sessions, 0011); the notice must name everything that record holds. It is
+// read only by the server, and the daily job deletes it after 14 days if the take is never
 // submitted. Nothing here claims how long OpenAI or Anthropic keep anything themselves.
 const LIVE = {
   record:
@@ -70,7 +71,7 @@ const LIVE = {
   why: "The follow-up questions help you cover what you did, where you or your team were at your best, and how you feel about the team.",
   processing:
     "While you record, your voice is streamed to OpenAI, in the United States, to turn it into text as you speak, and the text so far is sent to Anthropic, in the United States, to suggest the next question.",
-  sees: "The live text and the wording of the follow-up questions are not kept. To improve the questions, the app keeps a record of which topics you were asked about, how much of each you had covered and whether it sounded like a hard week, with your check-in. That record never includes your words, and nobody sees it in the app.",
+  sees: "The live text and the wording of the follow-up questions are not kept. To improve the questions, the app keeps a record of which topics you were asked about, how much of each you had covered, and whether it sounded like a hard week or like you weren't coping (it then stops asking questions), with your check-in. That record never includes your words, and nobody sees it in the app.",
   kept: "If you don't submit, the record of which topics you were asked about is deleted after 14 days.",
 };
 

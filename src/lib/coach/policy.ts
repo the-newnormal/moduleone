@@ -30,6 +30,11 @@ const TONE_RANK: Record<Tone, number> = { neutral: 0, hard_week: 1, distress: 2 
 const OFFERS_KEPT = 4;
 // The opening question is offer 0, on screen from the start.
 export const OPENING_OFFER_ID = 0;
+// Scores are sums of the rubric's decimals, which floating point gets a hair wrong (0.4 + 0.2 is
+// 0.6000000000000001), so they are rounded before they are compared: a tie on paper is a tie here,
+// and a score equal to a threshold on paper reaches it.
+const SCORE_EPSILON = 1e-9;
+const roundScore = (score: number) => Math.round(score * 1e6) / 1e6;
 
 const OfferRecord = z.object({
   id: z.number().int().nonnegative(),
@@ -37,6 +42,9 @@ const OfferRecord = z.object({
   topic: z.string().nullable(),
   source: z.enum(["tailored", "bank", "line"]),
   beforeYouFinish: z.boolean(),
+  // A rubric question shown instead of Claude's wording, which failed validateQuestion: counted
+  // as rejected when it is shown, like tailored and bank, so the shares compare like with like.
+  rejected: z.boolean(),
 });
 export type OfferRecord = z.infer<typeof OfferRecord>;
 
@@ -47,10 +55,9 @@ const Counts = z.object({
   // Questions shown with Claude's wording, and with the rubric's.
   tailored: z.number().int().nonnegative(),
   bank: z.number().int().nonnegative(),
-  // Claude's wordings turned down by validateQuestion, and reads that flagged instructions in the
-  // transcript.
+  // Questions shown with the rubric's wording because Claude's failed validateQuestion. (Whether a
+  // member's words seemed to give the app instructions is used in the call and never kept.)
   rejected: z.number().int().nonnegative(),
-  instructions: z.number().int().nonnegative(),
   // Total and slowest Claude read time, in ms.
   latencyMs: z.number().nonnegative(),
   slowestMs: z.number().nonnegative(),
@@ -90,12 +97,12 @@ export function initialState(): CoachState {
     perArea: {},
     skipsInARow: 0,
     linesShown: [],
-    offers: [{ id: OPENING_OFFER_ID, kind: "question", topic: null, source: "line", beforeYouFinish: false }],
+    offers: [{ id: OPENING_OFFER_ID, kind: "question", topic: null, source: "line", beforeYouFinish: false, rejected: false }],
     nextOfferId: 1,
     current: OPENING_OFFER_ID,
     wordsRead: 0,
     flow: [],
-    counts: { reads: 0, failures: 0, tailored: 0, bank: 0, rejected: 0, instructions: 0, latencyMs: 0, slowestMs: 0 },
+    counts: { reads: 0, failures: 0, tailored: 0, bank: 0, rejected: 0, latencyMs: 0, slowestMs: 0 },
   };
 }
 
@@ -142,7 +149,6 @@ export function mergeRead(state: CoachState, read: CoachRead, rubric: CoachRubri
     coverage,
     tone: TONE_RANK[read.tone] > TONE_RANK[state.tone] ? read.tone : state.tone,
     flow: AREAS.filter((area) => flow.has(area)),
-    counts: { ...state.counts, instructions: state.counts.instructions + (read.instructionsInTranscript ? 1 : 0) },
   };
 }
 
@@ -170,6 +176,7 @@ export function acknowledge(state: CoachState, id: number, rubric: CoachRubric):
         ...state.counts,
         tailored: state.counts.tailored + (offer.source === "tailored" ? 1 : 0),
         bank: state.counts.bank + (offer.source === "bank" ? 1 : 0),
+        rejected: state.counts.rejected + (offer.rejected ? 1 : 0),
       },
     };
   }
@@ -220,10 +227,9 @@ export function candidates(state: CoachState, rubric: CoachRubric, elapsedS: num
     if (elapsedS >= s.noNewQuestionsAfterS) continue;
     if (elapsedS >= s.keysOnlyAfterS && !topic.key) continue;
     const untouched = rubric.topics.filter((t) => t.area === topic.area).every((t) => level(state, t.id) === "none");
-    const score =
-      topic.weight * n +
-      (topic.key && untouched ? s.untouchedBonus : 0) +
-      (state.flow.includes(topic.area) ? s.flowBonus : 0);
+    const score = roundScore(
+      topic.weight * n + (topic.key && untouched ? s.untouchedBonus : 0) + (state.flow.includes(topic.area) ? s.flowBonus : 0),
+    );
     scored.push({ topic, score });
   }
   const order = (t: Topic) => rubric.topics.indexOf(t);
@@ -278,21 +284,22 @@ export function nextOffer(
 
   if (state.followUps >= s.maxFollowUps || state.skipsInARow >= 2) return line(state, "covered", lines.covered);
   const minimum = floor(state, rubric);
-  const ranked = candidates(state, rubric, elapsedS).filter((c) => c.score >= minimum);
+  const ranked = candidates(state, rubric, elapsedS).filter((c) => c.score >= minimum - SCORE_EPSILON);
   if (ranked.length === 0) return line(state, "covered", lines.covered);
   const best = ranked[0];
 
   // Claude's own wording, when it chose a topic the policy would ask about too (scoring within the
   // slack of the best), the topic allows it, and the wording passes every check.
+  let rejected = false;
   if (read?.target && read.question && !read.instructionsInTranscript) {
     const chosen = ranked.find((c) => c.topic.id === read.target);
-    if (chosen && chosen.topic.tailor && chosen.score >= best.score - s.tailorSlack) {
+    if (chosen && chosen.topic.tailor && chosen.score >= best.score - s.tailorSlack - SCORE_EPSILON) {
       const problem = validateQuestion(read.question, read.quote, transcript, s.maxQuestionChars);
       if (!problem) return question(state, chosen.topic, "tailored", read.question.trim(), false);
-      state = { ...state, counts: { ...state.counts, rejected: state.counts.rejected + 1 } };
+      rejected = true;
     }
   }
-  return question(state, best.topic, "bank", bankText(state, best.topic), false);
+  return question(state, best.topic, "bank", bankText(state, best.topic), false, rejected);
 }
 
 function bankText(state: CoachState, topic: Topic): string {
@@ -308,11 +315,18 @@ function none(state: CoachState): Decision {
 }
 
 function line(state: CoachState, kind: Exclude<OfferKind, "question">, text: string): Decision {
-  return offer(state, { kind, topic: null, source: "line", beforeYouFinish: false }, text);
+  return offer(state, { kind, topic: null, source: "line", beforeYouFinish: false, rejected: false }, text);
 }
 
-function question(state: CoachState, topic: Topic, source: OfferSource, text: string, beforeYouFinish: boolean): Decision {
-  return offer(state, { kind: "question", topic: topic.id, source, beforeYouFinish }, text);
+function question(
+  state: CoachState,
+  topic: Topic,
+  source: OfferSource,
+  text: string,
+  beforeYouFinish: boolean,
+  rejected = false,
+): Decision {
+  return offer(state, { kind: "question", topic: topic.id, source, beforeYouFinish, rejected }, text);
 }
 
 // Keeps the offer on screen, the few latest others and the new one.
@@ -348,9 +362,10 @@ const normalise = (text: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
-// Why a question Claude wrote can't be shown, or null if it can. The quote (the member's own words the
-// question refers to, if any) must really be in what they said, so the coach never claims they said
-// something they didn't.
+// Why a question Claude wrote can't be shown, or null if it can. The coach must never claim they said
+// something they didn't: the quote (their own words the question refers to, if any) must really be
+// in what they said and in the question, anything the question puts in double quotes must be what
+// they said too, and a question that says "you said" or "you mentioned" must give the quote.
 export function validateQuestion(question: string, quote: string, transcript: string, maxChars: number): string | null {
   const q = question.trim();
   if (q.length < 12) return "too_short";
@@ -359,10 +374,20 @@ export function validateQuestion(question: string, quote: string, transcript: st
   if (/[\n\r]/.test(q)) return "several_lines";
   if (!q.endsWith("?") || q.indexOf("?") !== q.length - 1) return "not_one_question";
   for (const [name, pattern] of BLOCKED) if (pattern.test(q)) return `blocked_${name}`;
+  const said = ` ${normalise(transcript)} `;
+  const isSaid = (words: string) => said.includes(` ${words} `);
   const words = normalise(quote);
   if (words) {
     if (words.split(" ").length > 8) return "quote_too_long";
-    if (!` ${normalise(transcript)} `.includes(` ${words} `)) return "quote_not_said";
+    if (!isSaid(words)) return "quote_not_said";
+    if (!` ${normalise(q)} `.includes(` ${words} `)) return "quote_not_in_question";
+  } else if (/\byou (said|mentioned|told|called)\b/i.test(q)) {
+    return "claims_without_quote";
+  }
+  // Double quotes only: single quotes are mostly apostrophes ("what's").
+  for (const [, inner] of q.matchAll(/["\u201c\u201d]([^"\u201c\u201d]+)["\u201c\u201d]/g)) {
+    const quoted = normalise(inner);
+    if (quoted && !isSaid(quoted)) return "quote_not_said";
   }
   return null;
 }

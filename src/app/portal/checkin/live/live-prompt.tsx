@@ -37,13 +37,13 @@ export function LivePrompt({
   // Shown above the buttons (the recorder's one-minute warning).
   children?: ReactNode;
 }) {
-  // "Different question" goes when a closing line replaces the question. If it had focus, focus
-  // would fall to the page, so it moves to Finish instead; a question that simply replaces another
-  // keeps the button, and focus, where they are.
-  const skipPressed = useRef(false);
+  // "Different question" goes when a closing line replaces the question. If it had focus (pressed, or
+  // just tabbed to), focus would fall to the page, so it moves to Finish instead; a question that
+  // simply replaces another keeps the button, and focus, where they are.
+  const skipFocused = useRef(false);
   useEffect(() => {
-    if (canSkip || !skipPressed.current) return;
-    skipPressed.current = false;
+    if (canSkip || !skipFocused.current) return;
+    skipFocused.current = false;
     if (!document.activeElement || document.activeElement === document.body) finishRef.current?.focus();
   }, [canSkip, finishRef]);
 
@@ -73,10 +73,14 @@ export function LivePrompt({
           <Button
             type="button"
             variant="outline"
-            onClick={() => {
-              skipPressed.current = true;
-              onSkip();
+            onFocus={() => {
+              skipFocused.current = true;
             }}
+            onBlur={(event) => {
+              // Focus moving to something else; a blur from the button being removed has no target.
+              if (event.relatedTarget) skipFocused.current = false;
+            }}
+            onClick={onSkip}
           >
             Different question
           </Button>

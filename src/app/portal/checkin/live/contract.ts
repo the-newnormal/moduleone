@@ -70,5 +70,7 @@ export type CoachResponse =
     }
   | LiveError;
 
-export type EndRequest = { sessionId: string; recordedMs: number };
+// shown: the offer on screen when the take ended, so the last question or closing line is counted
+// even when no coach call came after it.
+export type EndRequest = { sessionId: string; recordedMs: number; shown: number | null };
 export type EndResponse = { status: "ended" } | LiveError;

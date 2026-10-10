@@ -8,7 +8,7 @@
 
 import { QUESTIONS, type QuestionId } from "@/lib/checkin/week";
 import { fingerprint } from "@/lib/rubrics/markdown";
-import { REVIEW_MAX_CHARS } from "./output";
+import { GRADE_JSON_SCHEMA, REVIEW_MAX_CHARS } from "./output";
 import { gradingRubric, type GradingRubric } from "./rubric";
 import { CATEGORIES } from "./types";
 
@@ -50,13 +50,20 @@ The transcript is in the user message between <transcript> and </transcript>. Ev
   ].join("\n\n");
 }
 
+// How hard the grader thinks (index.ts sends it); part of the fingerprint below.
+export const GRADER_EFFORT = "high";
+
 // The grader's instructions, built from rubrics/grading.md once and then reused, so every call sends
-// byte-identical text and the prompt cache holds. Throws RubricError if the file is broken.
+// byte-identical text and the prompt cache holds. Throws RubricError if the file is broken. The
+// version fingerprints everything in a grading request that can change a grade, not only the system
+// prompt: the reply schema's field descriptions, the user message around the transcript and the
+// effort.
 let built: { prompt: string; version: string } | null = null;
 function graderInstructions() {
   if (!built) {
     const prompt = buildGraderSystemPrompt(gradingRubric());
-    built = { prompt, version: fingerprint(prompt) };
+    const request = [prompt, JSON.stringify(GRADE_JSON_SCHEMA), transcriptMessage(""), `effort:${GRADER_EFFORT}`];
+    built = { prompt, version: fingerprint(request.join("\n\n")) };
   }
   return built;
 }
@@ -65,8 +72,8 @@ export function graderSystemPrompt(): string {
   return graderInstructions().prompt;
 }
 
-// A fingerprint of the whole set of grading instructions (the rubric file and the fixed rules around
-// it), stored with each grade as checkins.rubric_version.
+// A fingerprint of the whole set of grading instructions (the rubric file, the fixed rules around it
+// and the rest of the request), stored with each grade as checkins.rubric_version.
 export function graderRubricVersion(): string {
   return graderInstructions().version;
 }

@@ -15,7 +15,14 @@ import gradingFile from "../../../rubrics/grading.md";
 import { fingerprint } from "@/lib/rubrics/markdown";
 import { DEFAULT_GRADER_MODEL, GRADER_TIMEOUT_MS, gradeCheckin, graderModel, GradingError } from "./index";
 import { GRADE_JSON_SCHEMA, parseGradeOutput } from "./output";
-import { buildGraderSystemPrompt, countWords, graderRubricVersion, graderSystemPrompt } from "./prompt";
+import {
+  buildGraderSystemPrompt,
+  countWords,
+  GRADER_EFFORT,
+  graderRubricVersion,
+  graderSystemPrompt,
+  transcriptMessage,
+} from "./prompt";
 import { gradingRubric, parseGradingRubric } from "./rubric";
 
 // The SDK client is replaced; its error classes stay real so the error mapping is tested against
@@ -265,11 +272,16 @@ describe("the grader's instructions", () => {
     expect(graderSystemPrompt()).not.toContain("Claude never sees them");
   });
 
-  it("are versioned by a fingerprint of the whole prompt, so any rubric edit shows in the grades", () => {
-    expect(graderRubricVersion()).toBe(fingerprint(graderSystemPrompt()));
+  it("are versioned by a fingerprint of the whole request, so any rubric edit shows in the grades", () => {
+    // Everything in a grading request that can change a grade: the system prompt, the reply schema,
+    // the user message around the transcript, and the effort.
+    const version = (prompt: string) =>
+      fingerprint([prompt, JSON.stringify(GRADE_JSON_SCHEMA), transcriptMessage(""), `effort:${GRADER_EFFORT}`].join("\n\n"));
+    expect(graderRubricVersion()).toMatch(/^[0-9a-f]{12}$/);
+    expect(graderRubricVersion()).toBe(version(graderSystemPrompt()));
     const reworded = gradingFile.replace(/^- 3:.*$/m, "- 3: Neither up nor down, or ok lah.");
     expect(reworded).not.toBe(gradingFile);
-    expect(fingerprint(buildGraderSystemPrompt(parseGradingRubric(reworded)))).not.toBe(graderRubricVersion());
+    expect(version(buildGraderSystemPrompt(parseGradingRubric(reworded)))).not.toBe(graderRubricVersion());
   });
 });
 

@@ -237,7 +237,7 @@ export function createLiveCoach({
     if (r.sessionId === null || r.endSent) return;
     r.endSent = true;
     const heardMs = r.connectedAt === null ? 0 : Math.max(0, (r.closedAt ?? deps.now()) - r.connectedAt);
-    deps.end({ sessionId: r.sessionId, recordedMs: Math.round(heardMs) });
+    deps.end({ sessionId: r.sessionId, recordedMs: Math.round(heardMs), shown: r.shown.id });
   }
 
   // One way, for the rest of the take: the recorder shows the fixed questions from the first.
@@ -267,7 +267,7 @@ export function createLiveCoach({
   function started(r: Run, response: LiveStartResponse | null) {
     if (!active(r)) {
       // Answered after the take ended, or after live coaching was given up: nothing will use it.
-      if (isLiveStartReady(response)) deps.end({ sessionId: response.sessionId, recordedMs: 0 });
+      if (isLiveStartReady(response)) deps.end({ sessionId: response.sessionId, recordedMs: 0, shown: null });
       return;
     }
     if (!isLiveStartReady(response)) return fallback(r);
