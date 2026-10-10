@@ -1,8 +1,8 @@
 "use client";
 
-import { Camera, CameraOff, LoaderCircle, Mic } from "lucide-react";
+import { Camera, LoaderCircle, Mic } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, useTransition, type RefObject } from "react";
+import { useEffect, useEffectEvent, useRef, useState, useTransition, type ReactNode, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { baseMimeType, extensionFor } from "@/lib/checkin/audio";
 import { QUESTIONS } from "@/lib/checkin/week";
@@ -25,7 +25,6 @@ const SUPERSEDED =
   "You'd already saved a newer recording, on another device or tab, so this one wasn't kept. Your draft is the newer one.";
 const AWAY = "Your phone may have paused the recording while you were away. Listen back before you submit.";
 const CAMERA_ASKING = "If your browser asks about the camera, answer it to go on. On a computer, it's by the address bar.";
-const CAMERA_UNAVAILABLE = "Your camera isn't available, so you won't see yourself. You can still record.";
 
 type State =
   | { step: "idle"; problem: string | null }
@@ -34,8 +33,9 @@ type State =
   | { step: "saving" }
   | SaveOutcome;
 
-// The member's camera, shown mirrored so they can see themselves talk. Only a preview: it never
-// reaches the recorder, so the take stays audio-only. Small and front-facing.
+// The member's camera, shown mirrored so they see themselves as they talk: they record looking at
+// themselves, so it has to be on to start. Only a preview: it never reaches the recorder, so the
+// take stays audio-only. Small and front-facing.
 const CAMERA: MediaTrackConstraints = { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } };
 
 // What is live while recording: the microphone stream, the recorder, the clock, and what becomes
@@ -46,9 +46,10 @@ type Media = { stream: MediaStream; recorder: MediaRecorder; timer: number; save
 // so a camera the browser grants only after that is let go.
 type CameraState = { stream: MediaStream | null; asked: number };
 
-// The member's camera choice in this tab: true once they showed it, false once they hid it. Kept
-// outside the recorder, as "Delete and record again" brings a new one that should still honour it.
-let wantsCamera: boolean | null = null;
+// While the camera is off: "asking" while the browser's question about it is open (Start waits for
+// the answer: Chrome won't ask this page anything else meanwhile, so the microphone's question would
+// never come), or why it couldn't come on.
+type CameraNote = "asking" | { problem: string } | null;
 
 // The browser's camera question while it's open. Leaving by a link within the app keeps it open,
 // and Chrome asks nothing else (the microphone included) until it's answered, so a recorder that
@@ -69,6 +70,20 @@ function holdCameraQuestion(request: Promise<unknown>) {
 function pickMimeType(): string | null {
   if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) return null;
   return MIME_TYPES.find((type) => MediaRecorder.isTypeSupported(type)) ?? null;
+}
+
+function cameraProblem(error: unknown): string {
+  const name = error instanceof Error ? error.name : "";
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return "Camera access is blocked. Allow it for this site in your browser's settings, then try again.";
+  }
+  if (name === "NotFoundError" || name === "OverconstrainedError") {
+    return "No camera found. Connect one, then try again.";
+  }
+  if (name === "NotReadableError" || name === "AbortError") {
+    return "Your camera is busy in another app. Close that app, then try again.";
+  }
+  return "Couldn't start the camera. Try again.";
 }
 
 function microphoneProblem(error: unknown): string {
@@ -131,11 +146,12 @@ async function cameraAllowed(): Promise<boolean> {
   }
 }
 
-// The camera preview: muted and inline, as iPhone Safari needs to play it in the page rather than
-// fullscreen; mirrored, as people expect to see themselves. Its height is capped and its width
-// follows the picture (portrait on an upright phone, nothing cut off), so the question and the
-// buttons fit on screen with it; it's brought into view when it appears and when recording starts.
-function CameraMirror({ stream, recording }: { stream: MediaStream; recording: boolean }) {
+// The camera on a stage that fills the screen below the app bar, with what the member needs laid
+// over it: the progress and clock along the top (top), the question and the button in a panel at
+// the bottom (children). The video is muted and inline, as iPhone Safari needs to play it in the
+// page rather than fullscreen, and mirrored, as people expect to see themselves. The page behind
+// doesn't scroll while the stage is up.
+function CameraStage({ stream, top, children }: { stream: MediaStream; top?: ReactNode; children: ReactNode }) {
   const video = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     const element = video.current;
@@ -146,19 +162,42 @@ function CameraMirror({ stream, recording }: { stream: MediaStream; recording: b
     };
   }, [stream]);
   useEffect(() => {
-    video.current?.scrollIntoView({ block: "nearest" });
-  }, [recording]);
+    const page = document.documentElement;
+    const before = page.style.overflow;
+    page.style.overflow = "hidden";
+    return () => {
+      page.style.overflow = before;
+    };
+  }, []);
   return (
-    <video
-      ref={video}
-      autoPlay
-      muted
-      playsInline
-      aria-hidden="true"
-      className="h-[min(30svh,18rem)] w-auto max-w-full -scale-x-100 justify-self-start rounded-lg bg-muted object-cover [aspect-ratio:auto_4/3]"
-    />
+    <div className="fixed inset-x-0 top-(--app-bar-h) bottom-0 z-30 bg-background p-2 sm:p-4">
+      <div className="relative mx-auto size-full max-w-6xl overflow-hidden rounded-2xl bg-black text-white">
+        <video
+          ref={video}
+          autoPlay
+          muted
+          playsInline
+          aria-hidden="true"
+          className="absolute inset-0 size-full -scale-x-100 object-cover"
+        />
+        {top && (
+          <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-3 sm:p-5">
+            {top}
+          </div>
+        )}
+        <div className="absolute inset-x-0 bottom-0 p-3 sm:p-6">
+          <div className="mx-auto grid max-w-3xl gap-4 rounded-2xl bg-black/65 p-4 backdrop-blur-md sm:p-6">
+            {children}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
+
+// Over the dark stage: the main button white, with a white focus ring.
+const ON_STAGE_MAIN = "focus-visible:outline-white bg-white text-black hover:bg-white/85";
+const STAGE_PILL = "rounded-full bg-black/55 px-3 py-1 text-sm backdrop-blur-md";
 
 // Stops a live recording with its save registered first, so Sign out and a return to the page wait
 // for the take from the moment it stops, not only once the stop event has collected it.
@@ -187,10 +226,7 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
   // A question an earlier recorder in this tab left open: wait for its answer too. Read once, so the
   // note and the wait agree even if it's answered in between.
   const [openQuestion] = useState(() => cameraQuestion);
-  // "asking": the browser's camera question is open. Start waits for the answer: Chrome won't ask
-  // this page anything else meanwhile, so the microphone's question would never come.
-  // "unavailable": blocked, missing or busy, so the member records without seeing themselves.
-  const [cameraNote, setCameraNote] = useState<"asking" | "unavailable" | null>(openQuestion ? "asking" : null);
+  const [cameraNote, setCameraNote] = useState<CameraNote>(openQuestion ? "asking" : null);
   useEffect(() => {
     if (!openQuestion) return;
     let mounted = true;
@@ -309,17 +345,22 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
   const failedShown = state.step === "failed" && !state.updated;
   useEffect(() => (failedShown ? holdFailedTake() : undefined), [failedShown]);
 
-  // Move keyboard and screen-reader focus to each step's main button as the steps change, since
-  // the button that was pressed has usually gone. Not on first load, when nothing has happened
-  // (compared with the last step shown, so React's double effects in development don't count).
+  // With the camera on, the recorder is a stage over the page (see CameraStage).
+  const staged = mirror !== null && (state.step === "idle" || state.step === "starting" || state.step === "recording");
+
+  // Move keyboard and screen-reader focus to each step's main button as the steps change, and as
+  // the stage comes up or goes, since the button that was pressed has usually gone. Not on first
+  // load, when nothing has happened (compared with the last one shown, so React's double effects
+  // in development don't count).
   const step = state.step;
   const problem = state.step === "idle" ? state.problem : null;
-  const shown = useRef({ step, problem });
+  const shown = useRef({ step, problem, staged });
   useEffect(() => {
-    if (shown.current.step === step && shown.current.problem === problem) return;
-    shown.current = { step, problem };
+    const last = shown.current;
+    if (last.step === step && last.problem === problem && last.staged === staged) return;
+    shown.current = { step, problem, staged };
     primary.current?.focus();
-  }, [step, problem]);
+  }, [step, problem, staged]);
 
   async function save(take: Take): Promise<SaveOutcome> {
     setState({ step: "saving" });
@@ -334,8 +375,8 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
     setCameraNote(null);
   }
 
-  // ask: the member pressed Show my camera, so the browser may ask them. Otherwise it's Start
-  // turning on a camera the browser allows without asking.
+  // ask: the member pressed Turn on my camera, so the browser may ask them. Otherwise the camera is
+  // coming on by itself, as the browser allows it without asking.
   async function turnCameraOn(ask: boolean) {
     const attempt = ++camera.current.asked;
     if (ask) setCameraNote("asking");
@@ -344,8 +385,8 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
       const request = navigator.mediaDevices.getUserMedia({ video: CAMERA });
       if (ask) holdCameraQuestion(request);
       stream = await request;
-    } catch {
-      if (attempt === camera.current.asked) setCameraNote(ask ? "unavailable" : null);
+    } catch (error) {
+      if (attempt === camera.current.asked) setCameraNote(ask ? { problem: cameraProblem(error) } : null);
       return;
     }
     // Turned off (or the page left) while the browser asked: let it go.
@@ -362,12 +403,28 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
     );
   }
 
-  function toggleCamera() {
-    if (cameraNote === "asking") return;
-    wantsCamera = !mirror;
-    if (mirror) turnCameraOff();
-    else void turnCameraOn(true);
+  function showCamera() {
+    if (cameraNote !== "asking") void turnCameraOn(true);
   }
+
+  // Ready for a take, where the browser allows the camera without asking (allowed here before):
+  // it comes on by itself, so the member goes straight to seeing themselves.
+  const ready = state.step === "idle" && !heldOnly;
+  // asked unchanged: nothing turned the camera on or off meanwhile (the member's Turn on included).
+  const cameraByItself = useEffectEvent((asked: number) => {
+    if (camera.current.asked === asked) void turnCameraOn(false);
+  });
+  useEffect(() => {
+    if (!ready || camera.current.stream) return;
+    const asked = camera.current.asked;
+    let current = true;
+    void cameraAllowed().then((allowed) => {
+      if (current && allowed) cameraByItself(asked);
+    });
+    return () => {
+      current = false;
+    };
+  }, [ready]);
 
   // Finish, or the ten-minute limit.
   function finish() {
@@ -379,6 +436,7 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
   }
 
   async function start() {
+    if (!camera.current.stream) return; // they record looking at themselves
     const mimeType = pickMimeType();
     if (!mimeType) return setState({ step: "idle", problem: UNSUPPORTED });
     setState({ step: "starting" });
@@ -464,13 +522,6 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
       return setState({ step: "idle", problem: "Couldn't start the microphone. Try again." });
     }
     setState({ step: "recording", question: 0 });
-    // A camera the member hasn't turned on comes on now only if the browser won't ask about it.
-    if (!camera.current.stream && wantsCamera !== false) {
-      const asked = camera.current.asked;
-      void cameraAllowed().then((allowed) => {
-        if (allowed && camera.current.asked === asked && media.current === live) void turnCameraOn(false);
-      });
-    }
   }
 
   function nextQuestion() {
@@ -492,11 +543,9 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
 
   const announcement =
     state.step === "idle"
-      ? cameraNote === "unavailable"
-        ? CAMERA_UNAVAILABLE
-        : cameraNote === "asking"
-          ? CAMERA_ASKING
-          : ""
+      ? cameraNote === "asking"
+        ? CAMERA_ASKING
+        : (cameraNote?.problem ?? "")
       : state.step === "starting"
         ? "Waiting for your microphone…"
         : state.step === "recording"
@@ -520,7 +569,7 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
         {awayNote && <span> {AWAY}</span>}
       </p>
 
-      {awayNote && <p className="rounded-md bg-muted px-3 py-2 text-sm">{AWAY}</p>}
+      {awayNote && !staged && <p className="rounded-md bg-muted px-3 py-2 text-sm">{AWAY}</p>}
 
       {state.step === "idle" && (
         <>
@@ -530,42 +579,52 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
             submit.
           </p>
           <p className="text-sm text-muted-foreground">
-            Want to see yourself while you talk? Show your camera before you start. Only your voice is
-            recorded; the picture isn&apos;t saved.
+            You record with your camera on, so you see yourself as you talk. Only your voice is recorded;
+            the picture isn&apos;t saved.
           </p>
           <ol className="grid list-decimal gap-1 pl-5 text-sm">
             {QUESTIONS.map((q) => (
               <li key={q.id}>{q.text}</li>
             ))}
           </ol>
+        </>
+      )}
+
+      {state.step === "idle" && !staged && (
+        <>
           {state.problem && (
             <p role="alert" className="text-sm text-destructive">
               {state.problem}
             </p>
           )}
-          <div className="flex flex-wrap gap-2">
-            <Button ref={primary} type="button" onClick={start} disabled={refreshing || cameraNote === "asking"}>
-              <Mic aria-hidden="true" />
-              Start recording
-            </Button>
-            <Button type="button" variant="outline" onClick={toggleCamera} aria-disabled={cameraNote === "asking"}>
-              {mirror ? <CameraOff aria-hidden="true" /> : <Camera aria-hidden="true" />}
-              {cameraNote === "asking" ? "Waiting for your camera…" : mirror ? "Hide my camera" : "Show my camera"}
-            </Button>
-          </div>
+          {cameraNote !== null && cameraNote !== "asking" && (
+            <p role="alert" className="text-sm text-destructive">
+              {cameraNote.problem}
+            </p>
+          )}
+          <Button
+            ref={primary}
+            type="button"
+            onClick={showCamera}
+            disabled={refreshing}
+            aria-disabled={cameraNote === "asking"}
+            className="justify-self-start"
+          >
+            <Camera aria-hidden="true" />
+            {cameraNote === "asking" ? "Waiting for your camera…" : "Turn on my camera"}
+          </Button>
           {cameraNote === "asking" && <p className="text-sm text-muted-foreground">{CAMERA_ASKING}</p>}
-          {cameraNote === "unavailable" && <p className="text-sm text-muted-foreground">{CAMERA_UNAVAILABLE}</p>}
         </>
       )}
 
-      {state.step === "starting" && (
+      {state.step === "starting" && !staged && (
         <p className="flex items-center gap-2 text-sm">
           <LoaderCircle aria-hidden="true" className="animate-spin" />
           Waiting for your microphone…
         </p>
       )}
 
-      {state.step === "recording" && (
+      {state.step === "recording" && !staged && (
         <>
           <div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
             <span>
@@ -584,25 +643,14 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
               One minute left. The recording stops at 10 minutes.
             </p>
           )}
-          <div className="flex flex-wrap gap-2">
-            <Button ref={primary} type="button" onClick={state.question < QUESTIONS.length - 1 ? nextQuestion : finish}>
-              {state.question < QUESTIONS.length - 1 ? "Next question" : "Finish"}
-            </Button>
-            {/* Hide only: showing it here would ask the browser mid-answer. */}
-            {mirror && (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  primary.current?.focus(); // this button goes with the camera; carry on from the main one
-                  toggleCamera();
-                }}
-              >
-                <CameraOff aria-hidden="true" />
-                Hide my camera
-              </Button>
-            )}
-          </div>
+          <Button
+            ref={primary}
+            type="button"
+            onClick={state.question < QUESTIONS.length - 1 ? nextQuestion : finish}
+            className="justify-self-start"
+          >
+            {state.question < QUESTIONS.length - 1 ? "Next question" : "Finish"}
+          </Button>
         </>
       )}
 
@@ -641,8 +689,72 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
         </>
       )}
 
-      {mirror && (state.step === "idle" || state.step === "starting" || state.step === "recording") && (
-        <CameraMirror stream={mirror} recording={state.step === "recording"} />
+      {staged && (
+        <CameraStage
+          stream={mirror}
+          top={
+            state.step === "recording" && (
+              <>
+                <span className={STAGE_PILL}>
+                  Question {state.question + 1} of {QUESTIONS.length}
+                </span>
+                <span className={`${STAGE_PILL} flex items-center gap-2 font-mono tabular-nums`}>
+                  <span aria-hidden="true" className="size-2 animate-pulse rounded-full bg-destructive" />
+                  <span role="timer" aria-label="Time recorded">
+                    {formatClock(elapsedMs)}
+                  </span>
+                </span>
+              </>
+            )
+          }
+        >
+          {state.step === "idle" && (
+            <>
+              <p className="text-2xl leading-snug font-medium sm:text-3xl">Ready when you are.</p>
+              <p className="text-sm text-white/75">
+                The questions appear here, one at a time. Only your voice is recorded; the picture isn&apos;t saved.
+              </p>
+              {state.problem && (
+                <p role="alert" className="text-sm font-medium">
+                  {state.problem}
+                </p>
+              )}
+              <Button
+                ref={primary}
+                type="button"
+                onClick={start}
+                disabled={refreshing}
+                className={`${ON_STAGE_MAIN} justify-self-start`}
+              >
+                <Mic aria-hidden="true" />
+                Start recording
+              </Button>
+            </>
+          )}
+          {state.step === "starting" && (
+            <p className="flex items-center gap-2 text-lg">
+              <LoaderCircle aria-hidden="true" className="animate-spin" />
+              Waiting for your microphone…
+            </p>
+          )}
+          {state.step === "recording" && (
+            <>
+              <h3 className="text-2xl leading-snug font-medium sm:text-4xl">{QUESTIONS[state.question].text}</h3>
+              {elapsedMs >= WARN_MS && (
+                <p className="text-sm text-white/80">One minute left. The recording stops at 10 minutes.</p>
+              )}
+              {awayNote && <p className="text-sm text-white/80">{AWAY}</p>}
+              <Button
+                ref={primary}
+                type="button"
+                onClick={state.question < QUESTIONS.length - 1 ? nextQuestion : finish}
+                className={`${ON_STAGE_MAIN} justify-self-start`}
+              >
+                {state.question < QUESTIONS.length - 1 ? "Next question" : "Finish"}
+              </Button>
+            </>
+          )}
+        </CameraStage>
       )}
 
       {state.step === "failed" && state.updated && (

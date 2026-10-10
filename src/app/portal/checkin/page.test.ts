@@ -136,7 +136,7 @@ describe("/portal/checkin", () => {
     reads.members = { data: null, error: null };
     const html = await render();
     expect(html).toContain("Your account isn&#x27;t set up yet. Ask HQ.");
-    expect(html).not.toContain("Start recording");
+    expect(html).not.toContain("Turn on my camera");
     expect(queries.map((q) => q.table)).toEqual(["members"]);
     expect(after).not.toHaveBeenCalled();
   });
@@ -146,7 +146,7 @@ describe("/portal/checkin", () => {
     const html = await render();
     for (const { heading } of noticeSections()) expect(html).toContain(heading);
     expect(html).toContain("I understand, continue");
-    expect(html).not.toContain("Start recording");
+    expect(html).not.toContain("Turn on my camera");
   });
 
   it("looks for the notice accepted with this login, not the member row's earlier one", async () => {
@@ -161,7 +161,7 @@ describe("/portal/checkin", () => {
 
   it("shows the recorder when there's nothing yet", async () => {
     const html = await render();
-    expect(html).toContain("Start recording");
+    expect(html).toContain("Turn on my camera"); // they record looking at themselves, so the camera comes first
     expect(html).toContain("What have you done this week?");
     expect(html).toContain("Where did you / your team use your superpower?");
     expect(html).toContain("How are you feeling about the team?");
@@ -184,7 +184,7 @@ describe("/portal/checkin", () => {
     expect(html).toContain("Recorded Thursday 8 October at 11:30 am · 3 min 12 s");
     expect(html).toContain("Delete and record again");
     expect(html).toContain("Submit check-in");
-    expect(html).not.toContain("Start recording");
+    expect(html).not.toContain("Turn on my camera");
   });
 
   it("shows when the draft was saved when its recording time is unknown", async () => {
@@ -215,7 +215,7 @@ describe("/portal/checkin", () => {
       expect(html).not.toContain(secret);
     }
     expect(html).not.toMatch(/\b[1-5]\s*\/\s*5\b/);
-    expect(html).not.toContain("Start recording");
+    expect(html).not.toContain("Turn on my camera");
     expect(html).not.toContain("Submit check-in");
   });
 
