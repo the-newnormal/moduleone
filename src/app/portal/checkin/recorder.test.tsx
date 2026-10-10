@@ -748,6 +748,7 @@ describe("a live check-in", () => {
     await settle();
     expect(stage()?.textContent).toContain("Ready when you are.");
     expect(stage()?.textContent).toContain(OPENING);
+    expect(text().split(OPENING)).toHaveLength(2); // once: not again in the card under the stage
     expect(stage()?.textContent).not.toContain("What have you done this week?");
     expect(document.activeElement).toBe(button("Start recording"));
     expect(fakes.startLive).not.toHaveBeenCalled();

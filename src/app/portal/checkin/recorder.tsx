@@ -595,7 +595,8 @@ export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?
 
       {awayNote && !staged && <p className="rounded-md bg-muted px-3 py-2 text-sm">{AWAY}</p>}
 
-      {state.step === "idle" && (
+      {/* Not under the stage, which says it all itself: screen readers would find it there twice. */}
+      {state.step === "idle" && !staged && (
         <>
           {live ? (
             <p className="text-sm leading-6">
