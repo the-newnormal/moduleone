@@ -52,5 +52,5 @@ export function CameraStage({ stream, top, children }: { stream: MediaStream; to
 // focus ring.
 export const ON_STAGE_MAIN = "focus-visible:outline-white bg-white text-black hover:bg-white/85";
 export const ON_STAGE_OUTLINE =
-  "focus-visible:outline-white border-white/60 bg-transparent text-white hover:bg-white/15 hover:text-white dark:bg-transparent dark:hover:bg-white/15";
+  "focus-visible:outline-white border-white/60 bg-transparent text-white hover:bg-white/15 hover:text-white dark:border-white/60 dark:bg-transparent dark:hover:bg-white/15";
 export const STAGE_PILL = "rounded-full bg-black/55 px-3 py-1 text-sm backdrop-blur-md";
