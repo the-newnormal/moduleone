@@ -34,7 +34,7 @@ Some rules are not in these files, so that no edit here can weaken them:
 | The review's limit of 1,200 characters. | `src/lib/grader/output.ts` | It keeps the review page readable whatever the rubric says. |
 | How the coach chooses the next topic (the policy: scores, limits, order of decisions). | [`src/lib/coach/policy.ts`](../src/lib/coach/policy.ts) | It is plain code so it can be tested exactly. Its weights and settings are in `coach.md`. |
 | The checks on Claude's own question wording, including the list of blocked words (scores, praise, pressure, personal life). | `validateQuestion` in `src/lib/coach/policy.ts` | They back up the "Question style" section. A false alarm only means the file's own question is shown instead. |
-| The rule that the words a question quotes must really have been said, eight at most. | `src/lib/coach/prompt.ts`, `src/lib/coach/policy.ts` | So the coach never claims someone said something they didn't. |
+| The rules on quoting: the words a question quotes (eight at most) must really have been said and must appear in the question, anything in double quotes must have been said, and "you said" or "you mentioned" needs a quote. | `src/lib/coach/prompt.ts`, `validateQuestion` in `src/lib/coach/policy.ts` | So the coach never claims someone said something they didn't. |
 | When the browser asks the coach, and the limits on calls per session. | `src/app/portal/checkin/live/pacing.ts`, `src/lib/checkin/live-sessions.ts` | They bound cost and protect the service. |
 | The heat-map colours. | The `scoring_settings` row, edited by admins at `/admin/scoring` | Admins tune them without a deploy (see [section 3](#the-heat-map-maths)). |
 | Which models run. | Vercel environment variables: `ANTHROPIC_MODEL` (grading), `COACH_MODEL` (live coach), `STT_MODEL` and `STT_LIVE_MODEL` (transcription) | Switched without a code change. |
@@ -94,6 +94,9 @@ the three fixed questions until it's fixed.
 - Keep exactly these sections, each once and none empty: `## Opening question`,
   `## Coverage levels`, `## Reading the mood`, `## Topics`, `## Question style`,
   `## Closing lines`, `## Settings`. Any other `## ` section is refused (unlike `grading.md`).
+- As in `grading.md`, every piece of text must sit inside a `## ` section: text under the
+  `# Follow-up question rubric` title, or after a heading typed with one `#`, is refused. Use a
+  note instead. Section headings may be in any case. Every `<!--` needs its `-->`.
 - **Opening question:** one line, at most 300 characters.
 - **Coverage levels:** a line starting `- none:`, `- brief:`, `- clear:` and `- declined:`. The four
   levels are fixed; what each means is yours to word.
@@ -101,6 +104,7 @@ the three fixed questions until it's fixed.
 - **Topics:** each topic is `### <id>: <label>`. The id is lower case letters, digits and
   underscores, 2–40 characters, starting with a letter. Under it come the topic's lines, then a
   blank line, then the description Claude uses to decide whether it has been covered (required).
+  Text under `## Topics` before the first `### ` heading is refused.
   - `- Area:` (activity, excellence or morale), `- Weight:` (a number from 0.05 to 3) and `- Ask:`
     are required.
   - `- Key topic:`, `- Tailor:` and `- Brief is enough:` are yes or no (if left out: no, yes and
@@ -125,15 +129,22 @@ the three fixed questions until it's fixed.
 ### Fingerprints: which version graded what
 
 Every grade stores a **fingerprint** in `checkins.rubric_version`: the first 12 characters of a
-SHA-256 hash of the whole set of instructions sent to Claude, as the app builds them. Every live
-session stores the coach's fingerprint in `live_checkin_sessions.coach_rubric`, likewise built
-from the coach's instructions plus every weight, setting and question in `coach.md`. So:
+SHA-256 hash of the whole grading request apart from the transcript: the system prompt (the fixed
+rules and `grading.md`'s sections, as the app builds them), the reply schema
+(`GRADE_JSON_SCHEMA`), the user message the transcript is wrapped in, and the thinking effort
+(`graderInstructions` in [`src/lib/grader/prompt.ts`](../src/lib/grader/prompt.ts)). The model
+isn't in it; it is stored on its own, in `checkins.grader_model`. Every live session stores the
+coach's fingerprint in `live_checkin_sessions.coach_rubric`: a hash of the coach's system prompt
+plus everything read from `coach.md` (every topic, weight, setting, question and closing line),
+with the model in `coach_model`. So:
 
 - any change to a rubric's wording, weights or settings gives a new fingerprint, and so does a
-  change to the fixed rules around it in code. Rewording an existing note doesn't;
+  change to the fixed rules around it in code (for grading, also to the reply schema, the message
+  around the transcript or the effort). Rewording an existing note doesn't, and nor does switching
+  models;
 - grades and sessions can always be split into "before" and "after" a change;
-- hashing the `.md` file yourself will **not** give the fingerprint, because it covers the
-  instructions built from the file, not the file.
+- hashing the `.md` file yourself will **not** give the fingerprint, because it covers the request
+  built from the file, not the file.
 
 **To tie a fingerprint to a change (anyone, reliable):** list each fingerprint with when it was
 first and last used, in the Supabase SQL editor:
@@ -146,8 +157,8 @@ group by rubric_version order by first_graded;
 
 A fingerprint's `first_graded` falls just after the deploy that introduced it. Compare it with
 the merge dates in the file's **History** on GitHub (or
-`git log --format='%h %ci %s' -- rubrics/grading.md src/lib/grader`). Check-ins graded before
-migration 0011 have no fingerprint. For the coach, do the same with
+`git log --format='%h %ci %s' -- rubrics/grading.md src/lib/grader src/lib/rubrics src/lib/checkin/week.ts`).
+Check-ins graded before migration 0011 have no fingerprint. For the coach, do the same with
 `select coach_rubric, min(started_at), max(started_at), count(*) from live_checkin_sessions group by 1 order by 2;`.
 
 **To compute the exact fingerprints (engineers):** in a checkout with `pnpm install` done, this
@@ -303,7 +314,12 @@ short follow-up questions appear on screen as they talk.
 1. **Start.** The browser asks the server for a live session. The server checks live check-ins
    are on, `coach.md` can be used, the member has accepted the current privacy notice and hasn't
    submitted this week, and they have started fewer than 12 sessions in 24 hours. It then creates
-   the session and gets a short-lived OpenAI key. The opening question from `coach.md` is shown:
+   the session and gets a short-lived OpenAI key, which can be used to connect for 30 seconds (a
+   session that has connected carries on after it expires). Until it expires, a member who dug the
+   key out of their browser could open more than one transcription session with it, on Normal's
+   OpenAI bill: [#34](https://github.com/the-newnormal/moduleone/issues/34) tracks this, and the
+   planned containment is a separate OpenAI project with a budget. The opening question from
+   `coach.md` is shown:
    *"Talk me through your week: what you worked on, what came of it, and how you're feeling about
    the team."*
 2. **Live text.** While the recording runs as usual, the browser sends a copy of the microphone to
@@ -315,7 +331,8 @@ short follow-up questions appear on screen as they talk.
    reads the whole text so far and reports:
    - each topic's coverage: **none**, **brief**, **clear** or **declined**;
    - the mood: **neutral**, **hard_week** or **distress**;
-   - whether they are wrapping up, and whether the text tries to give it instructions;
+   - whether they are wrapping up, and whether the text tries to give it instructions (used in that
+     call only, never stored);
    - its suggestion: the topic most worth asking next, its own wording for the question, and the
      member's exact words that wording quotes, if any.
 
@@ -326,10 +343,12 @@ short follow-up questions appear on screen as they talk.
    only ever gets heavier) and picks the next thing to show: a question, a closing line, or
    nothing new. The rules are below.
 6. **Shown at the next pause.** The browser holds the new question until the member pauses (never
-   while they speak). The next call tells the server which question is on screen; only then does
-   it count as asked.
-7. **Finish.** The session ends. The recording is uploaded, transcribed again and graded exactly
-   as without the live check-in.
+   while they speak). The next call to the server (a coach call, or the end call when they finish)
+   says which question is on screen; only then does it count as asked.
+7. **Finish.** The browser's end call (`POST /portal/checkin/live/end`) sends what is on screen,
+   and the server counts it before ending the session, so the last question or closing line is
+   recorded even with no coach call after it. The recording is uploaded, transcribed again and
+   graded exactly as without the live check-in.
 
 The member sees the question, three tags ("What you did", "At your best", "The team") that tick
 once each area has come up, **Different question** for follow-ups, and **Finish**. They never see
@@ -389,6 +408,10 @@ The best score must also reach **the floor**, or nothing is asked:
 | Every area's key topic is done (clear, declined, or already asked or skipped) | 0.6 | Least score worth asking once every area is touched |
 | In a hard week | at least 0.7 | Least score worth asking in a hard week |
 
+Scores are rounded to 6 decimal places before they are compared, so sums that are equal on paper
+are equal here (0.4 + 0.2 is exactly 0.6): a tie on paper is a tie, and a score equal to a floor
+reaches it.
+
 **Ties** go to the key topic, then by area (activity, excellence, morale), then by the order of
 topics in the file.
 
@@ -413,22 +436,31 @@ At each call the policy goes down this list and stops at the first that applies:
    - its topic may be asked, reaches the floor, and scores no more than **0.15** below the best
      ("Claude's choice may score lower by up to");
    - the topic allows it (`Tailor`, never for morale);
-   - the wording passes every check: 12 to 140 characters ("Longest question"), at most 30
-     words, one line, a single question mark at the end, none of the blocked words, and any
-     quoted words (eight at most) really in what they said, ignoring case and punctuation.
+   - the wording passes every check (`validateQuestion`): 12 to 140 characters ("Longest
+     question"), at most 30 words, one line, a single question mark at the end, and none of the
+     blocked words; then the quoting rules below.
+
+   **Quoting.** Claude gives, with its question, the member's own words it refers to (its quote),
+   if any. Words match as whole words, ignoring case and punctuation, so a quote cut out of the
+   middle of a word fails.
+   - A quote must be at most eight words, really in what they said, and in the question itself.
+   - With no quote, a question saying "you said", "you mentioned", "you told" or "you called" is
+     refused.
+   - Anything the question puts in double quotes (straight or curly) must be in what they said.
+     Single quotes and apostrophes ("what's") are fine.
 
    The blocked words cover grading ("score", "grade", "rate", "rubric", "assess", "evaluate",
-   "out of 5", "percent"), who reads it ("HQ", "your manager will…", "who reads"), praise ("proud",
-   "great", "amazing", "awesome", "impressive", "well done", "good job", "bright side",
-   "at least"), pressure ("why", "should", "only", "just", "didn't", "haven't", "elaborate",
-   "more detail", "be specific", "tell me more"), personal life ("depressed", "anxious",
-   "burnout", "mental", "therapy", "counselling", "health", "sick", "family", "wife", "husband",
-   "child", "kids", "parent", "money", "salary", "religion", "relationship") and links. They match
-   parts of words, so "upgrade" counts as "grade": a false alarm only means the file's question is
-   shown.
+   "out of 5", "percent", a number over a number such as "4/5"), who reads it ("HQ", "your
+   manager will…", "who reads"), praise ("proud", "great", "amazing", "awesome", "impressive",
+   "well done", "good job", "bright side", "at least"), pressure ("why", "should", "only", "just",
+   "didn't", "haven't", "elaborate", "more detail", "be specific", "tell me more"), personal life
+   ("depressed", "anxious", "burnout", "mental", "therapy", "counselling", "health", "sick",
+   "family", "wife", "husband", "child", "kids", "parent", "money", "salary", "religion",
+   "relationship") and links. Most of them match parts of words too, so "upgrade" counts as
+   "grade": a false alarm only means the file's question is shown.
 
-   If the wording fails a check, it is counted as **rejected**, and the file's question for the
-   best topic is shown instead.
+   If the wording fails a check, the file's question for the best topic is shown instead, and once
+   it is on screen it is counted as **rejected** (as well as in the file's wording).
 8. **The file's question** (`Ask`, or `Ask in a hard week` in a hard week) for the best topic.
 
 **"Different question"** (offered for follow-ups only): the topic is never offered again, and a
@@ -455,9 +487,10 @@ These numbers come from running the policy on today's `coach.md`.
 **Call 1, 35 s in.** They have said: *"This week mostly on the vendor onboarding for the Jurong site
 lah. Quite a lot of back and forth with their ops team, and also the usual BAU."* Claude reads
 `activity_work` clear and `activity_more` brief, everything else none, mood neutral, and suggests
-`excellence_moment` with "In the Jurong vendor onboarding, where did you or the team get to use
-your superpower?" (quoting "vendor onboarding for the Jurong site"). Activity's coverage rose,
-so activity gets the flow bonus. The floor is 0.45: excellence and morale haven't come up.
+`excellence_moment` with "In the vendor onboarding for the Jurong site, where did you or the team
+get to use your superpower?" (quoting "vendor onboarding for the Jurong site"). Activity's
+coverage rose, so activity gets the flow bonus. The floor is 0.45: excellence and morale haven't
+come up.
 
 | Topic | Working | Score |
 | --- | --- | --- |
@@ -465,20 +498,21 @@ so activity gets the flow bonus. The floor is 0.45: excellence and morale haven'
 | `morale_feeling` | 1.0 × 1 + 0.5 untouched | 1.50 |
 | `activity_outcome` | 0.8 × 1 + 0.2 flow | 1.00 |
 | `activity_more` | 0.4 × 0.6 + 0.2 flow | 0.44, below the floor |
-| the other five | the topic they need hasn't come up | can't be asked |
+| `activity_work` | clear | nothing left to ask |
+| the other four | the topic they need hasn't come up | can't be asked |
 
 `excellence_moment` and `morale_feeling` tie; both are key topics, and excellence comes before
 morale, so `excellence_moment` is best. Claude chose it too, it allows Claude's wording, and the
-wording passes the checks, so **Claude's question is shown**, at their first pause once they are
-45 s in (or as soon as they stop for 6 s).
+wording passes the checks (the quote was said, and is in the question), so **Claude's question is
+shown**, at their first pause once they are 45 s in (or as soon as they stop for 6 s).
 
 **Call 2, 80 s in.** They add: *"Hmm, I guess I'm usually the one who helps the juniors lah. Team
 ok lah, everyone quite tired but we're fine."* Claude reads `excellence_moment` brief (a general,
 habitual example) and `morale_feeling` clear ("ok lah" is a complete answer), and suggests
-`activity_outcome` with "Where did the vendor onboarding get to by the end of the week?". Every
-area's key topic is now done (activity's clear, excellence's asked, morale's clear), so the floor
-is 0.6. `excellence_moment` was asked already and is never asked again, even though the answer was
-brief.
+`activity_outcome` with "Where did the vendor onboarding get to by the end of the week?" (quoting
+"vendor onboarding"). The call also says the first follow-up is on screen, so `excellence_moment`
+counts as asked, and is never asked again, even though the answer was brief. Every area's key
+topic is now done (activity's clear, excellence's asked, morale's clear), so the floor is 0.6.
 
 | Topic | Working | Score |
 | --- | --- | --- |
@@ -495,10 +529,11 @@ more than 0.15 below, and morale never uses Claude's wording), the file's questi
 `excellence_impact` would have been shown instead.
 
 **Call 3, 150 s in.** They add: *"Ya the onboarding done liao, boss signed off on Friday. Ok I
-think that's all."* Claude reads `activity_outcome` clear, and that they are wrapping up. Every
-area has come up, so there is no "Before you finish". `excellence_impact` scores 0.70 (no flow
-bonus now), the only topic at or above 0.6, so **the file's question is shown**: "What difference
-did that make, for the team or for anyone else?" Wrapping up doesn't end the questions by itself:
+think that's all."* Claude reads `activity_outcome` clear, and that they are wrapping up, and
+suggests no topic. Every area has come up, so there is no "Before you finish".
+`excellence_impact` scores 0.70 (no flow bonus now), the only topic at or above 0.6, so **the
+file's question is shown**: "What difference did that make, for the team or for anyone else?"
+Wrapping up doesn't end the questions by itself:
 with "Least score worth asking once every area is touched" at 0.75, this call would have closed
 with "That covers it…" instead.
 
@@ -507,7 +542,9 @@ that saved me a lot of time."* `excellence_impact` is clear. Excellence has had 
 so `excellence_strength` can't be asked, and `morale_reason` (0.50), `morale_team` (0.40) and
 `activity_more` (0.24) are below the floor. **"That covers it, thank you. Add anything else you'd
 like, then press Finish."** No more questions in this recording: 3 follow-ups, 2 in Claude's
-wording and 1 from the file.
+wording and 1 from the file. If they press Finish without saying more, no coach call comes after
+the closing line, so it is the end call that tells the server it was shown, and the session
+records it (`linesShown` holds `covered`).
 
 ### Pacing on screen
 
@@ -598,25 +635,35 @@ judgement, and members are told that nobody sees that record in the app. So:
 
 ### What each live session records
 
-`live_checkin_sessions.coach_state` (as of the last coach call) holds:
+`live_checkin_sessions.coach_state` (as of the last coach call, plus the offer on screen when the
+end call came) holds:
 
 | Field | Meaning |
 | --- | --- |
 | `coverage` | Each topic's highest level so far (`brief`, `clear` or `declined`); a topic missing is `none` |
 | `tone` | `neutral`, `hard_week` or `distress` |
 | `asked`, `skipped` | Topic ids shown, and those the member skipped with "Different question" |
-| `followUps`, `perArea` | Follow-ups shown (skips excluded), and per area |
+| `followUps`, `perArea` | Follow-ups shown (skips excluded), and per area (skips included) |
 | `linesShown` | Closing lines shown: `covered`, `late`, `closing`, `beforeYouFinish` |
 | `counts.reads`, `counts.failures` | Claude reads, and reads that failed |
-| `counts.tailored`, `counts.bank` | Questions shown in Claude's wording, and in the file's |
-| `counts.rejected` | Claude's wordings turned down by the checks |
-| `counts.instructions` | Reads that found the transcript trying to give instructions |
+| `counts.tailored`, `counts.bank` | Questions shown in Claude's wording, and in the file's (skipped ones included) |
+| `counts.rejected` | Questions shown in the file's wording because Claude's failed the checks (also counted in `bank`) |
 | `counts.latencyMs`, `counts.slowestMs` | Total and slowest Claude read time, in ms |
+
+It also keeps what the policy needs between calls, such as the last few offers (their ids, kinds,
+topic ids and sources, never the wording), which one is on screen, the run of skips, how many
+words Claude had read, and the areas the latest read moved. Whether a read found the transcript
+trying to give instructions is used in that call only and never kept.
 
 The row also has `coach_rubric` (the fingerprint), `coach_model`, `stt_model`, `started_at`,
 `recorded_ms` (how long live transcription ran) and `checkin_id` (the check-in it became, once
-submitted). A session with no coach call at all has `coach_state = '{}'`. The state is as of the
-last read, so anything said after it isn't in `coverage`.
+submitted). A session with no coach call at all has `coach_state = '{}'`. Coverage and mood are as
+of the last read, so anything said after it isn't in `coverage`.
+
+The privacy notice tells members what this record keeps: which topics they were asked about, how
+much of each they had covered, and whether it sounded like a hard week or like they weren't coping
+(it then stops asking questions). Keeping anything more means changing the notice
+(`src/lib/checkin/notice.ts`) and its revision, so members accept it again.
 
 ### The metrics
 
@@ -627,8 +674,8 @@ Starting targets are a first guess: revisit them after the first month.
 | All three areas touched | Submitted live check-ins whose three key topics all came up | 90% or more | 1: `all_three_touched` |
 | Follow-ups per check-in | Mean follow-ups shown | 1.5 to 3 | 1: `follow_ups` |
 | Skip rate | Skipped ÷ (asked + skipped) | under 15% | 1: `skip_rate` |
-| Tailored share | Questions in Claude's wording ÷ all follow-ups shown | no target: watch for sudden changes | 1: `tailored_share` |
-| Rejected share | Claude's wordings rejected ÷ (rejected + used) | under 20% | 1: `rejected_share` |
+| Tailored share | Questions shown in Claude's wording ÷ all follow-up questions shown (tailored + bank) | no target: watch for sudden changes | 1: `tailored_share` |
+| Rejected share | Of the questions shown where Claude's wording would have been used had it passed the checks, the share where it failed them: rejected ÷ (tailored + rejected), both counted when shown | under 20% | 1: `rejected_share` |
 | Coach failure rate | Failed reads ÷ all reads | under 2% | 1: `failure_rate` |
 | Read time | Mean, 95th-percentile slowest, and slowest Claude read | mean under 2 s, 95th under 4 s (the limit is 6 s) | 1: `mean_read_ms`, `p95_slowest_ms`, `slowest_ms` |
 | Fallback rate | Submitted live check-ins that fell back (best estimate: Claude never read it, or two or more reads failed) | under 5% | 1: `fallback_rate`; 9 |
@@ -679,8 +726,7 @@ select
   percentile_disc(0.95) within group (order by (n ->> 'slowestMs')::numeric) as p95_slowest_ms,
   max((n ->> 'slowestMs')::numeric) as slowest_ms,
   round(avg(case when cs -> 'linesShown' ? 'covered' then 1 else 0 end), 2) as ended_covered,
-  round(avg(case when cs ->> 'tone' = 'hard_week' then 1 else 0 end), 2) as hard_week,
-  sum(case when (n ->> 'instructions')::int > 0 then 1 else 0 end) as tried_instructions
+  round(avg(case when cs ->> 'tone' = 'hard_week' then 1 else 0 end), 2) as hard_week
 from read;
 ```
 
