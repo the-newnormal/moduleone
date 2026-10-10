@@ -447,8 +447,10 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
     stopAndTrack(live);
   }
 
-  async function start() {
-    if (!camera.current.stream) return; // they record looking at themselves
+  // withoutCamera: Record without camera, offered only when the camera can't come on. Otherwise the
+  // member records looking at themselves.
+  async function start(withoutCamera = false) {
+    if (!camera.current.stream && !withoutCamera) return;
     const mimeType = pickMimeType();
     if (!mimeType) return setState({ step: "idle", problem: UNSUPPORTED });
     setState({ step: "starting" });
@@ -626,6 +628,18 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
             {cameraNote === "asking" ? "Waiting for your camera…" : "Turn on my camera"}
           </Button>
           {cameraNote === "asking" && <p className="text-sm text-muted-foreground">{CAMERA_ASKING}</p>}
+          {/* The way round a camera that can't come on (blocked, missing, busy): the take, in this card. */}
+          {cameraNote !== null && cameraNote !== "asking" && (
+            <Button
+              type="button"
+              variant="link"
+              onClick={() => void start(true)}
+              disabled={refreshing}
+              className="justify-self-start px-0 underline"
+            >
+              Record without camera
+            </Button>
+          )}
         </>
       )}
 
@@ -734,7 +748,7 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
               <Button
                 ref={primary}
                 type="button"
-                onClick={start}
+                onClick={() => void start()}
                 disabled={refreshing}
                 className={`${ON_STAGE_MAIN} justify-self-start`}
               >

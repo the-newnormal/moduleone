@@ -146,6 +146,45 @@ describe("the camera", () => {
     vi.unstubAllGlobals();
   });
 
+  it("offers no way to record without it while it can still come on", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    let allow: (stream: unknown) => void = () => {};
+    devices(() => new Promise((resolve) => (allow = resolve)));
+    const { Recorder } = await load();
+    await render(<Recorder />);
+    await settle();
+    const wayRound = () => [...document.querySelectorAll("button")].some((b) => b.textContent === "Record without camera");
+    expect(wayRound()).toBe(false); // before it's asked for
+    await click(button("Turn on my camera"));
+    expect(wayRound()).toBe(false); // while the browser asks
+    await act(async () => allow(cameraStream()));
+    expect(video()).not.toBeNull();
+    expect(wayRound()).toBe(false); // on the stage
+    vi.unstubAllGlobals();
+  });
+
+  it("records without it, only the microphone and in the card, when it can't come on", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    const { microphone, getUserMedia } = devices(async () => {
+      throw new DOMException("none", "NotFoundError");
+    });
+    const { Recorder } = await load();
+    const page = await render(<Recorder />);
+    await turnOnCamera();
+    await click(button("Record without camera"));
+    await settle();
+    expect(getUserMedia.mock.lastCall?.[0]).toEqual(expect.objectContaining({ audio: expect.anything() }));
+    expect(getUserMedia.mock.lastCall?.[0]).not.toHaveProperty("video");
+    expect(FakeRecorder.last?.stream).toBe(microphone);
+    expect(FakeRecorder.last?.state).toBe("recording");
+    expect(video()).toBeNull();
+    expect(text(page.container)).toContain("Question 1 of 3");
+    expect(document.activeElement).toBe(button("Next question"));
+    await finish();
+    expect(text(page.container)).toContain("Saving your recording");
+    vi.unstubAllGlobals();
+  });
+
   it("comes on by itself where the browser allows it without asking", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     const camera = cameraStream();
@@ -247,7 +286,7 @@ describe("the camera", () => {
     vi.unstubAllGlobals();
   });
 
-  it("says why when it's blocked, and there's still no Start", async () => {
+  it("says why when it's blocked, and offers only to try again or to record without it", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     const { getUserMedia } = devices(async () => {
       throw new DOMException("blocked", "NotAllowedError");
@@ -260,8 +299,9 @@ describe("the camera", () => {
     expect(document.querySelector('[role="alert"]')?.textContent).toBe(blocked); // screen readers hear it,
     expect(text(document.querySelector("[aria-live]") ?? undefined)).not.toContain(blocked); // once
     expect(button("Turn on my camera")).toBeTruthy(); // to try again once allowed
+    expect(button("Record without camera")).toBeTruthy();
     expect([...document.querySelectorAll("button")].some((b) => b.textContent === "Start recording")).toBe(false);
-    expect(getUserMedia.mock.calls.some(([constraints]) => constraints.audio)).toBe(false); // no microphone either
+    expect(getUserMedia.mock.calls.some(([constraints]) => constraints.audio)).toBe(false); // no microphone yet
     vi.unstubAllGlobals();
   });
 
