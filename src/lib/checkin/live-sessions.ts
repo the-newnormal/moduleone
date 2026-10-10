@@ -192,19 +192,25 @@ export async function linkLiveCheckin(memberId: string, audioPath: string, check
 
 // The daily job: end sessions the browser never ended, logging their live transcription, and delete
 // sessions whose take never became a check-in (0011's tidy_live_checkin_sessions).
+// Null if it failed, so the job's other tasks still report.
 export async function tidyLiveSessions(): Promise<{ ended: number } | null> {
-  const client = admin();
-  const { data, error } = await client.rpc("tidy_live_checkin_sessions", { p_limit: 500 }).abortSignal(AbortSignal.timeout(SAVE_MS));
-  if (error) {
-    console.error("live session: tidying failed", { code: error.code });
+  try {
+    const client = admin();
+    const { data, error } = await client.rpc("tidy_live_checkin_sessions", { p_limit: 500 }).abortSignal(AbortSignal.timeout(SAVE_MS));
+    if (error) {
+      console.error("live session: tidying failed", { code: error.code });
+      return null;
+    }
+    const ended = (data as { session_id: string; stt_model: string; recorded_ms: number }[] | null) ?? [];
+    await recordCosts(
+      client,
+      ended
+        .filter((s) => s.recorded_ms > 0)
+        .map((s) => ({ step: "live_transcription" as const, liveSessionId: s.session_id, model: s.stt_model, audioMs: s.recorded_ms })),
+    );
+    return { ended: ended.length };
+  } catch (error) {
+    console.error("live session: tidying failed", { error: error instanceof Error ? error.name : "unknown" });
     return null;
   }
-  const ended = (data as { session_id: string; stt_model: string; recorded_ms: number }[] | null) ?? [];
-  await recordCosts(
-    client,
-    ended
-      .filter((s) => s.recorded_ms > 0)
-      .map((s) => ({ step: "live_transcription" as const, liveSessionId: s.session_id, model: s.stt_model, audioMs: s.recorded_ms })),
-  );
-  return { ended: ended.length };
 }

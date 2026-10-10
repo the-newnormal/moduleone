@@ -186,8 +186,9 @@ export function acknowledge(state: CoachState, id: number, rubric: CoachRubric):
   return next;
 }
 
-// The member pressed "Different question" on offer `id`. Its topic stays asked (it is never offered
-// again) but doesn't count as a follow-up; two skips in a row end the questions.
+// The member pressed "Different question" on offer `id`. Its topic moves from asked to skipped and is
+// never offered again. It doesn't count as a follow-up, but still counts towards its area's limit;
+// two skips in a row end the questions.
 export function skip(state: CoachState, id: number): CoachState {
   const offer = state.offers.find((o) => o.id === id);
   if (id !== state.current || !offer || offer.kind !== "question" || !offer.topic) return state;

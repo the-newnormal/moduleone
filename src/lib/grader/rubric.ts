@@ -39,6 +39,9 @@ const LEVEL_ISH = /^-\s*\d/;
 const MAX_TEXT = 4000;
 
 
+const SCORING_APART =
+  'Keep "## Activity", "## Excellence" and "## Morale" together, one after another: Claude is sent them as one block, so a section between them would be moved.';
+
 export function parseGradingRubric(source: string, file = GRADING_RUBRIC_FILE): GradingRubric {
   const problems: string[] = [];
   const { text, unclosed } = withoutNotes(source);
@@ -79,6 +82,8 @@ export function parseGradingRubric(source: string, file = GRADING_RUBRIC_FILE): 
     const key = section.heading.toLowerCase();
     if (key === "activity" || key === "excellence" || key === "morale") {
       if (!layout.includes("scoring")) layout.push("scoring");
+      // The three are sent as one block, so a section between them would be moved after them.
+      else if (layout.at(-1) !== "scoring" && !problems.includes(SCORING_APART)) problems.push(SCORING_APART);
     } else if (key === "themes" || key === "review") {
       if (!layout.includes(key)) layout.push(key);
     } else {

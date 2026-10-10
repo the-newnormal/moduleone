@@ -461,6 +461,14 @@ describe("tidyLiveSessions", () => {
     expect(console.error).toHaveBeenCalledExactlyOnceWith("live session: tidying failed", { code: "57014" });
     expect(recordCosts).not.toHaveBeenCalled();
   });
+
+  it("is null, not thrown, without the service-role key, so the daily job still reports", async () => {
+    vi.mocked(createServiceRoleClient).mockImplementationOnce(() => {
+      throw new MissingServiceKeyError();
+    });
+    expect(await tidyLiveSessions()).toBeNull();
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("live session: tidying failed", { error: "MissingServiceKeyError" });
+  });
 });
 
 describe("logs", () => {
