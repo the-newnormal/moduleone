@@ -267,8 +267,6 @@ export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?
     if (!mimeType) return setState({ step: "idle", problem: UNSUPPORTED });
     setState({ step: "starting" });
     const attempt = ++startCount.current;
-    // Asks for a live session while the microphone is set up (leaving the page stops it).
-    coach.begin();
 
     let stream: MediaStream;
     try {
@@ -277,7 +275,6 @@ export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?
       });
     } catch (error) {
       if (attempt !== startCount.current) return;
-      coach.stop();
       return setState({ step: "idle", problem: microphoneProblem(error) });
     }
     // Granted after the member left the page (the browser's prompt can outlive it): let it go.
@@ -291,7 +288,6 @@ export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?
       recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: BITS_PER_SECOND });
     } catch {
       stream.getTracks().forEach((track) => track.stop());
-      coach.stop();
       return setState({ step: "idle", problem: UNSUPPORTED });
     }
 
@@ -349,10 +345,12 @@ export function Recorder({ heldOnly = false, live }: { heldOnly?: boolean; live?
     } catch {
       // The microphone went away between the prompt and here (unplugged, or taken by another app).
       release(media);
-      coach.stop();
       settle(null);
       return setState({ step: "idle", problem: "Couldn't start the microphone. Try again." });
     }
+    // Only now asks for a live session (leaving the page stops it): its transcription key must be
+    // used within 30 seconds, and the browser's microphone prompt can stay open longer than that.
+    coach.begin();
     coach.attach(stream);
     setState({ step: "recording", question: 0 });
   }

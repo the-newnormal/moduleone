@@ -55,9 +55,11 @@ export async function POST(request: Request): Promise<Response> {
   });
   if (turn.failure) console.error("live coach: reading the transcript failed", { reason: turn.failure.reason, retryable: turn.failure.retryable });
 
+  // Every reply that came back is paid for, used or not.
+  const billed = turn.result ?? turn.failure?.billed ?? null;
   const [saved] = await Promise.all([
     saveCoachState(sessionId, memberId, claim.callNumber, turn.state, elapsed),
-    turn.result ? recordCoachCost(sessionId, turn.result.model, turn.result.usage) : null,
+    billed ? recordCoachCost(sessionId, billed.model, billed.usage) : null,
   ]);
   // A later call has moved on (or the session ended): this one's offer was never kept, so it can't
   // be shown.

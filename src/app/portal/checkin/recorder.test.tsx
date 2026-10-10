@@ -179,6 +179,51 @@ describe("a live check-in", () => {
     expect(fakes.connectLiveTranscription).toHaveBeenCalledOnce();
   });
 
+  it("asks for the live session only once the microphone is allowed, however long that takes", async () => {
+    microphone();
+    // The browser's prompt stays open until the test answers it: longer than the 30 seconds the
+    // session's transcription key can be used for, as far as the recorder can tell.
+    let allow: () => void = () => {};
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: {
+        getUserMedia: () =>
+          new Promise((resolve) => {
+            allow = () => resolve({ getTracks: () => [track], getAudioTracks: () => [track] });
+          }),
+      },
+      configurable: true,
+    });
+    fakes.startLive.mockReset().mockResolvedValue(READY);
+    const { Recorder } = await load();
+    await render(<Recorder live={{ opening: OPENING }} />);
+    await click(button("Start recording"));
+    await settle();
+    expect(text()).toContain("Waiting for your microphone…");
+    expect(fakes.startLive).not.toHaveBeenCalled();
+
+    await act(async () => allow());
+    await settle();
+    expect(fakes.startLive).toHaveBeenCalledOnce();
+    expect(fakes.connectLiveTranscription).toHaveBeenCalledOnce();
+    expect(document.querySelector("h3")?.textContent).toBe(OPENING);
+  });
+
+  it("asks for no live session when the microphone is refused", async () => {
+    microphone();
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: { getUserMedia: async () => Promise.reject(new DOMException("denied", "NotAllowedError")) },
+      configurable: true,
+    });
+    fakes.startLive.mockReset().mockResolvedValue(READY);
+    const { Recorder } = await load();
+    await render(<Recorder live={{ opening: OPENING }} />);
+    await click(button("Start recording"));
+    await settle();
+    expect(button("Start recording")).toBeTruthy();
+    expect(fakes.startLive).not.toHaveBeenCalled();
+    expect(fakes.endLive).not.toHaveBeenCalled();
+  });
+
   it("goes back to the three fixed questions when live questions aren't available", async () => {
     await startRecording({ status: "off" });
     expect(text()).toContain("Question 1 of 3");

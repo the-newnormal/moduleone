@@ -13,7 +13,7 @@ import type { ThinkingConfigParam } from "@anthropic-ai/sdk/resources/messages";
 import { RubricError } from "@/lib/rubrics/markdown";
 import { coachJsonSchema, parseCoachOutput } from "./output";
 import { coachInstructions, coachMessage } from "./prompt";
-import { CoachError, type CoachRead } from "./types";
+import { CoachError, type CoachRead, type CoachUsage } from "./types";
 
 export * from "./types";
 
@@ -42,13 +42,12 @@ const ATTEMPT_MS = 4_000;
 // About 150 tokens of JSON with thinking off; room for some thinking on models that can't turn it off.
 const MAX_TOKENS = 2_000;
 
-export type CoachUsage = { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
 export type CoachReadResult = { read: CoachRead; model: string; usage: CoachUsage; latencyMs: number };
 
 // Reads the transcript so far with Claude: which topics are covered and how far, the mood, and
 // Claude's suggestion for the next question. Only the transcript and the ids of topics already asked
 // are sent. Throws CoachError: "rubric" (rubrics/coach.md is broken; nothing is sent), "refusal",
-// "invalid_output" or "api".
+// "invalid_output" or "api". A refusal or invalid output was still paid for: its `billed` says what.
 export async function readTranscript(input: {
   transcript: string;
   alreadyAsked: readonly string[];
@@ -91,33 +90,38 @@ export async function readTranscript(input: {
     throw apiFailure(error, deadline, input.signal);
   }
   const latencyMs = Math.round(performance.now() - started);
+  const usage: CoachUsage = {
+    inputTokens: response.usage.input_tokens,
+    outputTokens: response.usage.output_tokens,
+    cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
+    cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
+  };
+  const billed = { model: response.model, usage };
 
   if (response.stop_reason === "refusal") {
     const category = response.stop_details?.category;
     throw new CoachError(`Claude declined to read this transcript${category ? ` (${category})` : ""}`, {
       reason: "refusal",
       retryable: false,
+      billed,
     });
   }
   if (response.stop_reason !== "end_turn") {
     throw new CoachError(`The coach's reply ended early (stop_reason ${response.stop_reason})`, {
       reason: "invalid_output",
       retryable: true,
+      billed,
     });
   }
   const text = response.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
-  const usage = response.usage;
-  return {
-    read: parseCoachOutput(text, instructions.rubric),
-    model: response.model,
-    latencyMs,
-    usage: {
-      inputTokens: usage.input_tokens,
-      outputTokens: usage.output_tokens,
-      cacheReadTokens: usage.cache_read_input_tokens ?? 0,
-      cacheWriteTokens: usage.cache_creation_input_tokens ?? 0,
-    },
-  };
+  let read;
+  try {
+    read = parseCoachOutput(text, instructions.rubric);
+  } catch (error) {
+    if (!(error instanceof CoachError)) throw error;
+    throw new CoachError(error.message, { reason: error.reason, retryable: error.retryable, cause: error.cause, billed });
+  }
+  return { read, model: response.model, latencyMs, usage };
 }
 
 // As the grader's: the SDK's abort and network errors are subclasses of APIError, so they come first.

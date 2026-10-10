@@ -163,6 +163,20 @@ describe("POST /portal/checkin/live/coach", () => {
     });
   });
 
+  it("logs the cost of a reply that came back but couldn't be used", async () => {
+    vi.mocked(readTranscript).mockRejectedValue(
+      new CoachError("The coach's reply was not valid JSON", {
+        reason: "invalid_output",
+        retryable: true,
+        billed: { model: "claude-haiku-5-5", usage: USAGE },
+      }),
+    );
+    const response = await POST(post());
+    expect(await response.json()).toMatchObject({ status: "ok", degraded: true });
+    expect(savedState().counts).toMatchObject({ reads: 0, failures: 1 });
+    expect(recordCoachCost).toHaveBeenCalledExactlyOnceWith(SESSION_ID, "claude-haiku-5-5", USAGE);
+  });
+
   it.each([
     ["refusal", false],
     ["invalid_output", true],

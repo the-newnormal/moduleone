@@ -64,6 +64,12 @@ const reply = (overrides: Record<string, unknown> = {}, output: unknown = REPLY)
   ...overrides,
 });
 
+// What a reply that came back costs, used or not.
+const BILLED = {
+  model: DEFAULT_COACH_MODEL,
+  usage: { inputTokens: 120, outputTokens: 95, cacheReadTokens: 2400, cacheWriteTokens: 0 },
+};
+
 type Request = {
   model: string;
   max_tokens: number;
@@ -229,7 +235,7 @@ describe("readTranscript reply", () => {
       reply({ stop_reason: "refusal", stop_details: { type: "refusal", category: "cyber", explanation: null }, content: [] }),
     );
     const error = await coachError(readIt());
-    expect(error).toMatchObject({ reason: "refusal", retryable: false });
+    expect(error).toMatchObject({ reason: "refusal", retryable: false, billed: BILLED });
     expect(error.message).toContain("cyber");
   });
 
@@ -238,16 +244,18 @@ describe("readTranscript reply", () => {
     async (stopReason) => {
       create.mockResolvedValue(reply({ stop_reason: stopReason }, '{"coverage": {"activity_work": "cle'));
       const error = await coachError(readIt());
-      expect(error).toMatchObject({ reason: "invalid_output", retryable: true });
+      expect(error).toMatchObject({ reason: "invalid_output", retryable: true, billed: BILLED });
       expect(error.message).toContain(stopReason);
     },
   );
 
   it("rejects a reply that doesn't match the schema, or has no text", async () => {
     create.mockResolvedValue(reply({}, { ...REPLY, tone: "sian" }));
-    expect(await coachError(readIt())).toMatchObject({ reason: "invalid_output", retryable: true });
+    const mismatch = await coachError(readIt());
+    expect(mismatch).toMatchObject({ reason: "invalid_output", retryable: true, billed: BILLED });
+    expect(mismatch.message).toContain("did not match the schema");
     create.mockResolvedValue(reply({ content: [] }));
-    expect(await coachError(readIt())).toMatchObject({ reason: "invalid_output", retryable: true });
+    expect(await coachError(readIt())).toMatchObject({ reason: "invalid_output", retryable: true, billed: BILLED });
   });
 });
 
@@ -275,6 +283,7 @@ describe("readTranscript API errors", () => {
     expect(error.reason).toBe("api");
     expect(error.retryable).toBe(retryable);
     expect(error.cause).toBe(thrown);
+    expect(error.billed).toBeNull(); // no reply came back, so nothing to log
     expect(error.message).not.toContain("sk-test");
     expect(error.message).not.toContain("Seletar");
   });

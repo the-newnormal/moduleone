@@ -102,14 +102,24 @@ export type Touched = Record<Area, boolean>;
 
 export type CoachFailure = "invalid_output" | "refusal" | "api" | "rubric";
 
+export type CoachUsage = { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
+
 export class CoachError extends Error {
   readonly reason: CoachFailure;
   readonly retryable: boolean;
+  // A reply that came back but couldn't be used (a refusal, a cut-off reply, output that doesn't fit)
+  // is still paid for: the model that answered and its tokens, for the cost log. Null when no reply
+  // came back.
+  readonly billed: { model: string; usage: CoachUsage } | null;
 
-  constructor(message: string, details: { reason: CoachFailure; retryable: boolean; cause?: unknown }) {
+  constructor(
+    message: string,
+    details: { reason: CoachFailure; retryable: boolean; cause?: unknown; billed?: { model: string; usage: CoachUsage } },
+  ) {
     super(message, { cause: details.cause });
     this.name = "CoachError";
     this.reason = details.reason;
     this.retryable = details.retryable;
+    this.billed = details.billed ?? null;
   }
 }

@@ -89,7 +89,8 @@ export function canSkip(view: LiveView | null): boolean {
 }
 
 export type LiveCoachController = {
-  // Start was pressed: asks for a live session while the microphone is set up.
+  // The recording has started: asks for a live session (not while the browser's microphone prompt
+  // is open, which can outlast the session's 30-second transcription key). attach follows at once.
   begin(): void;
   // The recording has started with this stream: transcribe it live (a copy of its track).
   attach(stream: MediaStream): void;
