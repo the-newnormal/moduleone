@@ -345,6 +345,44 @@ describe("the camera", () => {
     vi.unstubAllGlobals();
   });
 
+  it("comes on by itself once a question left open by an earlier visit is answered Allow", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    let allow: (stream: unknown) => void = () => {};
+    let asks = 0;
+    const { cameraAsks } = devices(() =>
+      ++asks === 1 ? new Promise((resolve) => (allow = resolve)) : Promise.resolve(cameraStream()),
+    );
+    let permission: PermissionState = "prompt";
+    Object.defineProperty(navigator, "permissions", {
+      value: { query: async () => ({ state: permission }) },
+      configurable: true,
+    });
+    const { Recorder } = await load();
+    const page = await render(<Recorder />);
+    await click(button("Turn on my camera"));
+    await page.rerender(<></>); // left by a link; the browser's question stays open
+    await page.rerender(<Recorder />);
+    await settle();
+    permission = "granted";
+    await act(async () => allow(cameraStream())); // answered Allow
+    await settle();
+    expect(cameraAsks()).toBe(2); // the first recorder's camera was let go; this one's came on
+    expect(video()).not.toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it("says the browser can't record instead of turning on the camera", async () => {
+    vi.stubGlobal("MediaRecorder", undefined);
+    const { cameraAsks } = devices();
+    const { Recorder } = await load();
+    const page = await render(<Recorder />);
+    await turnOnCamera();
+    expect(text(page.container)).toContain("This browser can't record audio here.");
+    expect(cameraAsks()).toBe(0);
+    expect(video()).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
   it("lets go of a camera allowed only after the member left the page", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     const lens = fakeTrack();

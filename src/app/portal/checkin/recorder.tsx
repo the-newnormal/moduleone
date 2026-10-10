@@ -384,6 +384,8 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
   // ask: the member pressed Turn on my camera, so the browser may ask them. Otherwise the camera is
   // coming on by itself, as the browser allows it without asking.
   async function turnCameraOn(ask: boolean) {
+    // A browser that can't record the take gets no camera, but the reason.
+    if (!pickMimeType()) return setState({ step: "idle", problem: UNSUPPORTED });
     const attempt = ++camera.current.asked;
     if (ask) setCameraNote("asking");
     let stream: MediaStream;
@@ -416,8 +418,10 @@ export function Recorder({ heldOnly = false }: { heldOnly?: boolean }) {
 
   // Ready for a take, where the browser allows the camera without asking (allowed here before):
   // it comes on by itself, so the member goes straight to seeing themselves. Not while the page
-  // refreshes to show a newer draft (Show my draft), which usually takes this recorder away.
-  const ready = state.step === "idle" && !heldOnly && !refreshing;
+  // refreshes to show a newer draft (Show my draft), which usually takes this recorder away, nor
+  // while a camera question is open or a camera problem shows (Turn on my camera tries again); so
+  // once a question an earlier visit left open is answered Allow, it comes on.
+  const ready = state.step === "idle" && !heldOnly && !refreshing && cameraNote === null;
   // asked unchanged: nothing turned the camera on or off meanwhile (the member's Turn on included).
   const cameraByItself = useEffectEvent((asked: number) => {
     if (camera.current.asked === asked) void turnCameraOn(false);
