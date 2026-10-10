@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { monthlyCosts, rowCostUsd, singaporeMonth, type CostRow } from "./costs";
+import { CLAUDE_USD_PER_MTOK, GRADING_USD_PER_MTOK, monthlyCosts, rowCostUsd, singaporeMonth, type CostRow } from "./costs";
 
 const transcription = (overrides: Partial<CostRow> = {}): CostRow => ({
   checkin_id: "d1",
+  live_session_id: null,
   step: "transcription",
   model: "openai:gpt-4o-transcribe",
   audio_ms: 600_000,
@@ -16,6 +17,7 @@ const transcription = (overrides: Partial<CostRow> = {}): CostRow => ({
 
 const grading = (overrides: Partial<CostRow> = {}): CostRow => ({
   checkin_id: "d1",
+  live_session_id: null,
   step: "grading",
   model: "claude-haiku-5-5",
   audio_ms: null,
@@ -24,6 +26,35 @@ const grading = (overrides: Partial<CostRow> = {}): CostRow => ({
   cache_read_tokens: 1_000_000,
   cache_write_tokens: 0,
   created_at: "2026-10-06T02:01:00Z",
+  ...overrides,
+});
+
+// A live session's rows name the session, never a check-in (0011).
+const liveTranscription = (overrides: Partial<CostRow> = {}): CostRow => ({
+  checkin_id: null,
+  live_session_id: "l1",
+  step: "live_transcription",
+  model: "openai:gpt-live-transcribe",
+  audio_ms: 300_000,
+  input_tokens: null,
+  output_tokens: null,
+  cache_read_tokens: null,
+  cache_write_tokens: null,
+  created_at: "2026-10-06T01:59:00Z",
+  ...overrides,
+});
+
+const coaching = (overrides: Partial<CostRow> = {}): CostRow => ({
+  checkin_id: null,
+  live_session_id: "l1",
+  step: "coaching",
+  model: "claude-haiku-5-5",
+  audio_ms: null,
+  input_tokens: 2_000,
+  output_tokens: 100,
+  cache_read_tokens: 0,
+  cache_write_tokens: 0,
+  created_at: "2026-10-06T01:58:00Z",
   ...overrides,
 });
 
@@ -50,6 +81,31 @@ describe("rowCostUsd", () => {
   it("prices grading tokens, with cache reads at the cache rate", () => {
     // 1,000 × $0.10 + 2,000 × $0.50 + 1,000,000 × $0.01, per million.
     expect(rowCostUsd(grading())).toBeCloseTo(0.0001 + 0.001 + 0.01);
+  });
+
+  it("prices live transcription by the minute of realtime audio", () => {
+    // 5 minutes × $0.017.
+    expect(rowCostUsd(liveTranscription())).toBeCloseTo(0.085);
+    expect(rowCostUsd(liveTranscription({ audio_ms: 0 }))).toBe(0);
+  });
+
+  it("doesn't price live transcription it has no streaming price or length for", () => {
+    expect(rowCostUsd(liveTranscription({ model: "openai:gpt-unknown" }))).toBeNull();
+    // Priced for files, but streaming is priced on its own.
+    expect(rowCostUsd(liveTranscription({ model: "openai:gpt-4o-transcribe" }))).toBeNull();
+    expect(rowCostUsd(liveTranscription({ model: "local:parakeet" }))).toBeNull();
+    expect(rowCostUsd(liveTranscription({ audio_ms: null }))).toBeNull();
+  });
+
+  it("prices coach calls by Claude tokens, like grading", () => {
+    // 2,000 × $0.10 + 100 × $0.50, per million.
+    expect(rowCostUsd(coaching())).toBeCloseTo(0.0002 + 0.00005);
+    expect(rowCostUsd(coaching({ model: "claude-sonnet-5-5", cache_read_tokens: 1_000_000 }))).toBeCloseTo(0.004 + 0.001 + 0.1);
+    expect(rowCostUsd(coaching({ model: "claude-unknown" }))).toBeNull();
+  });
+
+  it("keeps the old name for the Claude prices", () => {
+    expect(GRADING_USD_PER_MTOK).toBe(CLAUDE_USD_PER_MTOK);
   });
 });
 
@@ -89,6 +145,55 @@ describe("monthlyCosts", () => {
     expect(month.unpriced).toEqual(["openai:gpt-4o-transcribe (length unknown)"]);
     expect(month.transcriptionUsd).toBe(0);
     expect(month.checkins).toBe(1);
+  });
+
+  it("adds up live sessions apart from check-ins, and puts them in the total", () => {
+    const months = monthlyCosts([
+      // Siti's session became check-in d1; Wei Ling's l2 was never submitted.
+      liveTranscription(),
+      coaching(),
+      coaching(),
+      transcription(),
+      grading(),
+      liveTranscription({ live_session_id: "l2", audio_ms: 120_000 }),
+      coaching({ live_session_id: "l2" }),
+    ]);
+    expect(months).toHaveLength(1);
+    const [month] = months;
+    // Only d1 is a check-in: the live rows' null ids aren't counted as one.
+    expect(month).toMatchObject({ checkins: 1, liveSessions: 2, coachCalls: 3, gradings: 1, unpriced: [] });
+    expect(month.liveMinutes).toBeCloseTo(7);
+    expect(month.liveTranscriptionUsd).toBeCloseTo(7 * 0.017);
+    expect(month.coachingUsd).toBeCloseTo(3 * 0.00025);
+    // The coach's tokens are in its own dollars, not in grading's token counts.
+    expect(month).toMatchObject({ inputTokens: 1_001_000, outputTokens: 2_000 });
+    expect(month.audioMinutes).toBeCloseTo(10);
+    expect(month.transcriptionUsd).toBeCloseTo(0.06);
+    expect(month.gradingUsd).toBeCloseTo(0.0111);
+    expect(month.totalUsd).toBeCloseTo(0.06 + 0.0111 + 7 * 0.017 + 3 * 0.00025);
+  });
+
+  it("counts a month with only live sessions as having no check-ins", () => {
+    const [month] = monthlyCosts([liveTranscription(), coaching()]);
+    expect(month).toMatchObject({ checkins: 0, liveSessions: 1, coachCalls: 1, gradings: 0, audioMinutes: 0 });
+    expect(month.totalUsd).toBeCloseTo(0.085 + 0.00025);
+  });
+
+  it("names live models it can't price, marked as live, and leaves them out of the dollars", () => {
+    const [month] = monthlyCosts([
+      liveTranscription({ model: "openai:gpt-unknown" }),
+      liveTranscription({ live_session_id: "l2", audio_ms: null }),
+      coaching({ model: "claude-unknown" }),
+      transcription({ model: "openai:gpt-unknown" }),
+    ]);
+    expect(month.unpriced).toEqual([
+      "claude-unknown",
+      "openai:gpt-live-transcribe (live, length unknown)",
+      "openai:gpt-unknown",
+      "openai:gpt-unknown (live)",
+    ]);
+    expect(month).toMatchObject({ liveTranscriptionUsd: 0, coachingUsd: 0, transcriptionUsd: 0, totalUsd: 0, coachCalls: 1 });
+    expect(month.liveMinutes).toBeCloseTo(5);
   });
 
   it("is empty with no rows", () => {
