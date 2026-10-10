@@ -36,6 +36,7 @@ function costOf(grade: Grade): number | null {
     const usd = GRADING_USD_PER_MTOK[model]
       ? rowCostUsd({
           checkin_id: "comparison",
+          live_session_id: null,
           step: "grading",
           model,
           audio_ms: null,
