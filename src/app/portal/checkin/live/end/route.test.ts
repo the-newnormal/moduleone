@@ -162,6 +162,22 @@ describe("POST /portal/checkin/live/end", () => {
       expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", expect.objectContaining({ followUps: 0, bank: 0, rejected: 0 }));
     });
 
+    it("logs what a newer coach call saved when that call got there first", async () => {
+      const newer: CoachState = { ...OFFERED, asked: ["activity_work"], followUps: 3, counts: { ...OFFERED.counts, reads: 5 } };
+      vi.mocked(readOpenSession).mockResolvedValueOnce(open()).mockResolvedValueOnce(open(newer));
+      vi.mocked(saveCoachState).mockResolvedValue(false);
+      await expectEnded(await POST(post({ ...BODY, shown: 1 })));
+      expect(readOpenSession).toHaveBeenCalledTimes(2);
+      expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", expect.objectContaining({ followUps: 3, reads: 5 }));
+    });
+
+    it("logs no counts when the session can't be read again after a turned-away save", async () => {
+      vi.mocked(readOpenSession).mockResolvedValueOnce(open()).mockResolvedValueOnce(null);
+      vi.mocked(saveCoachState).mockResolvedValue(false);
+      await expectEnded(await POST(post({ ...BODY, shown: 1, fallback: "no_text" })));
+      expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", { fallback: "no_text" });
+    });
+
     it("logs the counts with the question on screen once that is saved", async () => {
       await expectEnded(await POST(post({ ...BODY, shown: 1 })));
       expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", expect.objectContaining({ followUps: 1, bank: 1, rejected: 1 }));
