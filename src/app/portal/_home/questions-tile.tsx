@@ -4,8 +4,9 @@ import { checkinQuestion } from "@/lib/checkin/opening";
 import { Tile } from "./tile";
 
 // The week's question, to think about before pressing Start, and the privacy notice members
-// accepted, to read again (the check-in page shows it only once). It is the one open question from
-// rubrics/coach.md; with the live check-in on, the follow-ups depend on what the member says.
+// accepted, to read again (the Diary shows it again only when it changes). It is the one open
+// question from rubrics/coach.md; with the live check-in on, the follow-ups depend on what the
+// member says.
 export function QuestionsTile() {
   const { opening, live } = checkinQuestion();
   return (

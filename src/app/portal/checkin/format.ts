@@ -1,5 +1,5 @@
-// How the check-in page shows dates and lengths. Everything is in Singapore time, whatever the
-// server's or the browser's time zone, because that is when the week opens and closes.
+// How the Diary (the check-in page) shows dates and lengths. Everything is in Singapore time,
+// whatever the server's or the browser's time zone, because that is when the week opens and closes.
 
 const DAY = new Intl.DateTimeFormat("en-GB", {
   timeZone: "Asia/Singapore",
@@ -7,6 +7,21 @@ const DAY = new Intl.DateTimeFormat("en-GB", {
   day: "numeric",
   month: "long",
 });
+
+const DAY_MONTH = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Singapore",
+  day: "numeric",
+  month: "long",
+});
+
+const LONG_DATE = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Singapore",
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+});
+
+const YEAR = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Singapore", year: "numeric" });
 
 const DAY_AND_TIME = new Intl.DateTimeFormat("en-GB", {
   timeZone: "Asia/Singapore",
@@ -30,6 +45,23 @@ export function formatWeekEnd(weekStart: string): string {
   return DAY.format(new Date(sgtMidnight(weekStart).getTime() + 6 * DAY_MS));
 }
 
+// A day ('2026-09-28') → '28 September'.
+export function formatDayMonth(day: string): string {
+  return DAY_MONTH.format(sgtMidnight(day));
+}
+
+// A day ('2027-10-08') → '8 October 2027'.
+export function formatLongDate(day: string): string {
+  return LONG_DATE.format(sgtMidnight(day));
+}
+
+// A timestamp → its Singapore day, 'Thursday 1 October', or 'Thursday 1 October 2026' with the
+// year. The year is added on its own: en-GB would put a comma after the weekday.
+export function formatDay(iso: string, withYear = false): string {
+  const date = new Date(iso);
+  return withYear ? `${DAY.format(date)} ${YEAR.format(date)}` : DAY.format(date);
+}
+
 // A timestamp → 'Friday 9 October at 2:15 pm' (Singapore time).
 export function formatDateTime(iso: string): string {
   return DAY_AND_TIME.format(new Date(iso));
@@ -50,7 +82,7 @@ export function formatClock(ms: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
-function sgtMidnight(weekStart: string): Date {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) throw new RangeError(`Not a date: ${weekStart}`);
-  return new Date(`${weekStart}T00:00:00+08:00`);
+function sgtMidnight(day: string): Date {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new RangeError(`Not a date: ${day}`);
+  return new Date(`${day}T00:00:00+08:00`);
 }

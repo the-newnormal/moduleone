@@ -69,7 +69,7 @@ export function SaveWatch({ notStarted = false, children }: { notStarted?: boole
           Saving your recording… This page updates when it&apos;s saved.
         </p>
         <Link href="/portal/checkin" className="inline-flex min-h-10 w-fit items-center rounded-sm text-[15px] font-medium underline underline-offset-4">
-          Open your check-in
+          Open your diary
         </Link>
       </div>
     );
@@ -81,7 +81,7 @@ export function SaveWatch({ notStarted = false, children }: { notStarted?: boole
           Your last recording hasn&apos;t been saved yet.
         </p>
         <Button asChild className="h-12 w-full sm:h-10 sm:w-fit">
-          <Link href="/portal/checkin">Open your check-in to try again</Link>
+          <Link href="/portal/checkin">Open your diary to try again</Link>
         </Button>
       </div>
     );

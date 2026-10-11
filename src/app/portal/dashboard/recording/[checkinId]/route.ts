@@ -7,7 +7,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // Every answer is about one viewer, and the redirect carries a bearer link: never cache either.
 const PRIVATE = { "Cache-Control": "private, no-store" };
 
-// The stable address the drill-in's player plays a recording from. Each request signs a fresh
+// The stable address the drill-in's and the Diary's player play a recording from, so members must
+// always be able to reach it, though it sits under /portal/dashboard. Each request signs a fresh
 // short-lived Storage link as the signed-in viewer and redirects to it, so a page left open for
 // hours still plays. Signed out: the proxy sends them to /login first (401 here if it ever
 // doesn't). No recording, or none this viewer may play: 404, the same answer either way, so it

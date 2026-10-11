@@ -1,15 +1,18 @@
+// @vitest-environment happy-dom
 import { redirect } from "next/navigation";
 import { after } from "next/server";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { noticeSections } from "@/lib/checkin/notice";
+import { DIARY_COLUMNS, type DiaryRow } from "@/lib/checkin/diary";
+import { noticeSections, noticeVersion } from "@/lib/checkin/notice";
 import { processCheckin } from "@/lib/checkin/process";
 import { DEFAULT_OPENING_QUESTION, QUESTIONS } from "@/lib/checkin/week";
 import { coachRubric } from "@/lib/coach/rubric";
 import { RubricError } from "@/lib/rubrics/markdown";
 import { createClient } from "@/lib/supabase/server";
 import { tidyMemberAudio } from "./housekeeping";
-import CheckinPage from "./page";
+import CheckinPage, { metadata } from "./page";
 
 vi.mock("next/navigation", () => ({
   redirect: vi.fn((url: string) => {
@@ -41,6 +44,10 @@ vi.mock("./actions", () => ({
   deleteDraft: vi.fn(),
   submitCheckin: vi.fn(),
 }));
+// SavedTake renders nothing until it runs in a browser; mark where it sits.
+vi.mock("./saved-take", () => ({
+  SavedTake: ({ path }: { path: string | null }) => createElement("i", { "data-saved-take": path ?? "none" }),
+}));
 
 const NOW = new Date("2026-10-08T04:00:00Z"); // Thursday noon in Singapore
 const WEEK = "2026-10-05";
@@ -50,14 +57,23 @@ const DRAFT_PATH = `${MEMBER}/${WEEK}-0c6f2a8e-5b1d-4c43-9a51-2f3c1d9e8b7a.webm`
 const PLAYBACK = `http://127.0.0.1:54321/storage/v1/object/sign/checkin-audio/${DRAFT_PATH}?token=play`;
 
 type Result = { data: unknown; error: unknown };
-type Query = { table: string; columns: string; filters: [string, unknown][] };
+type Query = {
+  table: string;
+  columns: string;
+  filters: [string, unknown][];
+  order: [string, unknown][];
+  limit: number | null;
+};
 
+// What maybeSingle() gives, and what awaiting a list gives, per table (a function: worked out when
+// the page asks).
 let reads: Record<string, Result>;
+let lists: Record<string, Result | (() => Result)>;
 let queries: Query[];
 const getClaims = vi.fn();
 const createSignedUrl = vi.fn();
 function from(table: string) {
-  const query: Query = { table, columns: "", filters: [] };
+  const query: Query = { table, columns: "", filters: [], order: [], limit: null };
   queries.push(query);
   const builder = {
     select(columns: string) {
@@ -68,7 +84,20 @@ function from(table: string) {
       query.filters.push([column, value]);
       return builder;
     },
+    order(column: string, options: unknown) {
+      query.order.push([column, options]);
+      return builder;
+    },
+    limit(count: number) {
+      query.limit = count;
+      return builder;
+    },
+    overrideTypes: () => builder,
     maybeSingle: async () => reads[table] ?? { data: null, error: null },
+    then: (onFulfilled: (r: Result) => unknown, onRejected?: (e: unknown) => unknown) => {
+      const list = lists[table] ?? { data: [], error: null };
+      return Promise.resolve(typeof list === "function" ? list() : list).then(onFulfilled, onRejected);
+    },
   };
   return builder;
 }
@@ -90,17 +119,122 @@ const GRADED = {
   transcript: "Honestly this week was rough and I am exhausted.",
 };
 
+// The member's check-ins as the diary gets them, each also carrying what RLS would hand back if
+// asked for everything: grades included.
+const POISON = {
+  activity_score: 4,
+  morale_score: 1,
+  category: "wellbeing",
+  rubric_review: "SECRET REVIEW burnt out",
+  transcript: "SECRET TRANSCRIPT rough exhausted",
+};
+let n = 0;
+function row(week_start: string, fields: Partial<DiaryRow> = {}): DiaryRow {
+  n += 1;
+  return {
+    id: `c1000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
+    week_start,
+    submitted_at: null,
+    audio_path: null,
+    audio_duration_ms: null,
+    audio_keep_days: 90,
+    audio_delete_after: null,
+    ...POISON,
+    ...fields,
+  };
+}
+const take = (week: string, ext = "webm") => `${MEMBER}/${week}-0c6f2a8e-5b1d-4c43-9a51-2f3c1d9e8b7a.${ext}`;
+const THIS_WEEK = row(WEEK, {
+  id: CHECKIN,
+  audio_path: take(WEEK),
+  audio_duration_ms: 192_000,
+  audio_keep_days: 365,
+  audio_delete_after: "2027-10-07T06:14:30Z",
+  submitted_at: "2026-10-07T06:15:00Z",
+});
+const SEP_28 = row("2026-09-28", {
+  audio_path: take("2026-09-28"),
+  audio_duration_ms: 220_000,
+  audio_keep_days: 365,
+  audio_delete_after: "2027-10-01T02:00:00Z",
+  submitted_at: "2026-10-01T03:00:00Z",
+});
+// Its deadline is today in Singapore: no longer offered, though the file may still be there.
+const JUL_20 = row("2026-07-20", {
+  audio_path: take("2026-07-20"),
+  audio_delete_after: "2026-10-08T10:00:00Z",
+  submitted_at: "2026-07-23T03:00:00Z",
+});
+const JUL_13 = row("2026-07-13", {
+  audio_path: take("2026-07-13", "m4a"),
+  audio_duration_ms: 125_000,
+  audio_keep_days: 90,
+  audio_delete_after: "2026-10-12T02:00:00Z",
+  submitted_at: "2026-07-17T03:00:00Z",
+});
+const JUL_06 = row("2026-07-06", { submitted_at: "2026-07-09T03:00:00Z" });
+const JAN_05 = row("2026-01-05");
+const DEC_29 = row("2025-12-29", { submitted_at: "2026-01-02T03:00:00Z" });
+const DEC_22 = row("2025-12-22");
+// Before this week's check-in is submitted.
+const EARLIER = [SEP_28, JUL_20, JUL_13, JUL_06, JAN_05, DEC_29, DEC_22];
+
+const DRAFT = {
+  audio_path: DRAFT_PATH,
+  duration_ms: 192_000,
+  recorded_at: "2026-10-08T03:30:00Z",
+  created_at: "2026-10-08T03:45:00Z", // saved later, e.g. after a retry
+};
+
 async function render() {
   return renderToStaticMarkup(await CheckinPage());
 }
+// The page as a document, to look at its structure.
+async function page() {
+  return new DOMParser().parseFromString(await render(), "text/html");
+}
+const text = (el: Element | null | undefined) => (el?.textContent ?? "").replace(/\s+/g, " ").trim();
+const card = (doc: Document) => doc.querySelector<HTMLElement>('div.outline-none[tabindex="-1"]')!;
+const entries = (doc: Document) => doc.querySelector<HTMLElement>('section[aria-labelledby="entries-title"]');
+const thenAndNow = (doc: Document) => doc.querySelector<HTMLElement>('section[aria-labelledby="then-and-now-title"]');
+const entry = (doc: Document, week: string) =>
+  [...entries(doc)!.querySelectorAll("li")].find((li) => text(li.querySelector("h4")).startsWith(`Week of ${week}`));
+// Every recording address played on the page, as often as it is.
+const played = (html: string) => [...html.matchAll(/src="(\/portal\/dashboard\/recording\/[^"]+)"/g)].map((m) => m[1]);
+
+// This week's check-in is in: the card shows it, and the diary has its row.
+function submitted() {
+  reads.checkins = { data: GRADED, error: null };
+  lists.checkins = { data: [THIS_WEEK, ...EARLIER], error: null };
+}
+const STATES = {
+  no_member: () => {
+    reads.members = { data: null, error: null };
+  },
+  unavailable: () => {
+    reads.checkin_drafts = { data: null, error: { code: "PGRST000", message: "down" } };
+  },
+  notice: () => {
+    lists.recording_notices = { data: [], error: null };
+  },
+  record: () => {},
+  draft: () => {
+    reads.checkin_drafts = { data: DRAFT, error: null };
+  },
+  submitted,
+};
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"], now: NOW });
   reads = {
-    members: { data: { id: MEMBER, team_id: "7ea30000-0000-4000-8000-000000000001" }, error: null },
-    recording_notices: { data: { member_id: MEMBER }, error: null },
+    members: { data: { id: MEMBER, name: "Mei Wong" }, error: null },
     checkins: { data: null, error: null },
     checkin_drafts: { data: null, error: null },
+  };
+  lists = {
+    // The notice as it reads now (LIVE_CHECKIN changes it), accepted.
+    recording_notices: () => ({ data: [{ notice_version: noticeVersion(), recording_keep_days: 365 }], error: null }),
+    checkins: { data: EARLIER, error: null },
   };
   queries = [];
   vi.mocked(createClient).mockResolvedValue({
@@ -135,6 +269,19 @@ describe("/portal/checkin", () => {
     expect(redirect).toHaveBeenCalledExactlyOnceWith("/login?next=/portal/checkin");
   });
 
+  it("is the member's own diary", async () => {
+    expect(metadata.title).toBe("Diary · Module One");
+    const doc = await page();
+    expect(text(doc.querySelector("h1"))).toBe("Diary");
+    const cover = doc.querySelector("header")!;
+    expect([...cover.querySelectorAll("p")].map(text)).toEqual([
+      "Mei Wong",
+      "Your weekly recordings, in your own voice, to listen back to.",
+      "Each recording you submit is also your weekly check-in for your team leader and HQ.",
+    ]);
+    expect(queries.find((q) => q.table === "members")?.columns).toBe("id, name");
+  });
+
   it("shows the week and when it closes", async () => {
     const html = await render();
     expect(html).toContain("Week of Monday 5 October");
@@ -148,24 +295,86 @@ describe("/portal/checkin", () => {
     expect(html).not.toContain("Turn on my camera");
     expect(queries.map((q) => q.table)).toEqual(["members"]);
     expect(after).not.toHaveBeenCalled();
+    // Nothing of a diary, nor a name to head it with.
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    expect(entries(doc)).toBeNull();
+    expect(thenAndNow(doc)).toBeNull();
+    expect([...doc.querySelectorAll("header p")].map(text)).not.toContain("Mei Wong");
+  });
+
+  it("shows nothing below this week's card when the member can't be loaded", async () => {
+    reads.members = { data: null, error: { code: "PGRST000", message: "down" } };
+    const doc = await page();
+    expect(text(card(doc))).toBe("Couldn't load your check-in. Refresh the page to try again.");
+    expect(entries(doc)).toBeNull();
+    expect(queries.map((q) => q.table)).toEqual(["members"]);
   });
 
   it("shows the privacy notice until it is accepted", async () => {
-    reads.recording_notices = { data: null, error: null };
+    lists.recording_notices = { data: [], error: null };
     const html = await render();
     for (const { heading } of noticeSections()) expect(html).toContain(heading);
     expect(html).toContain("I understand, continue");
     expect(html).not.toContain("Turn on my camera");
   });
 
-  it("looks for the notice accepted with this login, not the member row's earlier one", async () => {
+  it("looks for the notices accepted with this login, not the member row's earlier one", async () => {
     await render();
-    expect(queries.find((q) => q.table === "recording_notices")?.filters).toEqual(
-      expect.arrayContaining([
-        ["member_id", MEMBER],
-        ["auth_user_id", "u1"],
-      ]),
-    );
+    const notices = queries.find((q) => q.table === "recording_notices")!;
+    expect(notices.columns).toBe("notice_version, recording_keep_days");
+    expect(notices.filters).toEqual([
+      ["member_id", MEMBER],
+      ["auth_user_id", "u1"],
+    ]);
+  });
+
+  describe("the notice, for", () => {
+    it("someone who hasn't accepted one: once, until it changes", async () => {
+      lists.recording_notices = { data: [], error: null };
+      const doc = await page();
+      expect(text(card(doc))).toContain("How your recording is used. You'll see this again only if it changes.");
+      expect(text(card(doc))).not.toContain("What's changed.");
+    });
+
+    it("someone who accepted the 90-day one: what has changed", async () => {
+      lists.recording_notices = {
+        data: [{ notice_version: "2026-10-10.openai", recording_keep_days: 90 }],
+        error: null,
+      };
+      const doc = await page();
+      expect(text(card(doc))).toContain("How your recording is used. It has changed since you last accepted it.");
+      expect(text(card(doc))).toContain(
+        "What's changed. Recordings you submit are now kept for a year, so you can listen back to them in your diary.",
+      );
+    });
+
+    it("someone who accepted a one-year one before: that it changed, without the year again", async () => {
+      lists.recording_notices = { data: [{ notice_version: "2026-10-12.openai.live", recording_keep_days: 365 }], error: null };
+      const doc = await page();
+      expect(text(card(doc))).toContain("It has changed since you last accepted it.");
+      expect(text(card(doc))).not.toContain("What's changed.");
+    });
+
+    it("someone who submitted this week: their entry is listed, and the diary is below the notice", async () => {
+      submitted();
+      lists.recording_notices = { data: [], error: null };
+      const html = await render();
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      expect(text(card(doc))).toContain("Before you record");
+      const thisWeek = entry(doc, "5 October")!;
+      expect(thisWeek.closest('section[aria-labelledby="entries-2026"]')).not.toBeNull();
+      expect(text(thisWeek)).toContain("Play it in Then and now, above");
+      // Its player is Now in Then and now.
+      const now = thenAndNow(doc)!.querySelector('article[aria-labelledby="then-and-now-now"]')!;
+      expect(now.querySelector("audio")?.getAttribute("src")).toBe(`/portal/dashboard/recording/${CHECKIN}.webm`);
+      // Below the notice, in page order.
+      const order = [card(doc), thenAndNow(doc)!, entries(doc)!];
+      for (let i = 1; i < order.length; i++) {
+        expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      }
+      expect(played(html)).toHaveLength(new Set(played(html)).size);
+      expect(createSignedUrl).not.toHaveBeenCalled();
+    });
   });
 
   it("shows the recorder when there's nothing yet, with the one open question", async () => {
@@ -207,15 +416,7 @@ describe("/portal/checkin", () => {
   });
 
   it("shows the draft with playback, its length and when it was recorded", async () => {
-    reads.checkin_drafts = {
-      data: {
-        audio_path: DRAFT_PATH,
-        duration_ms: 192_000,
-        recorded_at: "2026-10-08T03:30:00Z",
-        created_at: "2026-10-08T03:45:00Z", // saved later, e.g. after a retry
-      },
-      error: null,
-    };
+    reads.checkin_drafts = { data: DRAFT, error: null };
     const html = await render();
     // Two hours: long enough to come back to the tab and listen before submitting.
     expect(createSignedUrl).toHaveBeenCalledExactlyOnceWith(DRAFT_PATH, 7200);
@@ -240,14 +441,14 @@ describe("/portal/checkin", () => {
       error: null,
     };
     createSignedUrl.mockResolvedValue({ data: null, error: { name: "StorageApiError", message: "nope" } });
-    const html = await render();
-    expect(html).not.toContain("<audio");
-    expect(html).toContain("Couldn&#x27;t load the recording for playback");
-    expect(html).toContain("Submit check-in");
+    const doc = await page();
+    expect(card(doc).querySelector("audio")).toBeNull();
+    expect(text(card(doc))).toContain("Couldn't load the recording for playback");
+    expect(text(card(doc))).toContain("Submit check-in");
   });
 
   it("shows when the check-in was submitted, and nothing about the grade or transcript", async () => {
-    reads.checkins = { data: GRADED, error: null };
+    submitted();
     const html = await render();
     expect(html).toContain("Submitted on Wednesday 7 October at 2:15 pm. Thanks, see you next week.");
     for (const secret of ["wellbeing", "burnt out", "exhausted", "rough", "score", "Score", "review", "transcript"]) {
@@ -259,11 +460,11 @@ describe("/portal/checkin", () => {
   });
 
   it("never asks the database for the grade or the transcript", async () => {
-    reads.checkins = { data: GRADED, error: null };
+    submitted();
     await render();
     const checkins = queries.filter((q) => q.table === "checkins");
-    expect(checkins).toHaveLength(1);
-    expect(checkins[0].columns).not.toMatch(/\*|score|category|review|transcript|grader/);
+    expect(checkins).toHaveLength(2);
+    // This week's: what processing needs, to show the card and retry.
     expect(checkins[0].columns.split(",").map((c) => c.trim())).toEqual([
       "id",
       "submitted_at",
@@ -276,6 +477,249 @@ describe("/portal/checkin", () => {
       ["member_id", MEMBER],
       ["week_start", WEEK],
     ]);
+    // The diary's: the member's own, newest first, all of them.
+    expect(checkins[1].columns).toBe(DIARY_COLUMNS);
+    expect(checkins[1].columns.split(",").map((c) => c.trim())).toEqual([
+      "id",
+      "week_start",
+      "submitted_at",
+      "audio_path",
+      "audio_duration_ms",
+      "audio_keep_days",
+      "audio_delete_after",
+    ]);
+    expect(checkins[1].filters).toEqual([["member_id", MEMBER]]);
+    expect(checkins[1].order).toEqual([["week_start", { ascending: false }]]);
+    expect(checkins[1].limit).toBeNull();
+    for (const query of checkins) {
+      expect(query.columns).not.toMatch(/\*|score|category|review|transcript|grader|rubric|mention|team/);
+    }
+    expect(queries.find((q) => q.table === "recording_notices")?.columns).toBe("notice_version, recording_keep_days");
+    expect(new Set(queries.map((q) => q.table))).toEqual(
+      new Set(["members", "recording_notices", "checkins", "checkin_drafts"]),
+    );
+  });
+
+  describe("shows nothing graded, from any row", () => {
+    // What the poisoned rows and the graded check-in hold. "rough" as a word: the opening question
+    // may well say "through".
+    const THEMES = ["SECRET", "wellbeing", "burnt out", "exhausted", /\brough\b/];
+    const GRADES = ["score", "Score", "review", "transcript", "category", "Red", "Yellow", "Green", /\b[1-5]\s*\/\s*5\b/];
+    const shows = (html: string, word: string | RegExp) => (typeof word === "string" ? html.includes(word) : word.test(html));
+
+    it.each(["record", "draft", "submitted"] as const)("in the %s state", async (state) => {
+      STATES[state]();
+      const html = await render();
+      for (const word of [...THEMES, ...GRADES]) expect(shows(html, word), String(word)).toBe(false);
+    });
+
+    // The notice itself says what leaders see: the transcript and the scores.
+    it("in the notice state", async () => {
+      submitted();
+      STATES.notice();
+      const html = await render();
+      for (const word of THEMES) expect(shows(html, word), String(word)).toBe(false);
+    });
+  });
+
+  it("plays this week's submitted recording in the card", async () => {
+    submitted();
+    const doc = await page();
+    const audio = card(doc).querySelectorAll("audio");
+    expect(audio).toHaveLength(1);
+    expect(audio[0].getAttribute("src")).toBe(`/portal/dashboard/recording/${CHECKIN}.webm`);
+    expect(audio[0].getAttribute("preload")).toBe("none");
+    expect(audio[0].getAttribute("aria-label")).toBe("Your recording for the week of 5 October 2026");
+    expect(text(card(doc))).toContain("3 min 12 s · Kept until 6 October 2027");
+    // SavedTake still tells this tab its take was submitted, last in the card.
+    const content = card(doc).querySelector('[data-slot="card-content"]')!;
+    expect(content.lastElementChild?.getAttribute("data-saved-take")).toBe("none");
+    expect(text(card(doc))).not.toContain("Turn on my camera");
+    // Not listed again under Entries.
+    expect(entry(doc, "5 October")).toBeUndefined();
+  });
+
+  it("says when this week's submitted recording has nothing to play", async () => {
+    submitted();
+    lists.checkins = { data: [{ ...THIS_WEEK, audio_path: null }, ...EARLIER], error: null };
+    const doc = await page();
+    expect(card(doc).querySelector("audio")).toBeNull();
+    expect(text(card(doc))).toContain("Recording no longer kept");
+  });
+
+  describe("gives every recording one player", () => {
+    it("before this week's is submitted: Then and now has both, and their entries link up", async () => {
+      const html = await render();
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      expect(played(html).sort()).toEqual(
+        [`/portal/dashboard/recording/${SEP_28.id}.webm`, `/portal/dashboard/recording/${JUL_13.id}.m4a`].sort(),
+      );
+      expect(doc.querySelectorAll("audio")).toHaveLength(2);
+      const tile = thenAndNow(doc)!;
+      expect(text(tile.querySelector("#then-and-now-then"))).toBe("Then Week of 13 July 2026");
+      expect(text(tile.querySelector("#then-and-now-now"))).toBe("Now Week of 28 September 2026");
+      expect(tile.querySelectorAll("audio")).toHaveLength(2);
+      expect(text(entries(doc)).match(/Play it in Then and now, above/g)).toHaveLength(2);
+      expect(entries(doc)!.querySelectorAll("audio")).toHaveLength(0);
+    });
+
+    it("once it is: this week's plays in the card, and 28 September under Entries", async () => {
+      submitted();
+      const html = await render();
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      expect(played(html).sort()).toEqual(
+        [
+          `/portal/dashboard/recording/${CHECKIN}.webm`,
+          `/portal/dashboard/recording/${SEP_28.id}.webm`,
+          `/portal/dashboard/recording/${JUL_13.id}.m4a`,
+        ].sort(),
+      );
+      expect(doc.querySelectorAll("audio")).toHaveLength(3);
+      const now = thenAndNow(doc)!.querySelector('article[aria-labelledby="then-and-now-now"]')!;
+      expect(now.querySelector("audio")).toBeNull();
+      expect(text(now)).toContain("Play it in this week's entry, above");
+      expect(entry(doc, "28 September")!.querySelector("audio")?.getAttribute("src")).toBe(
+        `/portal/dashboard/recording/${SEP_28.id}.webm`,
+      );
+    });
+  });
+
+  it.each(["record", "draft", "submitted"] as const)(
+    "names every player for screen readers by its own week, year included (%s)",
+    async (state) => {
+      STATES[state]();
+      const doc = await page();
+      const labels = [...doc.querySelectorAll("audio")].map((audio) => audio.getAttribute("aria-label") ?? "");
+      expect(labels.length).toBeGreaterThan(1);
+      for (const label of labels) expect(label).toMatch(/^Your (recording|draft) for the week of \d{1,2} [A-Z][a-z]+ \d{4}$/);
+      expect(new Set(labels).size).toBe(labels.length);
+      if (state === "draft") {
+        expect(card(doc).querySelector("audio")?.getAttribute("aria-label")).toBe("Your draft for the week of 5 October 2026");
+      }
+    },
+  );
+
+  // Then and now's and the entries' links up to where a recording plays.
+  it.each([
+    ["record", ["#then-and-now-title"]],
+    ["submitted", ["#then-and-now-title", "#this-week"]],
+  ] as const)("links only to places on the page (%s)", async (state, targets) => {
+    STATES[state]();
+    const doc = await page();
+    const links = [...doc.querySelectorAll('a[href^="#"]')].map((a) => a.getAttribute("href")!);
+    expect([...new Set(links)].sort()).toEqual([...targets].sort());
+    for (const href of links) expect(doc.getElementById(href.slice(1)), href).not.toBeNull();
+    // "Play it in this week's entry, above" lands on the section that holds this week's card.
+    expect(doc.querySelector('section#this-week[aria-label="This week"]')?.contains(card(doc))).toBe(true);
+  });
+
+  it.each(["record", "notice", "submitted"] as const)("signs nothing for the diary on load (%s)", async (state) => {
+    STATES[state]();
+    await render();
+    expect(createSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no_member", null],
+    ["unavailable", null],
+    ["notice", "Before you record"],
+    ["record", "Record your check-in"],
+    ["draft", "Your recording"],
+    ["submitted", "Done for this week"],
+  ] as const)("keeps this week's heading first for focus (%s)", async (state, heading) => {
+    STATES[state]();
+    const wrapper = card(await page());
+    const h2 = wrapper.querySelector("h2");
+    expect(h2 && text(h2)).toBe(heading);
+    for (const h of wrapper.querySelectorAll("h2, h3, h4")) expect(text(h)).not.toMatch(/^(Then and now|Entries)$/);
+    expect(wrapper.querySelector("#then-and-now-title, #entries-title")).toBeNull();
+  });
+
+  it("groups entries by year", async () => {
+    const doc = await page();
+    const years = [...entries(doc)!.querySelectorAll("h3")].map(text);
+    expect(years).toEqual(["2026", "2025"]);
+    const y2025 = entries(doc)!.querySelector('section[aria-labelledby="entries-2025"]')!;
+    expect(text(y2025.querySelector("details > summary"))).toBe("2 entries, no recordings to play");
+    const dec29 = entry(doc, "29 December")!;
+    expect(y2025.contains(dec29)).toBe(true);
+    expect(text(dec29.querySelector("h4 .sr-only"))).toBe("2025");
+    expect(text(dec29)).toContain("Submitted Friday 2 January 2026");
+    expect(text(entry(doc, "6 July"))).toContain("Recording no longer kept");
+    expect(text(entry(doc, "5 January"))).toContain("No recording to play");
+    expect(text(entry(doc, "13 July"))).toContain("Kept until 11 October 2026");
+  });
+
+  it("stops offering a recording on its deadline day", async () => {
+    const jul20 = entry(await page(), "20 July")!;
+    expect(jul20.querySelector("audio")).toBeNull();
+    expect(text(jul20)).toContain("Recording no longer kept");
+    expect(text(jul20)).not.toContain("Kept until");
+  });
+
+  it("explains 90-day recordings while one can be played", async () => {
+    const NOTE = "Recordings you made under the earlier privacy notice are kept for 90 days, as it said.";
+    expect(text(entries(await page()))).toContain(NOTE);
+    lists.checkins = { data: EARLIER.filter((r) => r !== JUL_13), error: null };
+    expect(text(entries(await page()))).not.toContain(NOTE);
+  });
+
+  it("says when the first entry was", async () => {
+    expect(text(entries(await page()))).toContain("Your first entry was the week of 22 December 2025.");
+  });
+
+  describe("keeps this week working when entries can't load", () => {
+    const failed = () => {
+      lists.checkins = { data: null, error: { code: "PGRST000", message: "down" } };
+    };
+
+    it("while recording", async () => {
+      failed();
+      const doc = await page();
+      expect(entries(doc)!.querySelector('[role="alert"]')?.textContent).toBe(
+        "Couldn't load your entries. Refresh the page to try again.",
+      );
+      expect(text(card(doc))).toContain("Turn on my camera");
+      expect(thenAndNow(doc)).toBeNull();
+      expect(console.error).toHaveBeenCalledExactlyOnceWith("checkin page: loading failed", {
+        what: "diary",
+        code: "PGRST000",
+      });
+    });
+
+    it("once submitted, with the card as it was", async () => {
+      submitted();
+      failed();
+      const doc = await page();
+      const content = card(doc).querySelector('[data-slot="card-content"]')!;
+      expect([...content.children].map((el) => el.getAttribute("role") ?? el.getAttribute("data-saved-take"))).toEqual([
+        "status",
+        "none",
+      ]);
+      expect(text(content)).toBe("Submitted on Wednesday 7 October at 2:15 pm. Thanks, see you next week.");
+      expect(doc.querySelector("audio")).toBeNull();
+      expect(thenAndNow(doc)).toBeNull();
+      expect(text(entries(doc))).toContain("Couldn't load your entries.");
+    });
+  });
+
+  // As on a database without 0013, whose recording_notices has no recording_keep_days: never taken
+  // for "nothing accepted yet".
+  it("says it couldn't load, rather than show the notice, when the notices can't be read", async () => {
+    lists.recording_notices = { data: null, error: { code: "42703", message: "column does not exist" } };
+    const doc = await page();
+    expect(text(card(doc))).toBe("Couldn't load your check-in. Refresh the page to try again.");
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("checkin page: loading failed", { what: "notice", code: "42703" });
+    expect(thenAndNow(doc)).not.toBeNull(); // the diary still shows
+    expect(entry(doc, "28 September")).toBeDefined();
+  });
+
+  it("keeps the history when this week can't load", async () => {
+    reads.checkin_drafts = { data: null, error: { code: "PGRST000", message: "down" } };
+    const doc = await page();
+    expect(text(card(doc))).toBe("Couldn't load your check-in. Refresh the page to try again.");
+    expect(thenAndNow(doc)).not.toBeNull();
+    expect(entry(doc, "28 September")).toBeDefined();
   });
 
   it("covers check-ins made before submitting existed", async () => {

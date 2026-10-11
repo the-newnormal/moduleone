@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useRef, type ReactNode } from "react";
+import { pauseOtherAudio } from "@/components/recordings/pause-others";
 
 // The camera on a stage that fills the screen below the app bar, with what the member needs laid
 // over it: the progress and clock along the top (top), the question and the buttons in a panel at
 // the bottom (children). The video is muted and inline, as iPhone Safari needs to play it in the
 // page rather than fullscreen, and mirrored, as people expect to see themselves. The page behind
-// doesn't scroll while the stage is up.
+// doesn't scroll while the stage is up, and can't be reached under it (see below).
 export function CameraStage({ stream, top, children }: { stream: MediaStream; top?: ReactNode; children: ReactNode }) {
+  const stage = useRef<HTMLDivElement>(null);
   const video = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     const element = video.current;
@@ -25,8 +27,21 @@ export function CameraStage({ stream, top, children }: { stream: MediaStream; to
       page.style.overflow = before;
     };
   }, []);
+  // The page's other sections (the Diary's, with their players) sit unseen under the stage: inert
+  // while it is up, so Tab and screen readers can't reach them there either, and nothing is played
+  // into the take from under it. A recording already playing there is paused as the stage comes up,
+  // since its controls go out of reach with it. The app bar stays above the stage, and in reach.
+  useEffect(() => {
+    pauseOtherAudio();
+    const own = stage.current;
+    const main = own?.closest("main");
+    if (!own || !main) return;
+    const behind = [...main.children].filter((section) => !section.contains(own) && !section.hasAttribute("inert"));
+    behind.forEach((section) => section.setAttribute("inert", ""));
+    return () => behind.forEach((section) => section.removeAttribute("inert"));
+  }, []);
   return (
-    <div className="fixed inset-x-0 top-(--app-bar-h) bottom-0 z-30 bg-background p-2 sm:p-4">
+    <div ref={stage} className="fixed inset-x-0 top-(--app-bar-h) bottom-0 z-30 bg-background p-2 sm:p-4">
       <div className="relative mx-auto size-full max-w-6xl overflow-hidden rounded-2xl bg-black text-white">
         <video
           ref={video}

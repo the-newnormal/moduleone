@@ -3,7 +3,7 @@ import { after } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_AUDIO_BYTES } from "@/lib/checkin/audio";
 import { linkLiveCheckin, linkLiveTake } from "@/lib/checkin/live-sessions";
-import { noticeVersion } from "@/lib/checkin/notice";
+import { noticeVersion, RECORDING_KEEP_DAYS } from "@/lib/checkin/notice";
 import { processCheckin } from "@/lib/checkin/process";
 import { createServiceRoleClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -189,10 +189,20 @@ describe("acceptNotice", () => {
   it("records the current notice version for the session's member and login, once", async () => {
     expect(await acceptNotice(noticeVersion())).toEqual({ status: "accepted" });
     expect(upsert).toHaveBeenCalledExactlyOnceWith(
-      { member_id: MEMBER, auth_user_id: USER, notice_version: noticeVersion() },
+      { member_id: MEMBER, auth_user_id: USER, notice_version: noticeVersion(), recording_keep_days: 365 },
       { onConflict: "member_id,auth_user_id,notice_version", ignoreDuplicates: true },
     );
     expect(revalidatePath).toHaveBeenCalledExactlyOnceWith(PAGE);
+  });
+
+  // submit_checkin_draft keeps a recording a year only if its speaker's login had accepted a notice
+  // promising that (0013): the promise is the notice's own, and the login the session's.
+  it("stores how long the notice promised to keep recordings, with the login from the session", async () => {
+    await acceptNotice(noticeVersion());
+    const [row] = upsert.mock.calls[0];
+    expect(row.recording_keep_days).toBe(RECORDING_KEEP_DAYS);
+    expect(row.auth_user_id).toBe(USER);
+    expect(queries[0]).toEqual({ table: "members", columns: "id, team_id", filters: [["auth_user_id", USER]] });
   });
 
   it("reports a failed write", async () => {

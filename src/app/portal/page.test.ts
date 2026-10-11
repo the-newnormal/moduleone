@@ -459,7 +459,7 @@ describe("the check-in tile", () => {
     expect(text(hero)).toContain("Done for this week");
     expect(text(hero)).toContain("Submitted on Wednesday 7 October at 2:15 pm. Thanks, see you next week.");
     expect(text(hero)).toContain("Next check-in opens Monday 12 October.");
-    expect(text(link("/portal/checkin", hero)!)).toBe("Open check-in");
+    expect(text(link("/portal/checkin", hero)!)).toBe("Open your diary");
   });
 
   it("covers a check-in made before submitting existed", async () => {
@@ -490,7 +490,7 @@ describe("the check-in tile", () => {
     expect(text(hero.querySelector('[role="alert"]')!)).toBe(
       "Couldn't load your check-in. Refresh the page to try again.",
     );
-    expect(text(link("/portal/checkin", hero)!)).toBe("Open your check-in");
+    expect(text(link("/portal/checkin", hero)!)).toBe("Open your diary");
     expect(text(hero)).not.toContain("Start check-in");
     expect(text(tile("weeks")!)).toContain("Couldn't load your past weeks.");
     // The name was read before the failure, so the greeting keeps it.

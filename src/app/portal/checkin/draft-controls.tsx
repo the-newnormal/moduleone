@@ -64,7 +64,10 @@ export function DraftControls({ path }: { path: string }) {
       )}
       {confirming ? (
         <form action={submitAction} className="grid gap-3 rounded-md bg-muted px-4 py-3">
-          <p className="text-sm font-medium">You can&apos;t change it after submitting.</p>
+          <p className="text-sm font-medium">
+            You can&apos;t change it after submitting. It goes into your diary, and what you said is shared
+            with your team leader and HQ.
+          </p>
           <div className="flex flex-wrap gap-2">
             <Button ref={confirmButton} type="submit" disabled={busy}>
               {submitting ? "Submitting…" : "Yes, submit"}

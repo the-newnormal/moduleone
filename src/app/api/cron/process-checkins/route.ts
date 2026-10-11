@@ -5,10 +5,11 @@ import { tidyLiveSessions } from "@/lib/checkin/live-sessions";
 
 // The daily check-in job. Retries the transcription and grading of submitted check-ins whose last
 // attempt failed or stalled, so a check-in gets graded even if its member never opens the
-// check-in page again, deletes recordings older than 90 days, as the privacy notice promises, and
-// retries deleting the files of Master Admins' deletes and resets that Storage refused at the time,
-// and tidies live check-in sessions (ends any the browser never ended, logging their live
-// transcription, and deletes those whose take never became a check-in after 14 days).
+// check-in page again, deletes recordings whose time is up (90 days, or a year for those made after
+// accepting the Diary's notice), as the privacy notice promises, and retries deleting the files of
+// Master Admins' deletes and resets that Storage refused at the time, and tidies live check-in
+// sessions (ends any the browser never ended, logging their live transcription, and deletes those
+// whose take never became a check-in after 14 days).
 // Vercel Cron calls it on the schedule in vercel.json (daily at 03:23 Singapore time: once a day
 // works on every Vercel plan; on Pro it can run every 15 minutes), sending
 // `Authorization: Bearer $CRON_SECRET`. Set CRON_SECRET in the Vercel project; without it this

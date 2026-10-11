@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { baseMimeType, draftPath, extensionFor, isOwnAudioPath, MAX_AUDIO_BYTES } from "@/lib/checkin/audio";
 import { linkLiveCheckin, linkLiveTake } from "@/lib/checkin/live-sessions";
-import { noticeVersion } from "@/lib/checkin/notice";
+import { noticeVersion, RECORDING_KEEP_DAYS } from "@/lib/checkin/notice";
 import { processCheckin } from "@/lib/checkin/process";
 import { currentWeekStart } from "@/lib/checkin/week";
 import { noticeAccepted as hasAcceptedNotice, sessionMember as currentMember, type Session } from "@/lib/checkin/session";
@@ -114,7 +114,8 @@ async function removeFile(admin: ReturnType<typeof createServiceRoleClient>, mem
 }
 
 // `version` is the notice the member was shown. If the notice has changed since (a different
-// transcription setup), they are shown the new one instead of agreeing to text they never saw.
+// transcription setup), they are shown the new one instead of agreeing to text they never saw. The
+// acceptance records how long that notice promised to keep their recordings (0013).
 export async function acceptNotice(version: string): Promise<AcceptNoticeResult> {
   const session = await sessionMember();
   if ("status" in session) return session;
@@ -122,8 +123,13 @@ export async function acceptNotice(version: string): Promise<AcceptNoticeResult>
   const { error } = await createServiceRoleClient()
     .from("recording_notices")
     .upsert(
-      { member_id: session.member.id, auth_user_id: session.authUserId, notice_version: noticeVersion() },
-      // Keep the first acceptance time if the button is pressed twice.
+      {
+        member_id: session.member.id,
+        auth_user_id: session.authUserId,
+        notice_version: noticeVersion(),
+        recording_keep_days: RECORDING_KEEP_DAYS,
+      },
+      // Keep the first acceptance (its time and promise) if the button is pressed twice.
       { onConflict: "member_id,auth_user_id,notice_version", ignoreDuplicates: true },
     );
   if (error) {
@@ -287,6 +293,8 @@ export async function submitCheckin(shown: string): Promise<SubmitCheckinResult>
   const accepted = await noticeAccepted(session);
   if (accepted !== true) return accepted === false ? noticeRequired() : accepted;
 
+  // submit_checkin_draft decides how long the recording is kept (0013), from the login's own
+  // acceptances.
   const { data: id, error } = await createServiceRoleClient().rpc("submit_checkin_draft", {
     p_member_id: session.member.id,
     p_audio_path: shown,

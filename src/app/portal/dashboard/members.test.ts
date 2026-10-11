@@ -159,7 +159,7 @@ function nav(html: string): { label: string; href: string }[] {
   return [...items.matchAll(/<a [^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/g)].map(([, href, label]) => ({ label, href }));
 }
 const PORTAL = { label: "Portal", href: "/portal" };
-const CHECKIN = { label: "Check-in", href: "/portal/checkin" };
+const CHECKIN = { label: "Diary", href: "/portal/checkin" };
 const TEAM_HEALTH = { label: "Team health", href: "/portal/dashboard" };
 const ADMIN = { label: "Admin", href: "/admin" };
 

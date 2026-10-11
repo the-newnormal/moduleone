@@ -114,10 +114,12 @@ export async function tidyMemberAudio(memberId: string, weekStart: string): Prom
   }
 }
 
-// Recordings are kept 90 days: the privacy notice says so. forget_expired_checkin_audio (0004)
-// takes every file older than that off the check-in or draft that points at it and returns the
-// files, which this then deletes. A file it fails to delete is returned again on the next run.
-// Run daily with processPendingCheckins. Never throws.
+// Recordings are kept as long as the privacy notice promised when they were made (0013): a
+// check-in's for its `audio_keep_days` (90 days, or a year once its speaker had accepted the Diary's
+// notice before recording), every other file 90 days. forget_expired_checkin_audio takes each file
+// whose time is up off the check-in or draft that points at it and returns the files, which this
+// then deletes. A file it fails to delete is returned again on the next run. Run daily with
+// processPendingCheckins. Never throws.
 const REMOVE_BATCH = 100;
 
 export async function deleteExpiredRecordings(): Promise<{ deleted: number } | null> {
@@ -226,8 +228,8 @@ export async function processPendingCheckins(now: Date = new Date()): Promise<{ 
       .select("id, submitted_at, graded_at, processing_started_at, processing_error, processing_attempts")
       .not("submitted_at", "is", null)
       .is("graded_at", null)
-      // A recording deleted after 90 days can't be processed any more (the claim skips it), so
-      // such rows must not take up the batch.
+      // A recording that has been deleted (its time was up, or a Master Admin deleted it) can't be
+      // processed any more (the claim skips it), so such rows must not take up the batch.
       .not("audio_path", "is", null)
       .lt("processing_attempts", MAX_ATTEMPTS)
       .order("processing_started_at", { ascending: true, nullsFirst: true })

@@ -59,7 +59,7 @@ select columns_are('public', 'checkin_drafts',
   array['member_id', 'week_start', 'audio_path', 'mime_type', 'duration_ms', 'recorded_at', 'created_at'],
   'checkin_drafts has exactly the expected columns');
 select columns_are('public', 'recording_notices',
-  array['member_id', 'auth_user_id', 'notice_version', 'accepted_at'],
+  array['member_id', 'auth_user_id', 'notice_version', 'accepted_at', 'recording_keep_days'],
   'recording_notices has exactly the expected columns');
 select has_column('public', 'checkins', c, format('checkins has %s', c))
   from unnest(array['submitted_at', 'audio_duration_ms', 'transcript_model', 'transcript_warnings', 'grader_model', 'graded_at',
