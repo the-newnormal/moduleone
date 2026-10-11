@@ -4,6 +4,7 @@ import { noticeAccepted, sessionMember, type Session } from "@/lib/checkin/sessi
 import { initialState, parseState, type CoachState } from "@/lib/coach/policy";
 import { coachInstructions } from "@/lib/coach/prompt";
 import { RubricError } from "@/lib/rubrics/markdown";
+import { FALLBACK_REASONS } from "../contract";
 import { POST } from "./route";
 
 // The coach's rubric and policy are the real ones; coachInstructions is only watched, so a test can
@@ -56,6 +57,7 @@ beforeEach(() => {
   vi.mocked(readOpenSession).mockReset().mockResolvedValue(open());
   vi.mocked(saveCoachState).mockReset().mockResolvedValue(true);
   vi.mocked(coachInstructions).mockClear();
+  vi.spyOn(console, "info").mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -74,9 +76,9 @@ describe("POST /portal/checkin/live/end", () => {
     await expectEnded(await POST(post()));
   });
 
-  it("reads nothing more when no coach offer was on screen (shown is null)", async () => {
+  it("counts nothing when no coach offer was on screen (shown is null), and reads the session only for the log", async () => {
     await expectEnded(await POST(post()));
-    expect(readOpenSession).not.toHaveBeenCalled();
+    expect(readOpenSession).toHaveBeenCalledExactlyOnceWith(SESSION_ID, MEMBER);
     expect(saveCoachState).not.toHaveBeenCalled();
   });
 
@@ -91,6 +93,7 @@ describe("POST /portal/checkin/live/end", () => {
     const response = await POST(post());
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "ended" });
+    expect(console.info).not.toHaveBeenCalled();
   });
 
   describe("the offer on screen as the take ends", () => {
@@ -147,14 +150,37 @@ describe("POST /portal/checkin/live/end", () => {
         throw new RubricError("rubrics/coach.md", ["The settings are missing."]);
       });
       await expectEnded(await POST(post({ ...BODY, shown: 1 })));
-      expect(readOpenSession).not.toHaveBeenCalled();
       expect(saveCoachState).not.toHaveBeenCalled();
+      expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", expect.objectContaining({ followUps: 0 }));
     });
 
-    it("still ends the session when the save is turned away (a later call, say)", async () => {
+    it("still ends the session when the save is turned away (a later call, say), and logs the counts it holds", async () => {
       vi.mocked(saveCoachState).mockResolvedValue(false);
       await expectEnded(await POST(post({ ...BODY, shown: 1 })));
       expect(saveCoachState).toHaveBeenCalledOnce();
+      // The question on screen wasn't counted, so the log doesn't count it either.
+      expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", expect.objectContaining({ followUps: 0, bank: 0, rejected: 0 }));
+    });
+
+    it("logs what a newer coach call saved when that call got there first", async () => {
+      const newer: CoachState = { ...OFFERED, asked: ["activity_work"], followUps: 3, counts: { ...OFFERED.counts, reads: 5 } };
+      vi.mocked(readOpenSession).mockResolvedValueOnce(open()).mockResolvedValueOnce(open(newer));
+      vi.mocked(saveCoachState).mockResolvedValue(false);
+      await expectEnded(await POST(post({ ...BODY, shown: 1 })));
+      expect(readOpenSession).toHaveBeenCalledTimes(2);
+      expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", expect.objectContaining({ followUps: 3, reads: 5 }));
+    });
+
+    it("logs no counts when the session can't be read again after a turned-away save", async () => {
+      vi.mocked(readOpenSession).mockResolvedValueOnce(open()).mockResolvedValueOnce(null);
+      vi.mocked(saveCoachState).mockResolvedValue(false);
+      await expectEnded(await POST(post({ ...BODY, shown: 1, fallback: "no_text" })));
+      expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", { fallback: "no_text" });
+    });
+
+    it("logs the counts with the question on screen once that is saved", async () => {
+      await expectEnded(await POST(post({ ...BODY, shown: 1 })));
+      expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", expect.objectContaining({ followUps: 1, bank: 1, rejected: 1 }));
     });
 
     it("still ends the session when counting throws, logging only the error's name", async () => {
@@ -166,7 +192,90 @@ describe("POST /portal/checkin/live/end", () => {
     });
   });
 
+  describe("the log", () => {
+    // A take that fell back after two failed reads, with one question in the file's wording shown in
+    // place of Claude's (turned down as too personal), and the follow-up on screen as it ended.
+    const PLAYED: CoachState = {
+      ...OFFERED,
+      coverage: { activity_work: "clear", activity_outcome: "brief", excellence_moment: "none" },
+      tone: "hard_week",
+      asked: ["activity_outcome"],
+      followUps: 1,
+      perArea: { activity: 1 },
+      wordsRead: 140,
+      counts: {
+        ...initialState().counts,
+        reads: 4,
+        failures: 2,
+        tailored: 1,
+        latencyMs: 3400,
+        slowestMs: 1200,
+        rejectedWhy: { blocked: 1, quote_not_said: 1 },
+        noRead: 1,
+      },
+    };
+
+    it("says why live coaching stopped and how the take went, from the counts as it ends: codes and counts only", async () => {
+      vi.mocked(readOpenSession).mockResolvedValue(open(PLAYED));
+      await expectEnded(await POST(post({ ...BODY, shown: 1, fallback: "coach_failures" })));
+      expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", {
+        fallback: "coach_failures",
+        reads: 4,
+        failures: 2,
+        tailored: 1,
+        bank: 1,
+        rejected: 1,
+        noRead: 1,
+        followUps: 2,
+      });
+      const logged = JSON.stringify(vi.mocked(console.info).mock.calls);
+      for (const id of [MEMBER, SESSION_ID]) expect(logged).not.toContain(id);
+      // Why a question was turned down stays in the session: beside a time, it could point at a person.
+      for (const reason of ["rejectedWhy", "blocked", "quote_not_said"]) expect(logged).not.toContain(reason);
+      for (const topic of ["activity_work", "activity_outcome", "excellence_moment"]) expect(logged).not.toContain(topic);
+      for (const level of ["brief", "clear", "none", "hard_week"]) expect(logged).not.toContain(`"${level}"`);
+    });
+
+    it("logs no reason for a take that kept its follow-ups to the end", async () => {
+      await expectEnded(await POST(post({ ...BODY, shown: 0 })));
+      expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", expect.objectContaining({ fallback: null, reads: 0 }));
+    });
+
+    // Nothing limits end calls, so one that ends no take would let anyone add fallbacks to the count.
+    it("logs nothing when the call ends no session (already ended, or not theirs)", async () => {
+      vi.mocked(readOpenSession).mockResolvedValue(null);
+      vi.mocked(endLiveSession).mockResolvedValue(false);
+      for (let call = 0; call < 3; call++) {
+        const response = await POST(post({ ...BODY, fallback: "coach_failures" }));
+        expect(await response.json()).toEqual({ status: "ended" });
+      }
+      expect(endLiveSession).toHaveBeenCalledTimes(3);
+      expect(console.info).not.toHaveBeenCalled();
+    });
+
+    it("logs the reason alone when it ends the session but couldn't read its counts", async () => {
+      vi.mocked(readOpenSession).mockResolvedValue(null);
+      await expectEnded(await POST(post({ ...BODY, fallback: "final_code" })));
+      expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", { fallback: "final_code" });
+    });
+
+    it("still logs, without counts, when counting throws", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.mocked(readOpenSession).mockRejectedValue(new TypeError("fetch failed"));
+      await expectEnded(await POST(post({ ...BODY, fallback: "no_text" })));
+      expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", { fallback: "no_text" });
+    });
+
+    it.each(FALLBACK_REASONS)("takes the reason %s", async (fallback) => {
+      await expectEnded(await POST(post({ ...BODY, fallback })));
+      expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", expect.objectContaining({ fallback }));
+    });
+  });
+
   it.each([
+    ["an unknown fallback reason", { ...BODY, fallback: "bored" }],
+    ["a fallback reason that isn't text", { ...BODY, fallback: 3 }],
+    ["a null fallback reason", { ...BODY, fallback: null }],
     ["a session id that isn't a uuid", { ...BODY, sessionId: "not-a-session" }],
     ["a negative time", { ...BODY, recordedMs: -1 }],
     ["a time over an hour", { ...BODY, recordedMs: 3_600_001 }],
@@ -186,6 +295,7 @@ describe("POST /portal/checkin/live/end", () => {
     expect(sessionMember).not.toHaveBeenCalled();
     expect(readOpenSession).not.toHaveBeenCalled();
     expect(endLiveSession).not.toHaveBeenCalled();
+    expect(console.info).not.toHaveBeenCalled();
   });
 
   it("refuses another site's request", async () => {

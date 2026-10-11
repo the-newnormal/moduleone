@@ -55,7 +55,8 @@ describe("coachTurn", () => {
     const result = await turn({ transcript: say(FIRST_READ_WORDS - 1), read });
     expect(read).not.toHaveBeenCalled();
     expect(result).toMatchObject({ result: null, failure: null });
-    expect(result.state).toMatchObject({ wordsRead: 0, counts: { reads: 0, failures: 0 } });
+    // An offer decided without Claude, and counted as such.
+    expect(result.state).toMatchObject({ wordsRead: 0, counts: { reads: 0, failures: 0, noRead: 1 } });
     expect(result.offer).toMatchObject({ kind: "question", topic: "activity_work", source: "bank" });
     expect(result.touched).toEqual({ activity: false, excellence: false, morale: false });
   });
@@ -68,10 +69,18 @@ describe("coachTurn", () => {
     expect(result.failure).toBeNull();
     expect(result.state.coverage).toEqual({ activity_work: "clear", morale_feeling: "brief" });
     expect(result.state.wordsRead).toBe(FIRST_READ_WORDS);
-    expect(result.state.counts).toMatchObject({ reads: 1, failures: 0, latencyMs: 180, slowestMs: 180 });
+    expect(result.state.counts).toMatchObject({ reads: 1, failures: 0, latencyMs: 180, slowestMs: 180, noRead: 0 });
     expect(result.touched).toEqual({ activity: true, excellence: false, morale: true });
-    // The area they haven't touched comes first.
-    expect(result.offer).toMatchObject({ kind: "question", topic: "excellence_moment" });
+    // With no question from Claude, the key topic of the area they haven't touched comes first.
+    expect(result.offer).toMatchObject({ kind: "question", topic: "excellence_moment", source: "bank" });
+  });
+
+  it("asks Claude's follow-up on what they are talking about, ahead of an area they haven't touched", async () => {
+    const question = "You mentioned the vendor onboarding: where did that get to?";
+    const read = reader(readOf({ coverage: { activity_work: "clear" }, target: "activity_outcome", quote: "vendor onboarding", question }));
+    const result = await turn({ transcript: say(FIRST_READ_WORDS), read });
+    expect(result.offer).toMatchObject({ kind: "question", topic: "activity_outcome", source: "tailored", text: question });
+    expect(result.touched).toEqual({ activity: true, excellence: false, morale: false });
   });
 
   it("reads again only once enough new words have come in", async () => {
@@ -88,6 +97,54 @@ describe("coachTurn", () => {
     expect(next.state.coverage.activity_work).toBe("clear");
     expect(next.state.wordsRead).toBe(FIRST_READ_WORDS + NEW_READ_WORDS);
     expect(next.state.counts).toMatchObject({ reads: 2, latencyMs: 400, slowestMs: 300 });
+  });
+
+  // The recorder held the last offer because they said more after its read ("team ok lah").
+  it("reads again for a single new word when the recorder asks to confirm the offer it is holding", async () => {
+    const first = await turn({ transcript: say(FIRST_READ_WORDS), read: reader(readOf({ coverage: { activity_work: "clear" } })) });
+    const read = reader(readOf({ coverage: { morale_feeling: "clear" } }));
+
+    const without = await turn({ state: first.state, transcript: say(FIRST_READ_WORDS + 1), read });
+    expect(read).not.toHaveBeenCalled();
+    expect(without.state.wordsRead).toBe(FIRST_READ_WORDS);
+
+    const reread = await turn({ state: first.state, transcript: say(FIRST_READ_WORDS + 1), reread: true, read });
+    expect(read).toHaveBeenCalledOnce();
+    expect(reread.state.wordsRead).toBe(FIRST_READ_WORDS + 1);
+    expect(reread.state.counts.reads).toBe(2);
+    expect(reread.touched).toMatchObject({ morale: true });
+  });
+
+  // Claude goes deeper on their work; then they say "hmm ya", the recorder asks for a reread, and
+  // Claude reads the same. A filler word doesn't mean they have moved off their work, so its
+  // follow-up still beats the untouched areas' key topics (0.48 + 0.4 against 1.2 - 0.5).
+  it("keeps following what they talk about after a reread of a few words that raises nothing", async () => {
+    const question = "Where did the payment gateway migration stand by Friday?";
+    const read = reader(readOf({ coverage: { activity_work: "clear", activity_outcome: "brief" }, target: "activity_outcome", question }));
+    const first = await turn({ transcript: say(30), elapsedS: 30, read });
+    expect(first.offer).toMatchObject({ topic: "activity_outcome", source: "tailored", text: question });
+
+    const reread = await turn({ state: first.state, transcript: `${say(30)} hmm ya.`, elapsedS: 34, reread: true, read });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(reread.state.flow).toEqual(["activity"]);
+    expect(reread.offer).toMatchObject({ topic: "activity_outcome", source: "tailored", text: question });
+  });
+
+  it("drops the flow after a read of enough new words that raises nothing", async () => {
+    const read = reader(readOf({ coverage: { activity_work: "clear", activity_outcome: "brief" } }));
+    const first = await turn({ transcript: say(30), read });
+    expect(first.state.flow).toEqual(["activity"]);
+    const next = await turn({ state: first.state, transcript: say(30 + NEW_READ_WORDS), reread: true, read });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(next.state.flow).toEqual([]);
+  });
+
+  it("doesn't read for a reread with nothing new", async () => {
+    const first = await turn({ transcript: say(FIRST_READ_WORDS), read: reader() });
+    const read = reader();
+    const again = await turn({ state: first.state, transcript: say(FIRST_READ_WORDS), reread: true, read });
+    expect(read).not.toHaveBeenCalled();
+    expect(again.result).toBeNull();
   });
 
   it("tells the read which topics have been asked or skipped", async () => {
@@ -134,13 +191,13 @@ describe("coachTurn", () => {
     const result = await turn({ state, transcript: say(FIRST_READ_WORDS), read: failing });
     expect(result.failure).toBe(failure);
     expect(result.result).toBeNull();
-    expect(result.state).toMatchObject({ wordsRead: 0, counts: { reads: 0, failures: 1 } });
+    expect(result.state).toMatchObject({ wordsRead: 0, counts: { reads: 0, failures: 1, noRead: 1 } });
     expect(result.offer).toMatchObject({ kind: "question", topic: "excellence_moment" });
 
     const read = reader();
     const again = await turn({ state: result.state, transcript: say(FIRST_READ_WORDS), read });
     expect(read).toHaveBeenCalledOnce();
-    expect(again.state.counts).toMatchObject({ reads: 1, failures: 1 });
+    expect(again.state.counts).toMatchObject({ reads: 1, failures: 1, noRead: 1 });
   });
 
   it("lets any other error through", async () => {

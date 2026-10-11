@@ -4,6 +4,7 @@ import { noticeAccepted, sessionMember, type Session } from "@/lib/checkin/sessi
 import { CoachError, readTranscript, type CoachRead, type CoachReadResult } from "@/lib/coach";
 import { initialState, type CoachState } from "@/lib/coach/policy";
 import { coachRubric } from "@/lib/coach/rubric";
+import { countWords } from "@/lib/grader/prompt";
 import { MAX_TRANSCRIPT_CHARS } from "../contract";
 import { POST } from "./route";
 
@@ -150,7 +151,7 @@ describe("POST /portal/checkin/live/coach", () => {
 
   it("carries on from what was known when Claude's read fails, and says so", async () => {
     vi.mocked(readTranscript).mockRejectedValue(
-      new CoachError(`No reply from the Anthropic API within 6 s for "${TRANSCRIPT}"`, { reason: "api", retryable: true }),
+      new CoachError(`No reply from the Anthropic API within 6 s for "${TRANSCRIPT}"`, { reason: "api", retryable: true, code: "deadline" }),
     );
     const response = await POST(post());
     expect(response.status).toBe(200);
@@ -160,7 +161,31 @@ describe("POST /portal/checkin/live/coach", () => {
     expect(console.error).toHaveBeenCalledExactlyOnceWith("live coach: reading the transcript failed", {
       reason: "api",
       retryable: true,
+      code: "deadline",
+      status: null,
     });
+  });
+
+  // The message isn't logged: the SDK's words in it can repeat Claude's reply, and so theirs.
+  it("logs an API error's code and HTTP status, never its message", async () => {
+    vi.mocked(readTranscript).mockRejectedValue(
+      new CoachError(`The Anthropic SDK rejected the request: ${TRANSCRIPT}`, {
+        reason: "api",
+        retryable: true,
+        code: "http_error",
+        status: 529,
+        cause: new Error(TRANSCRIPT),
+      }),
+    );
+    await POST(post());
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("live coach: reading the transcript failed", {
+      reason: "api",
+      retryable: true,
+      code: "http_error",
+      status: 529,
+    });
+    const logged = JSON.stringify(vi.mocked(console.error).mock.calls);
+    for (const word of ["Jurong", "vendor", "lah", "SDK"]) expect(logged).not.toContain(word);
   });
 
   it("logs the cost of a reply that came back but couldn't be used", async () => {
@@ -232,6 +257,30 @@ describe("POST /portal/checkin/live/coach", () => {
     expect(savedState()).toMatchObject({ counts: { reads: 3 }, asked: ["activity_outcome"] });
   });
 
+  // The recorder held the offer this session last sent: they said more after the read behind it.
+  it("reads again for a single new word when the recorder asks to confirm the offer it holds", async () => {
+    const state: CoachState = {
+      ...initialState(),
+      coverage: { activity_work: "clear" },
+      wordsRead: countWords(TRANSCRIPT) - 1,
+      counts: { ...initialState().counts, reads: 1 },
+    };
+    vi.mocked(claimCoachCall).mockResolvedValue(claim({ state }));
+    await POST(post());
+    expect(readTranscript).not.toHaveBeenCalled();
+
+    const response = await POST(post({ reread: true }));
+    expect(response.status).toBe(200);
+    expect(readTranscript).toHaveBeenCalledOnce();
+    expect(vi.mocked(saveCoachState).mock.calls[1][3]).toMatchObject({ wordsRead: countWords(TRANSCRIPT), counts: { reads: 2 } });
+  });
+
+  it("takes reread: false as an ordinary call", async () => {
+    const response = await POST(post({ reread: false }));
+    expect(response.status).toBe(200);
+    expect(readTranscript).toHaveBeenCalledOnce();
+  });
+
   it("counts the question on screen as asked, and a skipped one as skipped", async () => {
     const offered: CoachState = {
       ...initialState(),
@@ -296,6 +345,8 @@ describe("POST /portal/checkin/live/coach", () => {
     ["an elapsed time as a string", { elapsedMs: "30000" }],
     ["a shown offer that isn't a whole number", { shown: 1.5 }],
     ["a negative skip", { skip: -1 }],
+    ["a reread that isn't true or false", { reread: "yes" }],
+    ["a null reread", { reread: null }],
     ["a member id", { memberId: MEMBER }],
     ["any other extra key", { state: { tone: "neutral" } }],
   ])("refuses %s", async (_label, change) => {

@@ -29,16 +29,17 @@ export async function POST(request: Request): Promise<Response> {
   if (typeof session === "string") return refuse(session);
   const memberId = session.member.id;
 
-  const started = await startLiveSession(memberId, {
-    stt: `openai:${liveSttModel()}`,
-    coach: coachModel(),
-    coachRubric: instructions.version,
-  });
+  const sttModel = liveSttModel();
+  const coach = coachModel();
+  const coachRubric = instructions.version;
+  const started = await startLiveSession(memberId, { stt: `openai:${sttModel}`, coach, coachRubric });
   if (typeof started === "string") return refuse(started);
+  // So the logs show live check-ins running, and on which rubric and models. Nothing about who.
+  console.info("live session started", { coachRubric, sttModel, coachModel: coach });
   return json({
     status: "ready",
     sessionId: started.id,
-    sttModel: liveSttModel(),
+    sttModel,
     opening: instructions.rubric.opening,
     pacing: pacingFrom(instructions.rubric.settings),
   } satisfies LiveStartResponse);

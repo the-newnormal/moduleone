@@ -143,14 +143,13 @@ describe("parseCoachOutput", () => {
     ["an array", [GOOD], "(root)"],
   ])("rejects %s, naming the field", (_label, reply, field) => {
     const error = thrownBy(() => parseCoachOutput(JSON.stringify(reply), RUBRIC));
-    expect(error.reason).toBe("invalid_output");
-    expect(error.retryable).toBe(true);
+    expect(error).toMatchObject({ reason: "invalid_output", retryable: true, code: "schema" });
     expect(error.message).toContain(field);
   });
 
   it.each([[""], ["not json"], ['{"coverage": {'], ["Activity: clear"]])("rejects %j, which isn't JSON", (text) => {
     const error = thrownBy(() => parseCoachOutput(text, RUBRIC));
-    expect(error).toMatchObject({ reason: "invalid_output", retryable: true });
+    expect(error).toMatchObject({ reason: "invalid_output", retryable: true, code: "not_json" });
     expect(error.message).toContain("not valid JSON");
   });
 

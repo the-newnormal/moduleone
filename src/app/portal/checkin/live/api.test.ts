@@ -41,7 +41,7 @@ const COACH_REQUEST: CoachRequest = {
 
 const COACH_OK = {
   status: "ok",
-  offer: { id: 1, kind: "question", text: "Where did your superpower come in this week?" },
+  offer: { id: 1, kind: "question", text: "When were you or your team at your best this week?" },
   touched: { activity: true, excellence: false, morale: false },
   degraded: false,
 };
@@ -173,6 +173,13 @@ describe("endLive", () => {
     endLive({ sessionId: READY.sessionId, recordedMs: 0, shown: null });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(JSON.parse(sentInit().body as string)).toEqual({ sessionId: READY.sessionId, recordedMs: 0, shown: null });
+  });
+
+  it("sends why live coaching stopped, when it did", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ status: "ended" }));
+    endLive({ sessionId: READY.sessionId, recordedMs: 9000, shown: 0, fallback: "no_text" });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(JSON.parse(sentInit().body as string)).toEqual({ sessionId: READY.sessionId, recordedMs: 9000, shown: 0, fallback: "no_text" });
   });
 
   it("swallows failures", async () => {
