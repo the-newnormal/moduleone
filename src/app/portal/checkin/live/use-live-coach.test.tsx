@@ -550,6 +550,26 @@ describe("an offer they have said more since", () => {
     expect(live.deps.ask.mock.calls[3][0]).not.toHaveProperty("reread");
   });
 
+  it("still owes that read when it fails, so the next words are read with Claude too", async () => {
+    const second = deferred<CoachResponse>();
+    const live = setup();
+    await secondRead(live, second.promise);
+    await live.speak(1500);
+    second.resolve(ok(TEAM_QUESTION));
+    await live.pause(10_000);
+    live.deps.ask.mockRejectedValueOnce(new Error("network"));
+    live.say(TEAM_OK);
+    await live.pause(500);
+    expect(live.deps.ask).toHaveBeenCalledTimes(3);
+    expect(live.deps.ask.mock.calls[2][0]).toMatchObject({ reread: true });
+    // That read never reached Claude: the next few words are read with it, not decided from before.
+    live.say("Ya.");
+    await live.pause(6000);
+    expect(live.deps.ask).toHaveBeenCalledTimes(4);
+    expect(live.deps.ask.mock.calls[3][0]).toMatchObject({ reread: true, transcript: expect.stringContaining(TEAM_OK) });
+    expect(live.offersShown()).not.toContain(TEAM_QUESTION.id);
+  });
+
   // A remark while the read is still out isn't left for later: if that read's answer came after
   // they had clearly stopped, with the remark's text not back, the offer would go, and the server
   // would offer it again from what it knew.

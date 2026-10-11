@@ -382,6 +382,11 @@ export function createLiveCoach({
     if (sessionId === null) return;
     const at = deps.now();
     const asked: ReadAsked = { requestedAt: at, words: r.words, spokenAt: spokenMs(r.voice, at), lost: r.turnsLost, confirms };
+    // A reread that never reaches Claude (timed out, failed, turned away, or degraded) still owes
+    // one: without it, the next few words go unread and a dropped question can come straight back.
+    const stillOwed = () => {
+      if (reread) r.rereadOwed = true;
+    };
     const seq = ++r.seq;
     const controller = new AbortController();
     const timer = setTimeout(() => {
@@ -389,6 +394,7 @@ export function createLiveCoach({
       r.call = null;
       controller.abort();
       if (skip === null) r.pending = null; // see answer()
+      stillOwed();
       if (active(r)) failed(r);
     }, COACH_TIMEOUT_MS);
     r.call = { seq, controller, timer };
@@ -424,6 +430,7 @@ export function createLiveCoach({
     if (r.call?.seq !== seq) return;
     clearTimeout(timer);
     r.call = null;
+    if (response === null || response.status === "error" || response.degraded) stillOwed();
     if (active(r)) answer(r, response, asked, skip);
   }
 

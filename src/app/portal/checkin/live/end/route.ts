@@ -55,8 +55,10 @@ async function lastState(sessionId: string, memberId: string, shown: number | nu
     return before;
   }
   const after = acknowledge(before, shown, rubric);
-  if (after !== before) await saveCoachState(sessionId, memberId, open.callNumber, after, recordedMs);
-  return after;
+  if (after === before) return before;
+  // The log reports what the session holds: a save that didn't apply (failed, or a newer coach call
+  // got there first) leaves the state as it was.
+  return (await saveCoachState(sessionId, memberId, open.callNumber, after, recordedMs)) ? after : before;
 }
 
 // The counts the log shows (rubrics/README.md, section 5). Never rejectedWhy: a line is one take,

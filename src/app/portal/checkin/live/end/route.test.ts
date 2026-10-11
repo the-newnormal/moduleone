@@ -154,10 +154,17 @@ describe("POST /portal/checkin/live/end", () => {
       expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", expect.objectContaining({ followUps: 0 }));
     });
 
-    it("still ends the session when the save is turned away (a later call, say)", async () => {
+    it("still ends the session when the save is turned away (a later call, say), and logs the counts it holds", async () => {
       vi.mocked(saveCoachState).mockResolvedValue(false);
       await expectEnded(await POST(post({ ...BODY, shown: 1 })));
       expect(saveCoachState).toHaveBeenCalledOnce();
+      // The question on screen wasn't counted, so the log doesn't count it either.
+      expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", expect.objectContaining({ followUps: 0, bank: 0, rejected: 0 }));
+    });
+
+    it("logs the counts with the question on screen once that is saved", async () => {
+      await expectEnded(await POST(post({ ...BODY, shown: 1 })));
+      expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", expect.objectContaining({ followUps: 1, bank: 1, rejected: 1 }));
     });
 
     it("still ends the session when counting throws, logging only the error's name", async () => {
