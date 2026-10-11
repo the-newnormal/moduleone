@@ -32,10 +32,11 @@ export async function POST(request: Request): Promise<Response> {
     console.error("live end: counting the last offer failed", { error: error instanceof Error ? error.name : "unknown" });
     return null;
   });
-  await endLiveSession(sessionId, memberId, recordedMs);
+  const ended = await endLiveSession(sessionId, memberId, recordedMs);
   // How the take went, in codes and counts: anyone with access to the logs reads them, so no ids,
-  // topics, coverage or wording. Counts only while the session was open (not on a second call).
-  console.info("live end", { fallback: fallback ?? null, ...(state && outcome(state)) });
+  // topics, coverage or wording. Only when this call ended the member's own session: a second call,
+  // or one for a session that isn't theirs, would add a line (and a fallback) for no take at all.
+  if (ended) console.info("live end", { fallback: fallback ?? null, ...(state && outcome(state)) });
   return json({ status: "ended" } satisfies EndResponse);
 }
 
@@ -59,7 +60,7 @@ async function lastState(sessionId: string, memberId: string, shown: number | nu
 }
 
 // The counts the log shows (rubrics/README.md, section 5). Never rejectedWhy: a line is one take,
-// and a reason such as blocked_personal beside its time could point at whoever recorded then.
+// and why Claude's wording was turned down beside its time could point at whoever recorded then.
 function outcome(state: CoachState) {
   const { reads, failures, tailored, bank, rejected, noRead } = state.counts;
   return { reads, failures, tailored, bank, rejected, noRead, followUps: state.followUps };

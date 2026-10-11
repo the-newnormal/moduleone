@@ -93,6 +93,7 @@ describe("POST /portal/checkin/live/end", () => {
     const response = await POST(post());
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "ended" });
+    expect(console.info).not.toHaveBeenCalled();
   });
 
   describe("the offer on screen as the take ends", () => {
@@ -186,7 +187,7 @@ describe("POST /portal/checkin/live/end", () => {
         tailored: 1,
         latencyMs: 3400,
         slowestMs: 1200,
-        rejectedWhy: { blocked_personal: 1 },
+        rejectedWhy: { blocked: 1, quote_not_said: 1 },
         noRead: 1,
       },
     };
@@ -207,7 +208,7 @@ describe("POST /portal/checkin/live/end", () => {
       const logged = JSON.stringify(vi.mocked(console.info).mock.calls);
       for (const id of [MEMBER, SESSION_ID]) expect(logged).not.toContain(id);
       // Why a question was turned down stays in the session: beside a time, it could point at a person.
-      expect(logged).not.toContain("blocked_personal");
+      for (const reason of ["rejectedWhy", "blocked", "quote_not_said"]) expect(logged).not.toContain(reason);
       for (const topic of ["activity_work", "activity_outcome", "excellence_moment"]) expect(logged).not.toContain(topic);
       for (const level of ["brief", "clear", "none", "hard_week"]) expect(logged).not.toContain(`"${level}"`);
     });
@@ -217,7 +218,19 @@ describe("POST /portal/checkin/live/end", () => {
       expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", expect.objectContaining({ fallback: null, reads: 0 }));
     });
 
-    it("logs the reason alone when the session isn't open (already ended, or not theirs)", async () => {
+    // Nothing limits end calls, so one that ends no take would let anyone add fallbacks to the count.
+    it("logs nothing when the call ends no session (already ended, or not theirs)", async () => {
+      vi.mocked(readOpenSession).mockResolvedValue(null);
+      vi.mocked(endLiveSession).mockResolvedValue(false);
+      for (let call = 0; call < 3; call++) {
+        const response = await POST(post({ ...BODY, fallback: "coach_failures" }));
+        expect(await response.json()).toEqual({ status: "ended" });
+      }
+      expect(endLiveSession).toHaveBeenCalledTimes(3);
+      expect(console.info).not.toHaveBeenCalled();
+    });
+
+    it("logs the reason alone when it ends the session but couldn't read its counts", async () => {
       vi.mocked(readOpenSession).mockResolvedValue(null);
       await expectEnded(await POST(post({ ...BODY, fallback: "final_code" })));
       expect(console.info).toHaveBeenCalledExactlyOnceWith("live end", { fallback: "final_code" });

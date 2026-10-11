@@ -9,8 +9,9 @@ import { CoachError, type CoachRead, type CoachRubric, type Offer, type Touched 
 
 // Claude reads the transcript only once there is something new to read: the first time at this many
 // words, then after this many more. A call with fewer just re-decides from what is known, unless it
-// is a reread: the recorder is holding the last offer because they said more after its read ("team
-// ok lah"), and re-deciding from the old coverage would only offer the same thing again.
+// is a reread: they said more after the read behind the offer the recorder has waiting ("team ok
+// lah"), or after one it dropped before their words came back as text, and re-deciding from the old
+// coverage would only offer the same thing again.
 export const FIRST_READ_WORDS = 12;
 export const NEW_READ_WORDS = 8;
 

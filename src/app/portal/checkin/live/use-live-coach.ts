@@ -30,6 +30,8 @@ import {
   MAX_COACH_FAILURES_IN_A_ROW,
   MAX_READS,
   NO_TEXT_WHILE_SPEAKING_MS,
+  questionHadItsTime,
+  rereadDue,
   shouldCommit,
   shouldRead,
   shouldShow,
@@ -119,8 +121,14 @@ export type LiveCoachController = {
 type Timer = ReturnType<typeof setTimeout>;
 
 // When a read was asked for, and how much they had said by then: words of text, time spoken (some
-// of it may not have come back as text yet), and turns whose transcription had failed.
-type ReadAsked = { requestedAt: number; words: number; spokenAt: number; lost: number };
+// of it may not have come back as text yet), and turns whose transcription had failed; and whether
+// it was a held offer's one read to confirm it (its own offer is then never held).
+type ReadAsked = { requestedAt: number; words: number; spokenAt: number; lost: number; confirms: boolean };
+
+// A read's options: reread asks the server to read any new words with Claude, however few (they
+// may answer what an offer asks); confirms marks a held offer's one read to confirm it.
+type ReadOptions = { reread: boolean; confirms: boolean };
+const PLAIN_READ: ReadOptions = { reread: false, confirms: false };
 
 // One take's live coaching, from Start to stop.
 type Run = {
@@ -165,6 +173,9 @@ type Run = {
   failures: number;
   // The offer they asked to replace with "Different question", until that call is sent.
   skipWanted: number | null;
+  // A held offer was dropped before what they said after its read came back as text: the next read
+  // asks the server to read that with Claude, so it doesn't offer the same again from what it knew.
+  rereadOwed: boolean;
   // The coach's latest offer, waiting for a pause, and when the read behind it was asked for (with
   // how much they had said by then).
   pending: ({ offer: ShownOffer } & ReadAsked) | null;
@@ -211,6 +222,7 @@ function newRun(opening: string): Run {
     seq: 0,
     failures: 0,
     skipWanted: null,
+    rereadOwed: false,
     pending: null,
     shown: openingOffer(opening),
     shownAt: 0,
@@ -365,13 +377,11 @@ export function createLiveCoach({
     publish(r);
   }
 
-  // reread: an offer is held for what they said after its read, and this read is to confirm or
-  // replace it, however few words are new (the server reads them with Claude).
-  async function ask(r: Run, skip: number | null, reread = false) {
+  async function ask(r: Run, skip: number | null, { reread, confirms }: ReadOptions = PLAIN_READ) {
     const sessionId = r.sessionId;
     if (sessionId === null) return;
     const at = deps.now();
-    const asked: ReadAsked = { requestedAt: at, words: r.words, spokenAt: spokenMs(r.voice, at), lost: r.turnsLost };
+    const asked: ReadAsked = { requestedAt: at, words: r.words, spokenAt: spokenMs(r.voice, at), lost: r.turnsLost, confirms };
     const seq = ++r.seq;
     const controller = new AbortController();
     const timer = setTimeout(() => {
@@ -387,6 +397,7 @@ export function createLiveCoach({
       r.reads += 1;
       r.lastReadAt = at;
       r.wordsAtLastRead = r.words;
+      r.rereadOwed = false;
     } else {
       r.skipWanted = null;
     }
@@ -475,13 +486,15 @@ export function createLiveCoach({
     ) {
       pending.spokenAt = spoken;
     }
-    // They have said more since that read was asked for: the offer isn't shown until a read that
-    // has heard it answers. With no read left to ask (MAX_READS), it shows at the pause, as before
+    // They have said more since that read was asked for (heard): the offer isn't shown until a read
+    // that has heard it answers (held). Only once: an offer from that read is shown at the next
+    // pause it may, even if they have said more, so a member whose pauses are shorter than a read
+    // still gets follow-ups. With no read left to ask (MAX_READS), it shows at the pause, as before
     // offers were held: a question that may come a little late beats none at all.
-    const held =
-      pending !== null &&
-      r.reads < MAX_READS &&
-      heardSinceRead({ words: r.words, wordsAtRead: pending.words, spokenMs: spoken, spokenAtRead: pending.spokenAt });
+    const heard =
+      pending !== null && heardSinceRead({ words: r.words, wordsAtRead: pending.words, spokenMs: spoken, spokenAtRead: pending.spokenAt });
+    const held = heard && pending !== null && !pending.confirms && r.reads < MAX_READS;
+    const onOpening = r.shown.id === OPENING_OFFER_ID;
 
     if (
       shouldCommit({
@@ -489,7 +502,7 @@ export function createLiveCoach({
         silenceMs: silence,
         speechSinceCommitMs: spoken - r.spokenAtCommit,
         lastCommitAt: r.lastCommitAt,
-        offerHeld: held,
+        offerWaiting: r.call !== null || pending !== null,
       })
     ) {
       connection.commit();
@@ -505,30 +518,43 @@ export function createLiveCoach({
     if (!r.call && (r.lastAskAt === null || at - r.lastAskAt >= MIN_ASK_GAP_MS)) {
       if (r.skipWanted !== null) {
         void ask(r, r.skipWanted);
-      } else if (
-        shouldRead({
+      } else {
+        const hadItsTime = questionHadItsTime({
           now: at,
-          silenceMs: silence,
-          words: r.words,
-          wordsAtLastRead: r.wordsAtLastRead,
-          lastReadAt: r.lastReadAt,
-          inFlight: false,
-          reads: r.reads,
-          ended: false,
-          offerHeld: held,
-          textOwed: r.commits > r.turnsBack && at - r.lastCommitAt < TEXT_WAIT_MS,
-        })
-      ) {
-        void ask(r, null, held);
+          pacing,
+          shownAt: r.shownAt,
+          wordsSinceShown: r.words - r.wordsAtShown,
+          elapsedMs: at - r.startedAt,
+          onOpening,
+        });
+        const reread = rereadDue({ held, hadItsTime, silenceMs: silence, pacing });
+        if (
+          shouldRead({
+            now: at,
+            silenceMs: silence,
+            words: r.words,
+            wordsAtLastRead: r.wordsAtLastRead,
+            lastReadAt: r.lastReadAt,
+            inFlight: false,
+            reads: r.reads,
+            ended: false,
+            reread,
+            textOwed: r.commits > r.turnsBack && at - r.lastCommitAt < TEXT_WAIT_MS,
+          })
+        ) {
+          void ask(r, null, { reread: heard || r.rereadOwed, confirms: reread });
+        }
       }
     }
 
     if (!pending || r.skipWanted !== null) return;
     // They spoke after its read, and by the time they have clearly stopped its text still hasn't
     // come back, or a turn's transcription failed: what they said is lost, and may have answered
-    // it, so the offer goes rather than shows.
+    // it, so the offer goes rather than shows. Should the text still come, the next read has Claude
+    // read it (rereadOwed).
     if (held && r.words <= pending.words && silence >= pacing.stoppedSilenceMs) {
       r.pending = null;
+      r.rereadOwed = true;
       return;
     }
     if (
@@ -540,7 +566,7 @@ export function createLiveCoach({
         shownAt: r.shownAt,
         wordsSinceShown: r.words - r.wordsAtShown,
         elapsedMs: at - r.startedAt,
-        onOpening: r.shown.id === OPENING_OFFER_ID,
+        onOpening,
         offerRequestedAt: pending.requestedAt,
         // Any read still out was asked for after the pending offer's, which has answered.
         newerReadOut: r.call !== null,

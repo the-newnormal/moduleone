@@ -145,7 +145,7 @@ describe("initialState and parseState", () => {
   it("goes on with a state saved before the counts kept why wording was turned down and offers made without a read", () => {
     let state = show(decide(initialState()));
     state = mergeRead(state, read({ coverage: { activity_work: "clear" } }), R);
-    state = { ...state, counts: { ...state.counts, reads: 1, bank: 1, rejectedWhy: { blocked_pressure: 1 }, noRead: 1 } };
+    state = { ...state, counts: { ...state.counts, reads: 1, bank: 1, rejectedWhy: { blocked: 1 }, noRead: 1 } };
     const stored = JSON.parse(JSON.stringify({ ...state, counts: without(without(state.counts, "rejectedWhy"), "noRead") }));
     expect(parseState(stored)).toEqual({ ...state, counts: { ...state.counts, rejectedWhy: {}, noRead: 0 } });
   });
@@ -764,7 +764,9 @@ describe("nextOffer with Claude's wording", () => {
   });
 
   it.each<[string, Partial<CoachRead>, string]>([
-    ["breaks the question style", { target: "activity_outcome", question: "Why did the vendor onboarding take so long?" }, "blocked_pressure"],
+    // Only that a word was blocked, never which group: that could say what they raised.
+    ["breaks the question style", { target: "activity_outcome", question: "Why did the vendor onboarding take so long?" }, "blocked"],
+    ["asks about their private life", { target: "activity_outcome", question: "How is your family finding the vendor onboarding?" }, "blocked"],
     ["quotes words they never said", { target: "activity_outcome", question: OUTCOME, quote: "vendor onboarding at Tuas" }, "quote_not_said"],
     [
       "is too long",
@@ -811,7 +813,7 @@ describe("nextOffer with Claude's wording", () => {
     expect(next.offer).toMatchObject({ topic: "activity_outcome", source: "bank" });
     expect(next.state.counts.rejected).toBe(0);
     // Why each was turned down is still counted, each time.
-    expect(next.state.counts.rejectedWhy).toEqual({ blocked_pressure: 2 });
+    expect(next.state.counts.rejectedWhy).toEqual({ blocked: 2 });
     const state = show(next);
     expect(state.counts).toMatchObject({ bank: 1, rejected: 0 });
     // Nor when it comes back on screen after its topic was asked.
@@ -999,6 +1001,11 @@ describe("validateQuestion", () => {
     ["\"devaluation\"", "What did the currency devaluation mean for the vendor quote?", "", null],
     ["\"rollout of 3\"", "Where did the rollout of 3 new sites get to?", "", null],
     ["a client relationship", "What did the client relationship need from you this week?", "", null],
+    ["GitHub stars", "How many GitHub stars did the release pick up?", "", null],
+    ["a colour scheme", "Where did the new colour scheme for the app get to?", "", null],
+    ["the scale of the work", "What was the scale of the rollout at the Jurong site?", "", null],
+    ["a search ranking", "Where did the search ranking work get to by Friday?", "", null],
+    ["who will see a demo", "Who will see the demo on Friday?", "", null],
     ["\"familiar\"", "What felt familiar about the vendor onboarding?", "", null],
 
     ["a question under twelve characters", "Which one?", "", "too_short"],
@@ -1020,8 +1027,22 @@ describe("validateQuestion", () => {
     ["a regrade", "Did the regrade change anything for the team?", "", "blocked_grading"],
     ["an assessor", "What did the assessor make of the deck this week?", "", "blocked_grading"],
     ["an evaluator", "What would the evaluator say about the tender?", "", "blocked_grading"],
+    ["ratings", "What ratings did the clients give your team?", "", "blocked_grading"],
+    ["a scale", "On a scale of 1 to 10, how did your week go?", "", "blocked_grading"],
+    ["out of ten, in words", "Out of ten, how would you mark your week?", "", "blocked_grading"],
+    ["a rank", "How would you rank your week against last week?", "", "blocked_grading"],
+    ["stars", "How many stars would you give this week?", "", "blocked_grading"],
+    ["a mark", "What mark would you give the team this week?", "", "blocked_grading"],
+    ["the heat-map's colours", "Which colour would your week be: red, amber or green?", "", "blocked_grading"],
+    ["a green week", "Would you call this a green week for the team?", "", "blocked_grading"],
+    ["an appraisal", "How did your appraisal go?", "", "blocked_grading"],
+    ["a performance review", "How did your performance review go?", "", "blocked_grading"],
     ["HQ", "What would you like HQ to know about the tender?", "", "blocked_audience"],
     ["who reads it", "What do you think your boss will make of the deck?", "", "blocked_audience"],
+    ["what the boss will think", "What will your boss think of this week?", "", "blocked_audience"],
+    ["a supervisor's judgement", "How would your supervisor judge this week?", "", "blocked_audience"],
+    ["the leadership team", "How would the leadership team see this week?", "", "blocked_audience"],
+    ["who will see it", "Who do you think will see this check-in?", "", "blocked_audience"],
     ["praise", "What made the vendor onboarding such a great success?", "", "blocked_praise"],
     ["fishing for positives", "What are you proud of from the vendor onboarding?", "", "blocked_praise"],
     ["\"why\"", "Why did the deployment slip to Friday?", "", "blocked_pressure"],
@@ -1053,6 +1074,14 @@ describe("validateQuestion", () => {
     ["\"healthier\"", "Are you eating healthier now the deadline has passed?", "", "blocked_personal"],
     ["\"unhealthy\"", "Has the crunch felt unhealthy for you this week?", "", "blocked_personal"],
     ["healthcare", "How's your healthcare claim going this week?", "", "blocked_personal"],
+    ["heartsick", "Are you feeling heartsick about the team changes this week?", "", "blocked_personal"],
+    ["lovesick", "Was anyone lovesick on the team this week?", "", "blocked_personal"],
+    ["seasick", "Was anyone seasick on the trip this week?", "", "blocked_personal"],
+    ["mental health run together", "How did the mentalhealth day go for the team?", "", "blocked_personal"],
+    ["\"moneywise\"", "How are things moneywise after the move?", "", "blocked_personal"],
+    // Only a relationship straight after client, customer, vendor, supplier, stakeholder or business
+    // passes, so this is a false alarm.
+    ["a working relationship", "What did the working relationship with the vendor need?", "", "blocked_personal"],
     // A false alarm, and a cheap one: the file's question is shown.
     ["a healthy pipeline", "How healthy is the sales pipeline after the client call?", "", "blocked_personal"],
     ["a link", "Did you share the deck at www.example.com with the client?", "", "blocked_links"],

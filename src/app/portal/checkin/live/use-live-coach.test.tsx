@@ -536,11 +536,88 @@ describe("an offer they have said more since", () => {
     await live.pause(10_000);
     expect(live.view()).toMatchObject({ offer: { id: 0 } });
     expect(live.deps.ask).toHaveBeenCalledTimes(2);
-    // Text that comes back after that is read as usual, with nothing held to confirm.
+    // Text that comes back after that is read with Claude, however short, so the server doesn't
+    // offer the dropped question again from what it knew before.
     live.say(TEAM_OK);
     await live.pause(500);
     expect(live.deps.ask).toHaveBeenCalledTimes(3);
-    expect(live.deps.ask.mock.calls[2][0]).not.toHaveProperty("reread");
+    expect(live.deps.ask.mock.calls[2][0]).toMatchObject({ reread: true, transcript: expect.stringContaining(TEAM_OK) });
+    expect(live.offersShown()).not.toContain(TEAM_QUESTION.id);
+    // Only that one read.
+    live.say("And the deck went out.");
+    await live.pause(5000);
+    expect(live.deps.ask).toHaveBeenCalledTimes(4);
+    expect(live.deps.ask.mock.calls[3][0]).not.toHaveProperty("reread");
+  });
+
+  // A remark while the read is still out isn't left for later: if that read's answer came after
+  // they had clearly stopped, with the remark's text not back, the offer would go, and the server
+  // would offer it again from what it knew.
+  it("has a sub-second remark made while its read is out transcribed at the pause", async () => {
+    const second = deferred<CoachResponse>();
+    const live = setup();
+    await secondRead(live, second.promise);
+    const commits = live.connection.commit.mock.calls.length;
+    await live.speak(600);
+    await live.pause(1000);
+    expect(live.connection.commit).toHaveBeenCalledTimes(commits + 1);
+  });
+
+  it("is held once: the read that confirms it decides, and its question shows at the next pause even if they said more", async () => {
+    const second = deferred<CoachResponse>();
+    const confirming = deferred<CoachResponse>();
+    const live = setup();
+    await secondRead(live, second.promise);
+    live.deps.ask.mockReturnValueOnce(confirming.promise);
+    await live.speak(1500);
+    live.say(TEAM_OK);
+    second.resolve(ok(TEAM_QUESTION));
+    await live.pause(1500); // the read to confirm it goes at the 1.2 s pause
+    expect(live.deps.ask).toHaveBeenCalledTimes(3);
+    expect(live.deps.ask.mock.calls[2][0]).toMatchObject({ reread: true });
+    // They go on before it answers: a pause shorter than a read is all they give.
+    await live.speak(1500);
+    confirming.resolve(ok(QUESTION_2));
+    live.say("Ya, everyone pitched in.");
+    await live.pause(1600);
+    expect(live.view()).toMatchObject({ mode: "live", offer: QUESTION_2 });
+    // No read to confirm the confirmation.
+    expect(live.deps.ask).toHaveBeenCalledTimes(3);
+    expect(live.offersShown()).not.toContain(TEAM_QUESTION.id);
+  });
+
+  it("gets at most one read to confirm it while they go on in short phrases", async () => {
+    const second = deferred<CoachResponse>();
+    const live = setup();
+    await secondRead(live, second.promise);
+    let id = 10;
+    live.deps.ask.mockImplementation(async () => ok({ id: ++id, kind: "question", text: `Question ${id}?` }));
+    await live.speak(600);
+    live.say("Team ok lah.");
+    second.resolve(ok(TEAM_QUESTION));
+    // Five more short phrases (13 words), each with a pause too short for a question to show.
+    for (const phrase of ["Quite happy.", "Busy though.", "Two people out.", "We managed.", "Deck went out."]) {
+      await live.pause(1300);
+      await live.speak(600);
+      live.say(phrase);
+    }
+    await live.pause(1300);
+    expect(live.deps.ask).toHaveBeenCalledTimes(3);
+  });
+
+  it("isn't confirmed before the question on screen has had its time, but is once they have clearly stopped", async () => {
+    const live = setup();
+    live.deps.ask.mockResolvedValueOnce(ok(TEAM_QUESTION)).mockResolvedValueOnce(ok(QUESTION_2));
+    await firstRead(live); // TEAM_QUESTION waits: too early for a follow-up
+    await live.speak(1500);
+    live.say(TEAM_OK);
+    await live.pause(1600);
+    // It couldn't be shown yet anyway: no read is spent on it at this pause.
+    expect(live.deps.ask).toHaveBeenCalledOnce();
+    await live.pause(2000);
+    expect(live.deps.ask).toHaveBeenCalledTimes(2);
+    expect(live.deps.ask.mock.calls[1][0]).toMatchObject({ reread: true, transcript: expect.stringContaining(TEAM_OK) });
+    expect(live.view()).toMatchObject({ mode: "live", offer: QUESTION_2 });
     expect(live.offersShown()).not.toContain(TEAM_QUESTION.id);
   });
 

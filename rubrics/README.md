@@ -506,23 +506,31 @@ At each call the policy goes down this list and stops at the first that applies:
    - Anything the question puts in double quotes (straight or curly) must be in what they said.
      Single quotes and apostrophes ("what's") are fine.
 
-   The blocked words cover grading ("score", "grade", "rate", "rubric", "assess", "evaluate",
-   "out of 5", "percent", a number over a number such as "4/5"), who reads it ("HQ", "your
-   manager will…", "who reads"), praise ("proud", "great", "amazing", "awesome", "impressive",
-   "well done", "good job", "bright side", "at least"), pressure ("why", "should", "only", "just",
-   "didn't", "haven't", "elaborate", "more detail", "be specific", "tell me more"), personal life
-   ("depressed", "anxious", "burnout", "mental", "therapy", "counselling", "health", "sick",
-   "family", "wife", "husband", "child", "kids", "parent", "money", "salary", "religion", and
-   "relationship" unless it is plainly a working one, such as "client relationship") and links.
-   The work words match whole words only, with their usual endings ("scored", "grader", "burnt
-   out"), so "upgrade", "departmental" or "transparent" pass. The private-life words also match in
-   any form or compound ("grandparents", "physiotherapy", "antidepressants", "healthy"), and a
-   "partner relationship" counts as personal. A false alarm ("a healthy pipeline") only means the
-   file's question is shown.
+   The blocked words cover grading ("score", "grade", "rate", "rating", "rubric", "assess",
+   "evaluate", "appraisal", "performance review", "out of 5" or "out of ten", "on a scale of 1 to
+   10", "percent", a number over a number such as "4/5", "rank your week", "how many stars", "what
+   mark", and the heat-map's colours, such as "a green week" or "red, amber or green"), who reads it
+   ("HQ", "your manager will…", "your boss thinks…", "the leadership team sees…", "who reads", "who
+   will see this"), praise ("proud", "great", "amazing", "awesome", "impressive", "well done", "good
+   job", "bright side", "at least"), pressure ("why", "should", "only", "just", "didn't", "haven't",
+   "elaborate", "more detail", "be specific", "tell me more"), personal life ("depressed",
+   "anxious", "burnout", "mental", "therapy", "counselling", "health", "sick", "family", "wife",
+   "husband", "child", "kids", "parent", "money", "salary", "religion", "relationship") and links.
+   The work words match whole words only, with their usual endings ("scored", "grader", "ratings",
+   "burnt out"), so "upgrade", "departmental" or "transparent" pass. The private-life words also
+   match in any form or compound ("grandparents", "physiotherapy", "antidepressants", "healthy",
+   "homesick"), except "mental" and "parent", which match only on their own or with their endings
+   ("mentally", "parents"), or as "grandparent", "stepparent" or "godparent", so "departmental" and
+   "transparent" pass. "Relationship" counts as personal unless it comes straight after "client",
+   "customer", "vendor", "supplier", "stakeholder" or "business" (or their plurals): "client
+   relationship" passes, while "partner relationship" (a partner is often a life partner) and
+   "working relationship" don't. A false alarm ("a healthy pipeline", "a working relationship")
+   only means the file's question is shown.
 
    If the wording fails a check, the file's question for the best topic is shown instead, and once
    it is on screen it is counted as **rejected** (as well as in the file's wording). Which check it
-   failed is counted at once, in `counts.rejectedWhy` (section 5).
+   failed is counted at once, in `counts.rejectedWhy` (section 5), a blocked word as `blocked`
+   alone, never which group it was in.
 8. **The file's question** (`Ask`, or `Ask in a hard week` in a hard week) for the best topic.
 
 **"Different question"** (offered for follow-ups only): the topic is never offered again, and a
@@ -619,11 +627,14 @@ asking now, or if that read fails or Claude couldn't read it), and they aren't a
 they have just covered.
 It also waits if they said anything after its read was asked for (new text, or more than 0.3 s of
 speech whose text hasn't come back yet): a "team ok lah" just then may have answered it. Their
-words are then read again (below), and that read's answer replaces the question or drops it. If
-that speech comes back as no words at all (a cough, an "mm"), the read missed nothing and the
-question no longer waits for it. If its text hasn't come back by the time they have stopped
-(6 s), or its transcription failed, the question is dropped. Once the 40 calls are used up (below)
-nothing could read it again, so the question doesn't wait for this.
+words are then read again (below), once the question could otherwise appear, and that read's
+answer replaces the question or drops it. A question waits like this only once: the answer of the
+read that heard them appears at the next pause it may, even if they said more meanwhile, so someone
+whose pauses are shorter than a read still gets follow-ups. If that speech comes back as no words
+at all (a cough, an "mm"), the read missed nothing and the question no longer waits for it. If its
+text hasn't come back by the time they have stopped (6 s), or its transcription failed, the
+question is dropped (should the text come after all, the next call asks for a reread). Once the 40
+calls are used up (below) nothing could read it again, so the question doesn't wait for this.
 Then it appears either:
 
 - after **2.5 s** of silence, once the question on screen has been up at least **20 s** and they
@@ -647,12 +658,16 @@ These are fixed in code ([`pacing.ts`](../src/app/portal/checkin/live/pacing.ts)
 - **A call** when they pause for 1.2 s after at least 20 new words (the first time) or 15 new
   words since the last call, or pause for 4 s after any new words. At least 5 s apart, one at a
   time, at most 40 per recording. "Different question" calls at once (at least 1.2 s after the
-  last call). While a question waits because they said more after its read (above), any new words
-  are enough at a 1.2 s pause, without the 5 s (but still at least 1.2 s after the last call), and
-  that call asks for a reread. A turn normally needs 1 s of speech before a pause ends it; while a
-  question waits like this, any speech does, so a short remark is transcribed at once. A call
-  waits for the text of turns already ended, for up to 1.5 s after the last one ended, so it
-  hears everything said before it.
+  last call). While a question waits because they said more after its read (above), once it could
+  otherwise appear (the question on screen has been up 20 s, with 20 words said to it, and the
+  opening question until 25 s into the recording; or they have stopped for 6 s), any new words are
+  enough at a 1.2 s pause, without the 5 s (but still at least 1.2 s after the last call): one
+  such call per question. A call asks for a reread whenever they have said more since the read
+  behind the question waiting, and so does the first call after a question was dropped for text
+  that hadn't come back. A turn normally needs 1 s of speech before a pause ends it; while a call
+  is out or a question waits to be shown, any speech does, so a short remark is transcribed at
+  once. A call waits for the text of turns already ended, for up to 1.5 s after the last one
+  ended, so it hears everything said before it.
 - **A Claude read** only when the text has at least 12 words (the first time) or 8 more than at the
   last read, or, for a reread, any more than at the last read; otherwise the policy re-decides from
   what it already knows, at no cost. No reads after a closing line.
@@ -735,7 +750,7 @@ end call came) holds:
 | `counts.reads`, `counts.failures` | Successful Claude reads, and reads that failed (timeout, API error, refusal, unusable reply); a failed read is not in `reads` |
 | `counts.tailored`, `counts.bank` | Questions shown in Claude's wording, and in the file's (skipped ones included) |
 | `counts.rejected` | Questions shown in the file's wording because Claude's failed the checks (also counted in `bank`) |
-| `counts.rejectedWhy` | Why Claude's wording failed the checks: each `validateQuestion` reason code (such as `blocked_personal`, `too_long`, `quote_not_said`) and how many times. Counted every time, whether or not the file's question shown instead reached the screen, so its total can be above `rejected` |
+| `counts.rejectedWhy` | Why Claude's wording failed the checks: each `validateQuestion` reason code (such as `blocked`, `too_long`, `quote_not_said`) and how many times. A blocked word is kept as `blocked` alone, never which group it was in: Claude words its question from what they said, so `blocked_personal` would mostly record that they raised something personal, which the notice doesn't name. Counted every time, whether or not the file's question shown instead reached the screen, so its total can be above `rejected` |
 | `counts.noRead` | Offers (questions or closing lines) made before Claude's first successful read, so decided without it; each call's offer counts, shown or not |
 | `counts.latencyMs`, `counts.slowestMs` | Total and slowest Claude read time, in ms |
 
@@ -997,10 +1012,9 @@ where s.started_at >= now() - interval '28 days' and s.checkin_id is not null
 group by 1 order by 2 desc;
 ```
 
-`blocked_…` reasons name the group of blocked words (`grading`, `audience`, `praise`, `pressure`,
-`personal`, `links`); the others are the length, one-question and quoting checks. A
-`blocked_personal` count can hint that someone raised something personal, so, as everywhere here,
-look only at totals.
+`blocked` means a blocked word (section 4), from any group: which group isn't kept, since a
+personal one would mostly record that someone raised something personal. The others are the
+length, one-question and quoting checks. As everywhere here, look only at totals.
 
 ### What the server logs
 
@@ -1012,13 +1026,13 @@ topic id, a coverage level, a question's wording or anything said.
 | --- | --- | --- |
 | `live session started` (info) | A live session starts (the start route answered ready) | `coachRubric` (the fingerprint), `sttModel`, `coachModel` |
 | `live coach: reading the transcript failed` (error) | A Claude read fails | `reason` (`api`, `refusal`, `invalid_output`, `rubric`), `retryable`, `code` (such as `deadline`, `timeout`, `unreachable`, `http_error`, `cut_off`, `not_json`, `schema`, `no_api_key`) and `status` (the API's HTTP status, for `http_error`; otherwise null). Never the error's message, which can carry what the SDK said back |
-| `live end` (info) | Each end call | `fallback` (why live coaching stopped early, one of the codes under "When follow-up questions stop", or null), then, while the session is still open, `reads`, `failures`, `tailored`, `bank`, `rejected`, `noRead` and `followUps`, as in the table above. Never `rejectedWhy` |
+| `live end` (info) | Each session ended: an end call that ends the member's own open session (a repeat call, or one for a session that isn't theirs, logs nothing) | `fallback` (why live coaching stopped early, one of the codes under "When follow-up questions stop", or null), then, unless reading them failed, `reads`, `failures`, `tailored`, `bank`, `rejected`, `noRead` and `followUps`, as in the table above. Never `rejectedWhy` |
 
 So the logs answer "is live on, on which rubric, and how do takes end" without the database: how
 many sessions start, how often each fallback happens, and whether Claude's reads are failing and
 why. `live end` lines with a `fallback` over `live session started` lines give the fallback rate
 (roughly: an end call can be lost with a tab closed mid-take). Each `live end` line is about one
-take, and a reason such as `blocked_personal` beside a time could point at whoever recorded then,
+take, and why Claude's wording was turned down beside a time could point at whoever recorded then,
 so `rejectedWhy` stays in `live_checkin_sessions` (query 10, read in totals). Anything about a
 topic or a person stays there, read as above.
 

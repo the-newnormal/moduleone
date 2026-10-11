@@ -62,9 +62,9 @@ export type CoachRequest = {
   // replace with "Different question", if they did.
   shown: number | null;
   skip: number | null;
-  // The recorder is holding the offer this session last sent, because the member said more after
-  // the read behind it was asked for: read again with Claude however few words are new, so that
-  // offer is confirmed or replaced by a read that heard them. Left out otherwise.
+  // The member said more after the read behind the offer the recorder has waiting was asked for (or
+  // behind one it dropped before those words came back as text): read with Claude however few
+  // words are new, so the next offer comes from a read that heard them. Left out otherwise.
   reread?: boolean;
 };
 

@@ -10,7 +10,9 @@ import {
   MIN_READ_GAP_MS,
   MIN_TURN_SPEECH_MS,
   NEW_READ_WORDS,
+  questionHadItsTime,
   READ_SILENCE_MS,
+  rereadDue,
   shouldCommit,
   shouldRead,
   shouldShow,
@@ -18,7 +20,7 @@ import {
 } from "./pacing";
 
 describe("shouldCommit", () => {
-  const base = { now: 10_000, silenceMs: 0, speechSinceCommitMs: 0, lastCommitAt: 5_000, offerHeld: false };
+  const base = { now: 10_000, silenceMs: 0, speechSinceCommitMs: 0, lastCommitAt: 5_000, offerWaiting: false };
 
   it.each([
     ["a pause after a full turn", { silenceMs: COMMIT_SILENCE_MS, speechSinceCommitMs: MIN_TURN_SPEECH_MS }, true],
@@ -28,10 +30,10 @@ describe("shouldCommit", () => {
     ["unbroken talk reaching the limit", { now: 5_000 + FORCE_COMMIT_MS, speechSinceCommitMs: 300 }, true],
     ["unbroken talk just under the limit", { now: 5_000 + FORCE_COMMIT_MS - 1, speechSinceCommitMs: 19_000 }, false],
     ["the limit passing with no speech", { now: 5_000 + FORCE_COMMIT_MS * 3, speechSinceCommitMs: 0 }, false],
-    // A sub-second "team ok lah" after the read behind a waiting offer: the read confirming it must hear it.
-    ["a pause after a short turn, while an offer is held", { silenceMs: COMMIT_SILENCE_MS, speechSinceCommitMs: 400, offerHeld: true }, true],
-    ["a pause too short, while an offer is held", { silenceMs: COMMIT_SILENCE_MS - 1, speechSinceCommitMs: 400, offerHeld: true }, false],
-    ["a pause after nothing at all, while an offer is held", { silenceMs: Infinity, speechSinceCommitMs: 0, offerHeld: true }, false],
+    // A sub-second "team ok lah" while a read is out or its offer waits: the read confirming it must hear it.
+    ["a pause after a short turn, while an offer waits", { silenceMs: COMMIT_SILENCE_MS, speechSinceCommitMs: 400, offerWaiting: true }, true],
+    ["a pause too short, while an offer waits", { silenceMs: COMMIT_SILENCE_MS - 1, speechSinceCommitMs: 400, offerWaiting: true }, false],
+    ["a pause after nothing at all, while an offer waits", { silenceMs: Infinity, speechSinceCommitMs: 0, offerWaiting: true }, false],
   ])("%s", (_label, overrides, expected) => {
     expect(shouldCommit({ ...base, ...overrides })).toBe(expected);
   });
@@ -48,7 +50,7 @@ describe("shouldRead", () => {
     inFlight: false,
     reads: 0,
     ended: false,
-    offerHeld: false,
+    reread: false,
     textOwed: false,
   };
   // After a read: the next one needs fewer new words.
@@ -72,15 +74,15 @@ describe("shouldRead", () => {
     // A turn they have ended hasn't come back as text yet: the read waits to hear it.
     ["a turn's text still to come", { ...later, textOwed: true }, false],
     ["a stall, a turn's text still to come", { ...later, words: 101, silenceMs: Infinity, textOwed: true }, false],
-    // An offer held for what they said after its read: any new words are enough at the first pause.
-    ["an offer held, one new word", { ...later, words: 101, offerHeld: true }, true],
-    ["an offer held, one new word, pause too short", { ...later, words: 101, offerHeld: true, silenceMs: READ_SILENCE_MS - 1 }, false],
-    ["an offer held, nothing new yet", { ...later, words: 100, offerHeld: true, silenceMs: Infinity }, false],
-    // The read confirming it doesn't wait the usual 5 s (the recorder's gap between calls still applies).
-    ["an offer held, soon after the last read", { ...later, words: 101, offerHeld: true, lastReadAt: 60_000 - 1 }, true],
-    ["an offer held, a turn's text still to come", { ...later, words: 101, offerHeld: true, textOwed: true }, false],
-    ["an offer held, a read already in flight", { ...later, words: 101, offerHeld: true, inFlight: true }, false],
-    ["an offer held, past the most reads", { ...later, words: 101, offerHeld: true, reads: MAX_READS }, false],
+    // A held offer's one read to confirm it: any new words are enough at the first pause.
+    ["a reread due, one new word", { ...later, words: 101, reread: true }, true],
+    ["a reread due, one new word, pause too short", { ...later, words: 101, reread: true, silenceMs: READ_SILENCE_MS - 1 }, false],
+    ["a reread due, nothing new yet", { ...later, words: 100, reread: true, silenceMs: Infinity }, false],
+    // It doesn't wait the usual 5 s (the recorder's gap between calls still applies).
+    ["a reread due, soon after the last read", { ...later, words: 101, reread: true, lastReadAt: 60_000 - 1 }, true],
+    ["a reread due, a turn's text still to come", { ...later, words: 101, reread: true, textOwed: true }, false],
+    ["a reread due, a read already in flight", { ...later, words: 101, reread: true, inFlight: true }, false],
+    ["a reread due, past the most reads", { ...later, words: 101, reread: true, reads: MAX_READS }, false],
   ])("%s", (_label, input, expected) => {
     expect(shouldRead(input)).toBe(expected);
   });
@@ -96,6 +98,48 @@ describe("heardSinceRead", () => {
     ["a breath or a click", { ...base, spokenMs: 20_000 + HEARD_SINCE_READ_MS }, false],
   ])("%s", (_label, input, expected) => {
     expect(heardSinceRead(input)).toBe(expected);
+  });
+});
+
+describe("questionHadItsTime", () => {
+  const pacing: Pacing = {
+    showAfterSilenceMs: 1500,
+    stoppedSilenceMs: 5000,
+    minQuestionMs: 20_000,
+    minWordsPerQuestion: 25,
+    firstFollowUpAfterMs: 45_000,
+  };
+  const base = { now: 100_000, pacing, shownAt: 80_000, wordsSinceShown: 25, elapsedMs: 100_000, onOpening: false };
+
+  it.each([
+    ["a follow-up up long enough, with enough said", base, true],
+    ["up too briefly", { ...base, shownAt: 80_001 }, false],
+    ["too few words", { ...base, wordsSinceShown: 24 }, false],
+    ["the opening question, too early", { ...base, onOpening: true, elapsedMs: 44_999 }, false],
+    ["the opening question, late enough", { ...base, onOpening: true, elapsedMs: 45_000 }, true],
+  ])("%s", (_label, input, expected) => {
+    expect(questionHadItsTime(input)).toBe(expected);
+  });
+});
+
+describe("rereadDue", () => {
+  const pacing: Pacing = {
+    showAfterSilenceMs: 1500,
+    stoppedSilenceMs: 5000,
+    minQuestionMs: 20_000,
+    minWordsPerQuestion: 25,
+    firstFollowUpAfterMs: 45_000,
+  };
+  const base = { held: true, hadItsTime: true, silenceMs: READ_SILENCE_MS, pacing };
+
+  it.each([
+    ["a held offer that could otherwise be shown", base, true],
+    ["no offer held", { ...base, held: false }, false],
+    // No read is spent on an offer that would wait anyway; the usual reads go on.
+    ["before the question on screen has had its time", { ...base, hadItsTime: false }, false],
+    ["before then, once they have clearly stopped", { ...base, hadItsTime: false, silenceMs: 5000 }, true],
+  ])("%s", (_label, input, expected) => {
+    expect(rereadDue(input)).toBe(expected);
   });
 });
 
