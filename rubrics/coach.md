@@ -28,7 +28,7 @@ The rules for this file (a test checks them on every pull request):
 
 ## Opening question
 
-Talk me through your week: what you worked on and what came of it, a moment you or your team were at your best, and how you're feeling about the team.
+Talk me through your week, Monday to Saturday: what you worked on and what came of it, a moment you or your team were at your best, and how you're feeling about the team.
 
 ## Coverage levels
 
