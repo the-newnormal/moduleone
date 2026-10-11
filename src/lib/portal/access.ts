@@ -45,12 +45,12 @@ export const viewerAccess = cache(async (): Promise<PortalAccess> => loadPortalA
 
 export type NavItem = { id: "portal" | "checkin" | "team-health" | "admin"; href: string; label: string };
 
-// The app bar's nav: everyone gets the portal and their check-in (the check-in page explains a login
-// that isn't linked to anyone yet); Team health and Admin only for those who may open them.
+// The app bar's nav: everyone gets the portal and their Diary (the Diary explains a login that isn't
+// linked to anyone yet); Team health and Admin only for those who may open them.
 export function portalNav({ seesTeamHealth, isAdmin }: Pick<PortalAccess, "seesTeamHealth" | "isAdmin">): NavItem[] {
   return [
     { id: "portal", href: "/portal", label: "Portal" },
-    { id: "checkin", href: "/portal/checkin", label: "Check-in" },
+    { id: "checkin", href: "/portal/checkin", label: "Diary" },
     ...(seesTeamHealth ? [{ id: "team-health", href: "/portal/dashboard", label: "Team health" } as const] : []),
     ...(isAdmin ? [{ id: "admin", href: "/admin", label: "Admin" } as const] : []),
   ];

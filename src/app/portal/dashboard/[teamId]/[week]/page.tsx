@@ -2,6 +2,7 @@ import { Clock } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { RecordingPlayer } from "@/components/recordings/recording-player";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { loadLedTeams, loadRole, loadScoringConfig, loadTeamWeek, type TeamWeekCheckin } from "@/lib/dashboard/load";
 import { coverage, yours } from "@/lib/dashboard/org";
@@ -11,7 +12,6 @@ import { createClient } from "@/lib/supabase/server";
 import { BandBadge } from "../../band";
 import { signInAgain } from "../../sign-in";
 import { CheckinControls } from "./checkin-controls";
-import { RecordingPlayer } from "./recording-player";
 
 export const metadata: Metadata = { title: "Team week · Module One" };
 

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_OPENING_QUESTION, QUESTIONS } from "@/lib/checkin/week";
 import { button, click, queryButton, render, settle, text } from "@/test/dom";
@@ -97,7 +97,7 @@ function cameraStream(lens: ReturnType<typeof fakeTrack> = fakeTrack()) {
   return Object.assign(new MediaStream(), { getTracks: () => [lens] });
 }
 // The browser's devices. permission: what navigator.permissions says about the camera ("granted":
-// allowed here before, so it comes on without asking).
+// allowed here before, so the browser wouldn't ask; the recorder still waits for the member).
 function devices(camera: () => Promise<unknown> = async () => cameraStream(), permission: PermissionState = "prompt") {
   const mic = fakeTrack();
   const microphone = { getTracks: () => [mic], getAudioTracks: () => [mic] };
@@ -113,6 +113,26 @@ function devices(camera: () => Promise<unknown> = async () => cameraStream(), pe
   return { microphone, getUserMedia, cameraAsks };
 }
 const video = () => document.querySelector("video");
+// The recorder where the Diary has it: in this week's section of the page's <main>, under the cover,
+// above the member's entries and their players.
+function diary(recorder: ReactNode) {
+  return (
+    <main>
+      <header id="cover">
+        <h1>Diary</h1>
+      </header>
+      <section id="this-week">{recorder}</section>
+      <section id="entries">
+        <audio controls aria-label="Your recording for the week of 28 September 2026" />
+        <a href="#this-week">Play it in this week&apos;s entry, above</a>
+      </section>
+    </main>
+  );
+}
+const inert = (id: string) => document.getElementById(id)?.hasAttribute("inert");
+const entryPlayer = () => document.querySelector<HTMLAudioElement>("#entries audio")!;
+// A media event as the browser fires it on the element.
+const fire = (el: HTMLMediaElement, type: string) => act(async () => void el.dispatchEvent(new Event(type)));
 async function turnOnCamera() {
   await click(button("Turn on my camera"));
   await settle();
@@ -153,6 +173,136 @@ describe("a failed take the recorder shows", () => {
 
     await click(button("Discard"));
     expect(failedTakeShown()).toBe(false);
+  });
+});
+
+// A take saved on the way out came back superseded: a newer one, from another device or tab, was
+// already the draft. The page hasn't been re-rendered for that draft yet.
+describe("a take that wasn't kept because a newer draft was saved", () => {
+  it("says so, and Show my draft refreshes the page to show the newer draft", async () => {
+    const { Recorder, trackSave } = await load();
+    void trackSave(Promise.resolve<SaveOutcome>({ step: "superseded" }));
+    router.refresh.mockClear();
+    const page = await render(<Recorder />);
+    await settle();
+    expect(text(page.container)).toContain("You'd already saved a newer recording, on another device or tab");
+    expect(document.querySelector('[role="status"]')?.textContent).toContain("Your draft is the newer one.");
+    await click(button("Show my draft"));
+    expect(router.refresh).toHaveBeenCalledOnce();
+    expect(queryButton("Show my draft")).toBeNull();
+  });
+
+  it("under a draft, stays held (Submit waits) until the member presses OK, which lets it go", async () => {
+    const { Recorder, trackSave, currentSave } = await load();
+    const save = trackSave(Promise.resolve<SaveOutcome>({ step: "superseded" }));
+    router.refresh.mockClear();
+    const page = await render(<Recorder heldOnly />);
+    await settle();
+    expect(text(page.container)).toContain("You'd already saved a newer recording");
+    expect(currentSave()).toBe(save);
+    await click(button("OK"));
+    expect(currentSave()).toBeNull();
+    expect(router.refresh).toHaveBeenCalledOnce();
+  });
+});
+
+// The Diary lists the member's recordings under the recorder: one still playing would be recorded
+// into the new take, and graded with it.
+describe("a diary recording playing on the page", () => {
+  it("is paused when the member starts recording", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    const entry = document.createElement("audio");
+    document.body.append(entry);
+    const pause = vi.spyOn(entry, "pause");
+    devices(async () => {
+      throw new DOMException("none", "NotFoundError");
+    });
+    const { Recorder } = await load();
+    await render(<Recorder />);
+    await turnOnCamera();
+    expect(pause).not.toHaveBeenCalled(); // a camera that can't come on leaves it be
+    await click(button("Record without camera"));
+    await settle();
+    expect(pause).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  // Its controls go out of reach under the stage (inert and covered), so it would play on there
+  // with only Start (a take) or Not now to stop it.
+  it("is paused when the camera's stage comes up over it", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    devices();
+    const { Recorder } = await load();
+    await render(diary(<Recorder />));
+    const pause = vi.spyOn(entryPlayer(), "pause");
+    await turnOnCamera();
+    expect(video()).not.toBeNull();
+    expect(inert("entries")).toBe(true);
+    expect(pause).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("is paused at once if played while the browser asks about the microphone, before the take", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    let allowMic: (stream: unknown) => void = () => {};
+    const { microphone, getUserMedia } = devices();
+    getUserMedia.mockImplementation((constraints: MediaStreamConstraints) =>
+      constraints.video
+        ? Promise.reject(new DOMException("none", "NotFoundError"))
+        : new Promise((resolve) => (allowMic = resolve)),
+    );
+    const { Recorder } = await load();
+    await render(diary(<Recorder />));
+    const pause = vi.spyOn(entryPlayer(), "pause");
+    await turnOnCamera();
+    await click(button("Record without camera")); // the browser asks about the microphone
+    expect(inert("entries")).toBe(false); // the take is in the card: the Diary stays in reach
+    pause.mockClear(); // Start paused everything once already
+    await fire(entryPlayer(), "play"); // played while the question is open
+    expect(pause).toHaveBeenCalledOnce();
+    await act(async () => allowMic(microphone));
+    await settle();
+    expect(FakeRecorder.last?.state).toBe("recording");
+    vi.unstubAllGlobals();
+  });
+
+  it("is paused at once if played while the take records in the card, without the camera", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    devices(async () => {
+      throw new DOMException("none", "NotFoundError");
+    });
+    const { Recorder } = await load();
+    await render(diary(<Recorder />));
+    const pause = vi.spyOn(entryPlayer(), "pause");
+    await turnOnCamera();
+    await click(button("Record without camera"));
+    await settle();
+    expect(inert("entries")).toBe(false); // in view, and in reach: there's no stage over it
+    pause.mockClear(); // Start paused everything once already
+    await fire(entryPlayer(), "play");
+    expect(pause).toHaveBeenCalledOnce();
+    await finish();
+    pause.mockClear();
+    await fire(entryPlayer(), "play"); // the microphone is off again: it plays
+    expect(pause).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("is paused at once if played during a take on the stage, while the mirror plays on", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    devices();
+    const { Recorder } = await load();
+    await render(diary(<Recorder />));
+    const pause = vi.spyOn(entryPlayer(), "pause");
+    await turnOnCamera();
+    await record();
+    const mirror = vi.spyOn(video()!, "pause");
+    pause.mockClear();
+    await fire(entryPlayer(), "play");
+    await fire(video()!, "play");
+    expect(pause).toHaveBeenCalledOnce();
+    expect(mirror).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 });
 
@@ -278,15 +428,58 @@ describe("the camera", () => {
     vi.unstubAllGlobals();
   });
 
-  it("comes on by itself where the browser allows it without asking", async () => {
+  // The Diary's entries sit below the recorder: a stage that came up by itself would cover them on
+  // every visit, with the camera's light on for someone who only came to listen.
+  it("never comes on by itself, even where the browser would allow it without asking", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     const camera = cameraStream();
-    devices(async () => camera, "granted");
+    const { cameraAsks } = devices(async () => camera, "granted");
     const { Recorder } = await load();
-    await render(<Recorder />);
+    await render(diary(<Recorder />));
     await settle();
+    expect(cameraAsks()).toBe(0);
+    expect(video()).toBeNull();
+    expect(document.documentElement.style.overflow).toBe(""); // the Diary scrolls
+    expect(inert("entries")).toBe(false); // and its players are in reach
+    expect(queryButton("Start recording")).toBeNull();
+    await turnOnCamera(); // until the member turns it on
     expect(video()?.srcObject).toBe(camera);
     expect(button("Start recording")).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the page under the stage out of reach while it's up, and gives it back after the take", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    devices();
+    const { Recorder } = await load();
+    await render(diary(<Recorder />));
+    await turnOnCamera();
+    // Tab and screen readers can't reach the players and links hidden under the stage.
+    expect(inert("entries")).toBe(true);
+    expect(inert("cover")).toBe(true);
+    expect(inert("this-week")).toBe(false); // the stage's own section
+    await record();
+    expect(inert("entries")).toBe(true);
+    await finish();
+    expect(inert("entries")).toBe(false);
+    expect(inert("cover")).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it("goes off with Not now, back to the card, with the Diary in reach again", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    const lens = fakeTrack();
+    devices(async () => cameraStream(lens));
+    const { Recorder } = await load();
+    await render(diary(<Recorder />));
+    await turnOnCamera();
+    await click(button("Not now"));
+    expect(video()).toBeNull();
+    expect(lens.stop).toHaveBeenCalled();
+    expect(document.documentElement.style.overflow).toBe("");
+    expect(inert("entries")).toBe(false);
+    expect(document.activeElement).toBe(button("Turn on my camera")); // to come back to it
+    expect(queryButton("Start recording")).toBeNull(); // no take without it
     vi.unstubAllGlobals();
   });
 
@@ -330,31 +523,12 @@ describe("the camera", () => {
     vi.unstubAllGlobals();
   });
 
-  it("doesn't come on a second time when the member turned it on before the browser said it was allowed", async () => {
-    vi.stubGlobal("MediaRecorder", FakeRecorder);
-    let allow: (stream: unknown) => void = () => {};
-    const { cameraAsks } = devices(() => new Promise((resolve) => (allow = resolve)), "granted");
-    let answer: (status: { state: PermissionState }) => void = () => {};
-    Object.defineProperty(navigator, "permissions", {
-      value: { query: () => new Promise((resolve) => (answer = resolve)) },
-      configurable: true,
-    });
-    const { Recorder } = await load();
-    await render(<Recorder />);
-    await click(button("Turn on my camera"));
-    await act(async () => answer({ state: "granted" })); // while the camera is still starting
-    expect(cameraAsks()).toBe(1);
-    await act(async () => allow(cameraStream()));
-    expect(video()).not.toBeNull();
-    vi.unstubAllGlobals();
-  });
-
   it("can't be hidden, before or during the take", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
-    devices(undefined, "granted");
+    devices();
     const { Recorder } = await load();
     await render(<Recorder />);
-    await settle();
+    await turnOnCamera();
     const hideable = () => [...document.querySelectorAll("button")].some((b) => /hide|off/i.test(b.textContent ?? ""));
     expect(hideable()).toBe(false);
     await record();
@@ -414,21 +588,6 @@ describe("the camera", () => {
     vi.unstubAllGlobals();
   });
 
-  it("says why when it can't come on by itself", async () => {
-    vi.stubGlobal("MediaRecorder", FakeRecorder);
-    devices(async () => {
-      throw new DOMException("busy", "NotReadableError");
-    }, "granted");
-    const { Recorder } = await load();
-    await render(<Recorder />);
-    await settle();
-    expect(document.querySelector('[role="alert"]')?.textContent).toBe(
-      "Your camera is busy in another app. Close that app, then try again.",
-    );
-    expect(button("Turn on my camera")).toBeTruthy();
-    vi.unstubAllGlobals();
-  });
-
   it("says when the computer blocks the camera for the browser, or the browser's question was closed", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     // Chrome's words for each: the site setting can't fix either.
@@ -447,25 +606,10 @@ describe("the camera", () => {
     vi.unstubAllGlobals();
   });
 
-  it("doesn't come on by itself while the page refreshes to show a newer draft", async () => {
-    vi.stubGlobal("MediaRecorder", FakeRecorder);
-    const { cameraAsks } = devices(undefined, "granted");
-    const { Recorder, trackSave } = await load();
-    void trackSave(Promise.resolve<SaveOutcome>({ step: "superseded" })); // a newer draft was saved elsewhere
-    await render(<Recorder />);
-    await settle();
-    router.refresh.mockReturnValueOnce(new Promise(() => {})); // the newer draft is still on its way
-    await click(button("Show my draft"));
-    await settle();
-    expect(cameraAsks()).toBe(0);
-    expect(video()).toBeNull();
-    vi.unstubAllGlobals();
-  });
-
   it("keeps the way on held in a new recorder while an earlier camera question is still open", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
-    let allow: (stream: unknown) => void = () => {};
-    devices(() => new Promise((resolve) => (allow = resolve)));
+    let block: (error: unknown) => void = () => {};
+    const { cameraAsks } = devices(() => new Promise((_, reject) => (block = reject)));
     const { Recorder } = await load();
     const page = await render(<Recorder />);
     await click(button("Turn on my camera"));
@@ -473,34 +617,50 @@ describe("the camera", () => {
     await page.rerender(<Recorder />);
     expect(button("Waiting for your camera…")).toBeTruthy();
     expect(text(page.container)).toContain("If your browser asks about the camera");
-    await act(async () => allow(cameraStream()));
-    expect(button("Turn on my camera")).toBeTruthy();
+    await act(async () => block(new DOMException("blocked", "NotAllowedError"))); // answered Block
+    await settle();
+    expect(button("Turn on my camera")).toBeTruthy(); // to try again
+    expect(cameraAsks()).toBe(1);
+    expect(video()).toBeNull();
     vi.unstubAllGlobals();
   });
 
-  it("comes on by itself once a question left open by an earlier visit is answered Allow", async () => {
+  // The member pressed Turn on my camera, and the note said to answer the browser to go on: once
+  // they answer Allow, the camera comes on without a second press.
+  it("comes on once the member's own question, left open by an earlier visit, is answered Allow", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     let allow: (stream: unknown) => void = () => {};
     let asks = 0;
     const { cameraAsks } = devices(() =>
       ++asks === 1 ? new Promise((resolve) => (allow = resolve)) : Promise.resolve(cameraStream()),
     );
-    let permission: PermissionState = "prompt";
-    Object.defineProperty(navigator, "permissions", {
-      value: { query: async () => ({ state: permission }) },
-      configurable: true,
-    });
     const { Recorder } = await load();
     const page = await render(<Recorder />);
     await click(button("Turn on my camera"));
     await page.rerender(<></>); // left by a link; the browser's question stays open
     await page.rerender(<Recorder />);
     await settle();
-    permission = "granted";
     await act(async () => allow(cameraStream())); // answered Allow
     await settle();
     expect(cameraAsks()).toBe(2); // the first recorder's camera was let go; this one's came on
     expect(video()).not.toBeNull();
+    expect(document.activeElement).toBe(button("Start recording"));
+    vi.unstubAllGlobals();
+  });
+
+  it("doesn't come on under a draft when an earlier visit's question is answered Allow", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    let allow: (stream: unknown) => void = () => {};
+    const { cameraAsks } = devices(() => new Promise((resolve) => (allow = resolve)));
+    const { Recorder } = await load();
+    const page = await render(<Recorder />);
+    await click(button("Turn on my camera"));
+    await page.rerender(<></>); // left by a link; meanwhile a draft was saved
+    await page.rerender(<Recorder heldOnly />); // the recorder under that draft
+    await act(async () => allow(cameraStream()));
+    await settle();
+    expect(cameraAsks()).toBe(1);
+    expect(video()).toBeNull();
     vi.unstubAllGlobals();
   });
 
@@ -530,27 +690,13 @@ describe("the camera", () => {
     vi.unstubAllGlobals();
   });
 
-  it("lets go of a camera coming on by itself that arrives after the member left", async () => {
-    vi.stubGlobal("MediaRecorder", FakeRecorder);
-    const lens = fakeTrack();
-    let allow: (stream: unknown) => void = () => {};
-    devices(() => new Promise((resolve) => (allow = resolve)), "granted");
-    const { Recorder } = await load();
-    const page = await render(<Recorder />);
-    await settle(); // asked for by itself
-    await page.rerender(<></>);
-    await act(async () => allow(cameraStream(lens)));
-    expect(lens.stop).toHaveBeenCalled();
-    vi.unstubAllGlobals();
-  });
-
   it("turns off when Sign out finishes the recording, before the recorder's stop event", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     const lens = fakeTrack();
-    devices(async () => cameraStream(lens), "granted");
+    devices(async () => cameraStream(lens));
     const { Recorder, finishRecording, currentSave } = await load();
     await render(<Recorder />);
-    await settle();
+    await turnOnCamera();
     await record();
     await act(async () => finishRecording()); // what Sign out does first
     expect(lens.stop).toHaveBeenCalled();
@@ -594,14 +740,14 @@ describe("the camera", () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     const lens = fakeTrack();
     const camera = cameraStream(lens);
-    const { getUserMedia, cameraAsks } = devices(async () => camera, "granted");
+    const { getUserMedia, cameraAsks } = devices(async () => camera);
     getUserMedia.mockImplementation(async (constraints: MediaStreamConstraints) => {
       if (constraints.video) return camera;
       throw new DOMException("blocked", "NotAllowedError");
     });
     const { Recorder } = await load();
     await render(<Recorder />);
-    await settle();
+    await turnOnCamera();
     const mirror = video();
     await record();
     expect(video()).toBe(mirror);
@@ -611,28 +757,30 @@ describe("the camera", () => {
     vi.unstubAllGlobals();
   });
 
-  it("comes back on by itself, where the browser allows it, after a take with nothing in it", async () => {
+  it("waits to be turned on again after a take with nothing in it, even where the browser allows it", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     const { cameraAsks } = devices(undefined, "granted");
     const { Recorder } = await load();
-    await render(<Recorder />);
-    await settle();
+    const page = await render(<Recorder />);
+    await turnOnCamera();
     await record();
     await finish();
     await act(async () => FakeRecorder.last?.onstop?.()); // no chunks: nothing was recorded
     await settle();
-    expect(cameraAsks()).toBe(2);
-    expect(video()).not.toBeNull();
+    expect(text(page.container)).toContain("Nothing was recorded.");
+    expect(cameraAsks()).toBe(1);
+    expect(video()).toBeNull();
+    expect(button("Turn on my camera")).toBeTruthy();
     vi.unstubAllGlobals();
   });
 
   it("turns off at the ten-minute limit, with the take", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     const lens = fakeTrack();
-    devices(async () => cameraStream(lens), "granted");
+    devices(async () => cameraStream(lens));
     const { Recorder } = await load();
     const page = await render(<Recorder />);
-    await settle();
+    await turnOnCamera();
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
     try {
       await record();
@@ -709,10 +857,10 @@ describe("the one question", () => {
 
   it("keeps the question in the live region beside the one-minute warning, so a later question is still read", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
-    devices(undefined, "granted");
+    devices();
     const { Recorder } = await load();
     await render(<Recorder opening={QUESTION} />);
-    await settle();
+    await turnOnCamera();
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
     await record();
     await act(async () => {
@@ -804,10 +952,10 @@ describe("a live check-in", () => {
   });
 
   it("shows the open question on the stage before the take, and asks for no live session yet", async () => {
-    liveDevices(undefined, "granted");
+    liveDevices();
     const { Recorder } = await load();
     await render(<Recorder opening={OPENING} live />);
-    await settle();
+    await turnOnCamera();
     expect(stage()?.textContent).toContain("Ready when you are.");
     expect(stage()?.textContent).toContain(OPENING);
     expect(text().split(OPENING)).toHaveLength(2); // once: not again in the card under the stage
@@ -969,10 +1117,10 @@ describe("a live check-in", () => {
 
   it("ends the session and turns the camera off when Sign out finishes the recording", async () => {
     const lens = fakeTrack();
-    liveDevices(async () => cameraStream(lens), "granted");
+    liveDevices(async () => cameraStream(lens));
     const { Recorder, finishRecording, currentSave } = await load();
     await render(<Recorder opening={OPENING} live />);
-    await settle();
+    await turnOnCamera();
     await record();
     await settle();
     await act(async () => finishRecording()); // what Sign out does first
@@ -1001,7 +1149,7 @@ describe("a live check-in", () => {
   async function coachedTake(offer: ShownOffer) {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"] });
     const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
-    liveDevices(undefined, "granted");
+    liveDevices();
     let level = 0.002;
     fakes.startLevelMeter.mockImplementation((_stream: MediaStream, onLevel: (level: number, now: number) => void) => {
       const timer = setInterval(() => onLevel(level, performance.now()), 50);
@@ -1022,7 +1170,8 @@ describe("a live check-in", () => {
     fakes.askCoach.mockResolvedValue({ status: "ok", degraded: false, offer, touched: { activity: true, excellence: false, morale: false } });
     const { Recorder } = await load();
     await render(<Recorder opening={OPENING} live />);
-    await advance(0); // the camera, allowed before, comes on by itself
+    await click(button("Turn on my camera"));
+    await advance(0);
     await click(button("Start recording"));
     await advance(500); // quiet: the meter learns the room
     level = 0.2;

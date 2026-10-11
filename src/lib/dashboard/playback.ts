@@ -1,7 +1,8 @@
-// When the drill-in's recording player (src/app/portal/dashboard/[teamId]/[week]/recording-player.tsx)
-// may fetch a fresh link by itself. A link lasts ten minutes (./recordings.ts), so an error a minute
-// or more after the last automatic reload is a link that ran out; an error sooner than that is a
-// real failure, which the listener sees, with Try again, instead of the player retrying forever.
+// When the recording player (src/components/recordings/recording-player.tsx, the drill-in's and the
+// Diary's) may fetch a fresh link by itself. A link lasts ten minutes (./recordings.ts), so an error
+// a minute or more after the last automatic reload is a link that ran out; an error sooner than
+// that is a real failure, which the listener sees, with Try again, instead of the player retrying
+// forever.
 export const AUTO_RELOAD_GAP_MS = 60_000;
 
 export const mayAutoReload = (now: number, lastAutoReload: number | null) =>

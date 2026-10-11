@@ -6,7 +6,7 @@ import { currentItem } from "./app-nav";
 // reads right on every page.
 const ALL: NavItem[] = [
   { id: "portal", href: "/portal", label: "Portal" },
-  { id: "checkin", href: "/portal/checkin", label: "Check-in" },
+  { id: "checkin", href: "/portal/checkin", label: "Diary" },
   { id: "team-health", href: "/portal/dashboard", label: "Team health" },
   { id: "admin", href: "/admin", label: "Admin" },
 ];

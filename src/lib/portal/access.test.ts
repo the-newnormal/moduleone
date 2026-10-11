@@ -48,7 +48,7 @@ describe("portalNav", () => {
     ["hq", "hq", false, ["portal", "checkin", "team-health"]],
     ["an admin who is a member", "member", true, ["portal", "checkin", "admin"]],
     ["an admin who is hq", "hq", true, ["portal", "checkin", "team-health", "admin"]],
-    // A login not linked to anyone yet: the check-in page explains that, so it stays.
+    // A login not linked to anyone yet: the Diary explains that, so it stays.
     ["someone with no role", null, false, ["portal", "checkin"]],
   ] as const)("offers %s exactly these, in this order", async (_who, role, isAdmin, ids) => {
     expect(await navFor(role, isAdmin)).toEqual(ids);
@@ -57,7 +57,7 @@ describe("portalNav", () => {
   it("links each item to its page", () => {
     expect(portalNav({ seesTeamHealth: true, isAdmin: true })).toEqual([
       { id: "portal", href: "/portal", label: "Portal" },
-      { id: "checkin", href: "/portal/checkin", label: "Check-in" },
+      { id: "checkin", href: "/portal/checkin", label: "Diary" },
       { id: "team-health", href: "/portal/dashboard", label: "Team health" },
       { id: "admin", href: "/admin", label: "Admin" },
     ]);

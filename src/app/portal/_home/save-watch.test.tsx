@@ -125,7 +125,7 @@ describe("SaveWatch", () => {
     await render(tile);
     expect(text(status()!)).toContain("Saving your recording…");
     expect(text()).not.toContain("Record this week's check-in");
-    expect(links()).toEqual([{ text: "Open your check-in", href: "/portal/checkin" }]);
+    expect(links()).toEqual([{ text: "Open your diary", href: "/portal/checkin" }]);
     expect(router.refresh).not.toHaveBeenCalled();
   });
 
@@ -190,7 +190,7 @@ describe("SaveWatch", () => {
     expect(router.refresh).not.toHaveBeenCalled();
     expect(status()).toBeNull();
     expect(text(alert()!)).toBe("Your last recording hasn't been saved yet.");
-    expect(links()).toEqual([{ text: "Open your check-in to try again", href: "/portal/checkin" }]);
+    expect(links()).toEqual([{ text: "Open your diary to try again", href: "/portal/checkin" }]);
     expect(text()).not.toContain("Record this week's check-in");
   });
 

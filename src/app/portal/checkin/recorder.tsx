@@ -3,12 +3,13 @@
 import { Camera, LoaderCircle, Mic } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useEffectEvent, useRef, useState, useTransition, type RefObject } from "react";
+import { pauseOtherAudio } from "@/components/recordings/pause-others";
 import { Button } from "@/components/ui/button";
 import { baseMimeType, extensionFor } from "@/lib/checkin/audio";
 import { DEFAULT_OPENING_QUESTION } from "@/lib/checkin/week";
 import { createClient } from "@/lib/supabase/client";
 import { prepareRecording, saveDraft } from "./actions";
-import { CameraStage, ON_STAGE_MAIN, STAGE_PILL } from "./camera-stage";
+import { CameraStage, ON_STAGE_MAIN, ON_STAGE_OUTLINE, STAGE_PILL } from "./camera-stage";
 import { formatClock } from "./format";
 import { LivePrompt } from "./live/live-prompt";
 import type { ShownOffer } from "./live/contract";
@@ -58,15 +59,15 @@ type CameraState = { stream: MediaStream | null; asked: number };
 // never come), or why it couldn't come on.
 type CameraNote = "asking" | { problem: string } | null;
 
-// The browser's camera question while it's open. Leaving by a link within the app keeps it open,
-// and Chrome asks nothing else (the microphone included) until it's answered, so a recorder that
-// mounts meanwhile waits for it too.
-let cameraQuestion: Promise<void> | null = null;
+// The browser's camera question while it's open, settling with whether it was answered Allow.
+// Leaving by a link within the app keeps it open, and Chrome asks nothing else (the microphone
+// included) until it's answered, so a recorder that mounts meanwhile waits for it too.
+let cameraQuestion: Promise<boolean> | null = null;
 
 function holdCameraQuestion(request: Promise<unknown>) {
   const question = request.then(
-    () => {},
-    () => {},
+    () => true,
+    () => false,
   );
   cameraQuestion = question;
   void question.then(() => {
@@ -166,16 +167,6 @@ function closeCamera(camera: RefObject<CameraState>) {
   camera.current.stream = null;
 }
 
-// Whether the browser lets this site use the camera without asking: allowed here before (Chrome
-// remembers it; Safari only for the page). False when it can't say, as in Firefox.
-async function cameraAllowed(): Promise<boolean> {
-  try {
-    return (await navigator.permissions.query({ name: "camera" })).state === "granted";
-  } catch {
-    return false;
-  }
-}
-
 // Stops a live recording with its save registered first, so Sign out and a return to the page wait
 // for the take from the moment it stops, not only once the stop event has collected it.
 function stopAndTrack(live: Media) {
@@ -209,18 +200,29 @@ export function Recorder({
   const media = useRef<Media | null>(null);
   // Never waited on: the recording starts, carries on and is saved the same with or without it.
   const { view: liveView, coach } = useLiveCoach(live && !heldOnly ? { opening } : undefined);
-  // The member's camera, which they need on to start: it comes on by itself when the recorder is
-  // ready and the browser allows it without asking, or when they turn it on. Off once the take ends.
+  // The member's camera, which they need on to start. It comes on only when they turn it on, never by
+  // itself (even where the browser would allow it): the stage would cover the Diary they may have
+  // come to listen to. Off once the take ends, or when they choose Not now.
   const camera = useRef<CameraState>({ stream: null, asked: 0 });
   const [mirror, setMirror] = useState<MediaStream | null>(null);
   // A question an earlier recorder in this tab left open: wait for its answer too. Read once, so the
   // note and the wait agree even if it's answered in between.
   const [openQuestion] = useState(() => cameraQuestion);
   const [cameraNote, setCameraNote] = useState<CameraNote>(openQuestion ? "asking" : null);
+  // That question came from the member pressing Turn on my camera, so answering Allow turns it on
+  // here, as the note asking them to answer it promised: not a second press. Only while this
+  // recorder is ready for a take with the camera still off.
+  const allowedEarlier = useEffectEvent(() => {
+    if (state.step === "idle" && !heldOnly && !refreshing && !camera.current.stream) void turnCameraOn();
+  });
   useEffect(() => {
     if (!openQuestion) return;
     let mounted = true;
-    void openQuestion.then(() => mounted && setCameraNote((note) => (note === "asking" ? null : note)));
+    void openQuestion.then((allowed) => {
+      if (!mounted) return;
+      setCameraNote((note) => (note === "asking" ? null : note));
+      if (allowed) allowedEarlier();
+    });
     return () => {
       mounted = false;
     };
@@ -317,6 +319,19 @@ export function Recorder({
     };
   }, [recording]);
 
+  // Nothing plays into a take: start() pauses whatever was playing, and this pauses a recording
+  // started on the page while the microphone is on (the Diary's stay in reach when the take is in
+  // the card, without the camera). Media events don't bubble, but they pass the document on the way.
+  const micOn = state.step === "starting" || recording;
+  useEffect(() => {
+    if (!micOn) return;
+    const hush = (event: Event) => {
+      if (event.target instanceof HTMLAudioElement) event.target.pause();
+    };
+    document.addEventListener("play", hush, true);
+    return () => document.removeEventListener("play", hush, true);
+  }, [micOn]);
+
   // While recording, Sign out (in the app bar beside this) can finish the recording first: the take
   // is saved as Finish would, and Sign out waits for that save before ending the session.
   useEffect(() => {
@@ -367,20 +382,18 @@ export function Recorder({
     setMirror(null);
   }
 
-  // ask: the member pressed Turn on my camera, so the browser may ask them. Otherwise the camera is
-  // coming on by itself, as the browser allows it without asking.
-  async function turnCameraOn(ask: boolean) {
+  // The member pressed Turn on my camera, so the browser may ask them.
+  async function turnCameraOn() {
     // A browser that can't record the take gets no camera, but the reason.
     if (!pickMimeType()) return setState({ step: "idle", problem: UNSUPPORTED });
     const attempt = ++camera.current.asked;
-    if (ask) setCameraNote("asking");
+    setCameraNote("asking");
     let stream: MediaStream;
     try {
       const request = navigator.mediaDevices.getUserMedia({ video: CAMERA });
-      if (ask) holdCameraQuestion(request);
+      holdCameraQuestion(request);
       stream = await request;
     } catch (error) {
-      // Coming on by itself too: the member needs it, so they're told at once why it can't.
       if (attempt === camera.current.asked) setCameraNote({ problem: cameraProblem(error) });
       return;
     }
@@ -399,30 +412,8 @@ export function Recorder({
   }
 
   function showCamera() {
-    if (cameraNote !== "asking") void turnCameraOn(true);
+    if (cameraNote !== "asking") void turnCameraOn();
   }
-
-  // Ready for a take, where the browser allows the camera without asking (allowed here before):
-  // it comes on by itself, so the member goes straight to seeing themselves. Not while the page
-  // refreshes to show a newer draft (Show my draft), which usually takes this recorder away, nor
-  // while a camera question is open or a camera problem shows (Turn on my camera tries again); so
-  // once a question an earlier visit left open is answered Allow, it comes on.
-  const ready = state.step === "idle" && !heldOnly && !refreshing && cameraNote === null;
-  // asked unchanged: nothing turned the camera on or off meanwhile (the member's Turn on included).
-  const cameraByItself = useEffectEvent((asked: number) => {
-    if (camera.current.asked === asked) void turnCameraOn(false);
-  });
-  useEffect(() => {
-    if (!ready || camera.current.stream) return;
-    const asked = camera.current.asked;
-    let current = true;
-    void cameraAllowed().then((allowed) => {
-      if (current && allowed) cameraByItself(asked);
-    });
-    return () => {
-      current = false;
-    };
-  }, [ready]);
 
   // Finish, or the ten-minute limit.
   function finish() {
@@ -441,6 +432,8 @@ export function Recorder({
     const mimeType = pickMimeType();
     if (!mimeType) return setState({ step: "idle", problem: UNSUPPORTED });
     setState({ step: "starting" });
+    // A diary entry playing on this page would be recorded into the take (and graded): stop it first.
+    pauseOtherAudio();
     const attempt = ++startCount.current;
 
     let stream: MediaStream;
@@ -754,16 +747,22 @@ export function Recorder({
                   {state.problem}
                 </p>
               )}
-              <Button
-                ref={primary}
-                type="button"
-                onClick={() => void start()}
-                disabled={refreshing}
-                className={`${ON_STAGE_MAIN} justify-self-start`}
-              >
-                <Mic aria-hidden="true" />
-                Start recording
-              </Button>
+              {/* Not now: back to the card, with the camera off, and the Diary below in reach again. */}
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  ref={primary}
+                  type="button"
+                  onClick={() => void start()}
+                  disabled={refreshing}
+                  className={ON_STAGE_MAIN}
+                >
+                  <Mic aria-hidden="true" />
+                  Start recording
+                </Button>
+                <Button type="button" variant="outline" onClick={turnCameraOff} className={ON_STAGE_OUTLINE}>
+                  Not now
+                </Button>
+              </div>
             </>
           )}
           {state.step === "starting" && (

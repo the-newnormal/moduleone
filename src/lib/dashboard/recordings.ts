@@ -11,7 +11,8 @@ export const RECORDING_LINK_SECONDS = 10 * 60;
 
 const EXTENSION = /\.[A-Za-z0-9]{1,8}$/;
 
-// The drill-in's address for a recording. It never goes stale: each request signs a fresh link
+// The address the drill-in's and the Diary's player play a recording from (so members must always
+// be able to reach it). It never goes stale: each request signs a fresh link
 // (src/app/portal/dashboard/recording/[checkinId]/route.ts), so a page left open still plays.
 // It ends with the file's own extension (".webm"): Safari picks its media engine from the
 // address's extension, not from where the address redirects to.

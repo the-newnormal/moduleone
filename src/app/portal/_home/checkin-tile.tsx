@@ -10,8 +10,8 @@ import { Tile } from "./tile";
 
 // The portal's main tile: where the viewer is with this week's check-in, and the one thing to do
 // next. Its button is the page's sun, Normal's single accent, while there's a check-in to make.
-// The check-in page itself does the recording, shows the privacy notice and submits; this only
-// reports what the viewer's own rows say, and never their grade.
+// The Diary (/portal/checkin) itself does the recording, shows the privacy notice and submits; this
+// only reports what the viewer's own rows say, and never their grade.
 export function CheckinTile({ week, thisWeek }: { week: MyWeek; thisWeek: string }) {
   const deadline = `Submit by ${formatWeekEnd(thisWeek)}, 11:59 pm Singapore time.`;
   return (
@@ -26,7 +26,7 @@ export function CheckinTile({ week, thisWeek }: { week: MyWeek; thisWeek: string
             Couldn&apos;t load your check-in. Refresh the page to try again.
           </p>
           <Link href="/portal/checkin" className="inline-flex min-h-10 w-fit items-center rounded-sm text-[15px] font-medium underline underline-offset-4">
-            Open your check-in
+            Open your diary
           </Link>
         </div>
       ) : (
@@ -91,7 +91,7 @@ export function CheckinTile({ week, thisWeek }: { week: MyWeek; thisWeek: string
               }
               action={
                 <Button asChild variant="outline" className="h-10 w-fit px-5 text-[15px]">
-                  <Link href="/portal/checkin">Open check-in</Link>
+                  <Link href="/portal/checkin">Open your diary</Link>
                 </Button>
               }
             />

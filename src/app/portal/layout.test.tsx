@@ -51,19 +51,19 @@ describe("PortalLayout", () => {
   });
 
   it.each([
-    ["/portal", ["[Portal]", "Check-in", "Team health", "Admin"]],
-    ["/portal/checkin", ["Portal", "[Check-in]", "Team health", "Admin"]],
-    ["/portal/dashboard", ["Portal", "Check-in", "[Team health]", "Admin"]],
-    ["/portal/dashboard/trend", ["Portal", "Check-in", "(Team health)", "Admin"]],
+    ["/portal", ["[Portal]", "Diary", "Team health", "Admin"]],
+    ["/portal/checkin", ["Portal", "[Diary]", "Team health", "Admin"]],
+    ["/portal/dashboard", ["Portal", "Diary", "[Team health]", "Admin"]],
+    ["/portal/dashboard/trend", ["Portal", "Diary", "(Team health)", "Admin"]],
   ])("marks the page it's on: %s", async (path, items) => {
     pathname = path;
     expect(nav(await layout())).toEqual(items);
   });
 
-  it("offers a member only the portal and their check-in", async () => {
+  it("offers a member only the portal and their Diary", async () => {
     vi.mocked(loadRole).mockResolvedValue("member");
     rpc.mockResolvedValue({ data: false, error: null });
-    expect(nav(await layout())).toEqual(["[Portal]", "Check-in"]);
+    expect(nav(await layout())).toEqual(["[Portal]", "Diary"]);
   });
 
   it("leaves the bar out for a signed-out visitor; the page sends them to sign in", async () => {
