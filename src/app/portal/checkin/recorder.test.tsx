@@ -873,7 +873,8 @@ describe("the one question", () => {
 });
 
 const SESSION = "5e550000-0000-4000-8000-000000000001";
-const OPENING = "Talk me through your week: what you worked on, what came of it, and how you're feeling about the team.";
+const OPENING =
+  "Talk me through your week: what you worked on and what came of it, a moment you or your team were at your best, and how you're feeling about the team.";
 const READY: LiveReady = {
   status: "ready",
   sessionId: SESSION,

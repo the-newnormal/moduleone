@@ -61,6 +61,13 @@ const Counts = z.object({
   // Total and slowest Claude read time, in ms.
   latencyMs: z.number().nonnegative(),
   slowestMs: z.number().nonnegative(),
+  // Why Claude's wording failed validateQuestion, by its reason code, each time it did: unlike
+  // `rejected`, whether or not the question shown instead reached the screen. A blocked word is
+  // kept as `blocked` alone, never its group (countRejection). Like noRead, it defaults to none, so
+  // a session saved before the two were kept goes on where it was.
+  rejectedWhy: z.record(z.string(), z.number().int().nonnegative()).default({}),
+  // Offers made before any successful read, so decided without Claude.
+  noRead: z.number().int().nonnegative().default(0),
 });
 
 const State = z.object({
@@ -80,7 +87,8 @@ const State = z.object({
   current: z.number().int().nonnegative(),
   // How many words of the transcript Claude had read by the last read.
   wordsRead: z.number().int().nonnegative(),
-  // Areas whose coverage went up in the latest read: what they are talking about now.
+  // Areas whose coverage went up in the latest read (kept through a short reread that raises
+  // nothing, see turn.ts): what they are talking about now.
   flow: z.array(z.enum(AREAS as [Area, ...Area[]])),
   counts: Counts,
 });
@@ -102,7 +110,7 @@ export function initialState(): CoachState {
     current: OPENING_OFFER_ID,
     wordsRead: 0,
     flow: [],
-    counts: { reads: 0, failures: 0, tailored: 0, bank: 0, rejected: 0, latencyMs: 0, slowestMs: 0 },
+    counts: { reads: 0, failures: 0, tailored: 0, bank: 0, rejected: 0, latencyMs: 0, slowestMs: 0, rejectedWhy: {}, noRead: 0 },
   };
 }
 
@@ -291,16 +299,25 @@ export function nextOffer(
 
   // Claude's own wording, when it chose a topic the policy would ask about too (scoring within the
   // slack of the best), the topic allows it, and the wording passes every check.
-  let rejected = false;
+  let problem: string | null = null;
   if (read?.target && read.question && !read.instructionsInTranscript) {
     const chosen = ranked.find((c) => c.topic.id === read.target);
     if (chosen && chosen.topic.tailor && chosen.score >= best.score - s.tailorSlack - SCORE_EPSILON) {
-      const problem = validateQuestion(read.question, read.quote, transcript, s.maxQuestionChars);
+      problem = validateQuestion(read.question, read.quote, transcript, s.maxQuestionChars);
       if (!problem) return question(state, chosen.topic, "tailored", read.question.trim(), false);
-      rejected = true;
     }
   }
-  return question(state, best.topic, "bank", bankText(state, best.topic), false, rejected);
+  const counted = problem ? countRejection(state, problem) : state;
+  return question(counted, best.topic, "bank", bankText(state, best.topic), false, problem !== null);
+}
+
+// Only the reason code is kept, never the wording that failed; and for a blocked word, not which
+// group it was in. Claude words its question from what they said, so `blocked_personal` would mostly
+// record that they raised something personal, which the privacy notice doesn't name.
+function countRejection(state: CoachState, problem: string): CoachState {
+  const reason = problem.startsWith("blocked_") ? "blocked" : problem;
+  const rejectedWhy = { ...state.counts.rejectedWhy, [reason]: (state.counts.rejectedWhy[reason] ?? 0) + 1 };
+  return { ...state, counts: { ...state.counts, rejectedWhy } };
 }
 
 function bankText(state: CoachState, topic: Topic): string {
@@ -330,14 +347,16 @@ function question(
   return offer(state, { kind: "question", topic: topic.id, source, beforeYouFinish, rejected }, text);
 }
 
-// Keeps the offer on screen, the few latest others and the new one.
+// Keeps the offer on screen, the few latest others and the new one, and counts it if Claude has
+// read nothing yet.
 function offer(state: CoachState, record: Omit<OfferRecord, "id">, text: string): Decision {
   const id = state.nextOfferId;
   const current = state.offers.filter((o) => o.id === state.current);
   const others = state.offers.filter((o) => o.id !== state.current).slice(-(OFFERS_KEPT - 2));
   const offers = [...current, ...others, { id, ...record }];
+  const counts = state.counts.reads === 0 ? { ...state.counts, noRead: state.counts.noRead + 1 } : state.counts;
   return {
-    state: { ...state, offers, nextOfferId: id + 1 },
+    state: { ...state, offers, nextOfferId: id + 1, counts },
     offer: { id, kind: record.kind, topic: record.topic, source: record.source, text },
   };
 }
@@ -346,13 +365,35 @@ function offer(state: CoachState, record: Omit<OfferRecord, "id">, text: string)
 
 // Words Claude's question must never use: talk of grades or who reads it, praise or pressure, care
 // or private life. These back up the rubric's question style; a false alarm only means the rubric's
-// own question is shown instead.
+// own question is shown instead. The work words match whole words with the endings listed, so a
+// word that only contains one passes ("departmental", "transparent", "upgrade"). The private-life
+// words also match in any form or compound ("grandparents", "physiotherapy", "healthy", "homesick"),
+// except "mental" and "parent", which would block "departmental" and "transparent": there a false
+// alarm ("a healthy pipeline") is far cheaper than a personal question on screen.
 const BLOCKED: [string, RegExp][] = [
-  ["grading", /scor|grad(e|ing)|\brat(e|ed|ing)\b|rubric|assess|evaluat|out of \d|percent|\d\s*\/\s*\d/i],
-  ["audience", /\bHQ\b|\b(leader|manager|boss)s? (will|would|can|might)\b|who (will )?reads?/i],
-  ["praise", /\bproud\b|\bgreat\b|amazing|awesome|impressive|well done|good job|bright side|\bat least\b/i],
-  ["pressure", /\bwhy\b|\bshould\b|\bonly\b|\bjust\b|didn't|haven't|elaborate|more detail|be (more )?specific|tell me more/i],
-  ["personal", /depress|anxi|burn.?out|mental|therap|counsel|health|sick|family|wife|husband|child|kids?\b|parent|money|salary|religio|relationship/i],
+  [
+    "grading",
+    /\b(scor(e|es|ed|ing|ers?|ecards?|eboards?)|(re)?grad(e|es|ed|ing|ers?)|rat(e|es|ed|ing|ings)|rubrics?|(re)?assess(es|ed|ing|ments?|ors?)?|(re)?evaluat(e|es|ed|ing|ions?|ors?)|apprais(e|es|ed|ing|als?))\b/i,
+  ],
+  ["grading", /\b(percent(ages?|iles?)?|out of (\d+|three|four|five|ten|a hundred)|scale (of|from) (\d+|zero|one))\b|\d\s*\/\s*\d/i],
+  // Ranks, stars, marks, a colour for the week (the heat-map's), and reviews of a person.
+  [
+    "grading",
+    /\brank (your|this|the|that|it)\b|\b(how many|\d+|one|two|three|four|five)[\s-]stars?\b|\b(what|which) marks? (would|do|did|will|could|should)\b|\bmark (your|this|the|that) (week|work|team)\b|\b(red|amber|yellow|green) (weeks?|lights?|flags?|zones?|days?)\b|\bred,? (amber|yellow)\b|\b(amber|yellow),? or green\b|\bcolou?rs? (would|is|was|for) (your|this|the)\b|\bperformance (reviews?|appraisals?|ratings?)\b/i,
+  ],
+  [
+    "audience",
+    /\bHQ\b|\b(leaders?|leadership( team)?|managers?|management|boss(es)?|supervisors?) (will|would|can|might|think|thinks|see|sees|read|reads|judge|judges)\b|\bwho (will )?reads?\b|\bwho( do you think)? (will |would |might |can |could )?(see|sees|read|reads) (this|it|your|these|what)\b/i,
+  ],
+  ["praise", /\b(proud|great|amazing(ly)?|awesome|(un)?impressive(ly)?|well done|good jobs?|bright side|at least)\b/i],
+  ["pressure", /\b(why|should|only|just|didn't|haven't|elaborat(e|ed|ing|ion)|more detail(s|ed)?|be (more )?specific|tell me more)\b/i],
+  ["personal", /\b(\w*depress\w*|anxi\w*|burn(s|t|ed|ing)?[\s-]?outs?|mental(ly)?|\w*health\w*|\w*sick\w*)\b/i],
+  ["personal", /\b(\w*therap\w*|counsel\w*|\w*famil(y|ies)|\w*wi(fe|ves)|\w*husbands?|\w*child\w*|\w*kids?)\b/i],
+  ["personal", /\b((grand|step|god)?parent\w*|\w*money\w*|salar(y|ies)|religio\w*)\b/i],
+  // A relationship counts unless it comes straight after one of these ("the client relationship"),
+  // so "a working relationship" is a false alarm. Not a "partner relationship": a partner is often
+  // a life partner.
+  ["personal", /(?<!\b(client|customer|vendor|supplier|stakeholder|business)s? )\brelationships?\b/i],
   ["links", /https?:|www\.|@|\.com\b/i],
 ];
 

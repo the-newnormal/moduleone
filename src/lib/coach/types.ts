@@ -102,11 +102,33 @@ export type Touched = Record<Area, boolean>;
 
 export type CoachFailure = "invalid_output" | "refusal" | "api" | "rubric";
 
+// What exactly went wrong, as a fixed code the server can log. The message can't be logged: it
+// can carry the SDK's own words (which may repeat Claude's reply, and so the member's) or name the
+// topics a reply got wrong.
+export type CoachErrorCode =
+  | "rubric"
+  | "no_api_key"
+  | "refusal"
+  | "cut_off"
+  | "not_json"
+  | "schema"
+  | "deadline"
+  | "cancelled"
+  | "stopped"
+  | "timeout"
+  | "unreachable"
+  | "http_error"
+  | "sdk"
+  | "unknown";
+
 export type CoachUsage = { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
 
 export class CoachError extends Error {
   readonly reason: CoachFailure;
   readonly retryable: boolean;
+  readonly code: CoachErrorCode;
+  // The HTTP status of an error reply from the API; null for anything else.
+  readonly status: number | null;
   // A reply that came back but couldn't be used (a refusal, a cut-off reply, output that doesn't fit)
   // is still paid for: the model that answered and its tokens, for the cost log. Null when no reply
   // came back.
@@ -114,12 +136,21 @@ export class CoachError extends Error {
 
   constructor(
     message: string,
-    details: { reason: CoachFailure; retryable: boolean; cause?: unknown; billed?: { model: string; usage: CoachUsage } },
+    details: {
+      reason: CoachFailure;
+      retryable: boolean;
+      code?: CoachErrorCode;
+      status?: number | null;
+      cause?: unknown;
+      billed?: { model: string; usage: CoachUsage };
+    },
   ) {
     super(message, { cause: details.cause });
     this.name = "CoachError";
     this.reason = details.reason;
     this.retryable = details.retryable;
+    this.code = details.code ?? "unknown";
+    this.status = details.status ?? null;
     this.billed = details.billed ?? null;
   }
 }

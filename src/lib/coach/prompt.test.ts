@@ -41,19 +41,33 @@ describe("buildCoachSystemPrompt", () => {
     }
   });
 
-  it("gives an example question for tailored topics, and tells Claude to leave morale questions empty", () => {
+  it("gives tailored topics the file's question only as the app's fallback, and tells Claude to leave morale questions empty", () => {
     for (const topic of RUBRIC.topics) {
       const block = topicBlock(topic.id);
       if (topic.tailor) {
-        expect(block).toContain(`Example question: "${topic.ask}"`);
+        expect(block).toContain(`The app's own fallback question, which you need not copy: "${topic.ask}"`);
       } else {
         expect(block).toContain(`If you choose it, leave question empty: the app always asks "${topic.ask}"`);
-        expect(block).not.toContain("Example question");
+        expect(block).not.toContain("fallback question");
       }
     }
+    // Never as an example to follow: Claude copied it, and every check-in heard the same questions.
+    expect(PROMPT).not.toMatch(/example question/i);
     const morale = RUBRIC.topics.filter((t) => t.area === "morale");
     expect(morale.length).toBeGreaterThan(0);
     for (const topic of morale) expect(PROMPT).toContain(`If you choose it, leave question empty: the app always asks "${topic.ask}"`);
+  });
+
+  it("tells Claude to go deeper on what they are talking about first, and to untouched areas first only as they wrap up", () => {
+    const choosing = PROMPT.slice(PROMPT.indexOf("# Choosing the next topic"), PROMPT.indexOf("# Writing the question"));
+    const deeper = choosing.indexOf("- First, going deeper on what they are talking about now: a topic in that area that is still none or only brief.");
+    const untouched = choosing.indexOf(
+      "- Next, the key topic of an area they haven't touched at all. When they are wrapping up, this comes first.",
+    );
+    expect(deeper).toBeGreaterThan(0);
+    expect(untouched).toBeGreaterThan(deeper);
+    expect(choosing).toContain('never one listed under "Already asked" in the user message');
+    expect(choosing).toContain("Set wrapping_up to true when they are clearly finishing");
   });
 
   it("carries the coverage levels, the mood, the question style and the longest question, as the file words them", () => {
@@ -91,7 +105,7 @@ describe("buildCoachSystemPrompt", () => {
       '## morale_team (morale): morale team\nClear when they say plainly what morale team was.\nOnly suggest it once morale_feeling is at least brief.\nA brief answer is enough: never suggest it once it is brief.\nIf you choose it, leave question empty: the app always asks "How has it been working with the team this week?"',
     );
     expect(prompt).toContain(
-      `## activity_work (activity): activity work\nClear when they say plainly what activity work was.\nThe key topic for activity.\nExample question: "What's one piece of work that took up most of your time this week?"`,
+      `## activity_work (activity): activity work\nClear when they say plainly what activity work was.\nThe key topic for activity.\nThe app's own fallback question, which you need not copy: "What's one piece of work that took up most of your time this week?"`,
     );
   });
 });

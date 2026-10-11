@@ -58,7 +58,12 @@ export function parseCoachOutput(text: string, rubric: CoachRubric): CoachRead {
   try {
     json = JSON.parse(text);
   } catch (error) {
-    throw new CoachError("The coach's reply was not valid JSON", { reason: "invalid_output", retryable: true, cause: error });
+    throw new CoachError("The coach's reply was not valid JSON", {
+      reason: "invalid_output",
+      retryable: true,
+      code: "not_json",
+      cause: error,
+    });
   }
   const result = readSchema(rubric).safeParse(json);
   if (!result.success) {
@@ -66,6 +71,7 @@ export function parseCoachOutput(text: string, rubric: CoachRubric): CoachRead {
     throw new CoachError(`The coach's reply did not match the schema (${fields})`, {
       reason: "invalid_output",
       retryable: true,
+      code: "schema",
       cause: result.error,
     });
   }
