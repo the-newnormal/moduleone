@@ -28,4 +28,4 @@ export type QuestionId = (typeof QUESTIONS)[number]["id"];
 // question" is asked otherwise), in the file's wording as of the last code change here. Nothing
 // checks the two match: people edit the file without touching code.
 export const DEFAULT_OPENING_QUESTION =
-  "Talk me through your week: what you worked on and what came of it, a moment you or your team were at your best, and how you're feeling about the team.";
+  "Talk me through your week, Monday to Saturday: what you worked on and what came of it, a moment you or your team were at your best, and how you're feeling about the team.";

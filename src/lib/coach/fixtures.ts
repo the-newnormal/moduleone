@@ -55,7 +55,7 @@ export const TEST_SETTINGS: CoachSettings = {
 
 export const TEST_RUBRIC: CoachRubric = {
   opening:
-    "Talk me through your week: what you worked on and what came of it, a moment you or your team were at your best, and how you're feeling about the team.",
+    "Talk me through your week, Monday to Saturday: what you worked on and what came of it, a moment you or your team were at your best, and how you're feeling about the team.",
   coverageLevels: "- none: nothing about it yet.\n- brief: touched on.\n- clear: said plainly.\n- declined: nothing to say.",
   mood: "- neutral: an ordinary week.\n- hard_week: a tough week.\n- distress: not coping.",
   questionStyle: "- One question, one sentence, ending in \"?\".",

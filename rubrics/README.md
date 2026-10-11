@@ -354,8 +354,9 @@ is the only one: no live transcription and no coach calls.
    and each live session opens at most one transcription session (this closed
    [#34](https://github.com/the-newnormal/moduleone/issues/34)). The opening question from
    `coach.md` is on screen from before Start is pressed:
-   *"Talk me through your week: what you worked on and what came of it, a moment you or your team
-   were at your best, and how you're feeling about the team."*
+   *"Talk me through your week, Monday to Saturday: what you worked on and what came of it, a
+   moment you or your team were at your best, and how you're feeling about the team."* (Check-ins
+   are done on Sundays, so the question asks about the six days before.)
 2. **Live text.** While the recording runs as usual, the browser sends a copy of the microphone
    straight to OpenAI's realtime transcription (`STT_LIVE_MODEL`) over that connection and gets
    text back as they speak.

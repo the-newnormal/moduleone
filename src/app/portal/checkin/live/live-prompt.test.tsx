@@ -12,7 +12,7 @@ import { LivePrompt } from "./live-prompt";
 const OPENING: ShownOffer = {
   id: 0,
   kind: "question",
-  text: "Talk me through your week: what you worked on and what came of it, a moment you or your team were at your best, and how you're feeling about the team.",
+  text: "Talk me through your week, Monday to Saturday: what you worked on and what came of it, a moment you or your team were at your best, and how you're feeling about the team.",
 };
 const FOLLOW_UP: ShownOffer = { id: 2, kind: "question", text: "What came of the vendor onboarding at the Jurong site?" };
 const COVERED: ShownOffer = { id: 3, kind: "covered", text: "That covers it, thank you. Add anything else you'd like, then press Finish." };
