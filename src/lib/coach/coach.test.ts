@@ -235,7 +235,7 @@ describe("readTranscript reply", () => {
       reply({ stop_reason: "refusal", stop_details: { type: "refusal", category: "cyber", explanation: null }, content: [] }),
     );
     const error = await coachError(readIt());
-    expect(error).toMatchObject({ reason: "refusal", retryable: false, billed: BILLED });
+    expect(error).toMatchObject({ reason: "refusal", retryable: false, code: "refusal", status: null, billed: BILLED });
     expect(error.message).toContain("cyber");
   });
 
@@ -244,7 +244,7 @@ describe("readTranscript reply", () => {
     async (stopReason) => {
       create.mockResolvedValue(reply({ stop_reason: stopReason }, '{"coverage": {"activity_work": "cle'));
       const error = await coachError(readIt());
-      expect(error).toMatchObject({ reason: "invalid_output", retryable: true, billed: BILLED });
+      expect(error).toMatchObject({ reason: "invalid_output", retryable: true, code: "cut_off", billed: BILLED });
       expect(error.message).toContain(stopReason);
     },
   );
@@ -252,10 +252,10 @@ describe("readTranscript reply", () => {
   it("rejects a reply that doesn't match the schema, or has no text", async () => {
     create.mockResolvedValue(reply({}, { ...REPLY, tone: "sian" }));
     const mismatch = await coachError(readIt());
-    expect(mismatch).toMatchObject({ reason: "invalid_output", retryable: true, billed: BILLED });
+    expect(mismatch).toMatchObject({ reason: "invalid_output", retryable: true, code: "schema", billed: BILLED });
     expect(mismatch.message).toContain("did not match the schema");
     create.mockResolvedValue(reply({ content: [] }));
-    expect(await coachError(readIt())).toMatchObject({ reason: "invalid_output", retryable: true, billed: BILLED });
+    expect(await coachError(readIt())).toMatchObject({ reason: "invalid_output", retryable: true, code: "not_json", billed: BILLED });
   });
 });
 
@@ -263,25 +263,27 @@ describe("readTranscript API errors", () => {
   const headers = new Headers();
   const body = (type: string) => ({ type: "error", error: { type, message: "boom" } });
 
-  it.each<[string, unknown, boolean]>([
-    ["rate limited (429)", new RateLimitError(429, body("rate_limit_error"), "boom", headers), true],
-    ["overloaded (529)", new InternalServerError(529, body("overloaded_error"), "boom", headers), true],
-    ["a server error (500)", new InternalServerError(500, body("api_error"), "boom", headers), true],
-    ["a conflict (409)", new ConflictError(409, body("api_error"), "boom", headers), true],
-    ["a request timeout (408)", APIError.generate(408, body("timeout_error"), "boom", headers), true],
-    ["no connection", new APIConnectionError({ message: "fetch failed" }), true],
-    ["a timeout", new APIConnectionTimeoutError(), true],
-    ["a bad request (400)", new BadRequestError(400, body("invalid_request_error"), "boom", headers), false],
-    ["a wrong key (401)", new AuthenticationError(401, body("authentication_error"), "boom", headers), false],
-    ["no permission (403)", new PermissionDeniedError(403, body("permission_error"), "boom", headers), false],
-    ["an unknown model (404)", new NotFoundError(404, body("not_found_error"), "boom", headers), false],
-    ["the SDK refusing the request", new AnthropicError("Missing required argument"), false],
-    ["a non-SDK error", new TypeError("x is not a function"), false],
-  ])("maps %s to retryable %s", async (_label, thrown, retryable) => {
+  it.each<[string, unknown, boolean, string, number | null]>([
+    ["rate limited (429)", new RateLimitError(429, body("rate_limit_error"), "boom", headers), true, "http_error", 429],
+    ["overloaded (529)", new InternalServerError(529, body("overloaded_error"), "boom", headers), true, "http_error", 529],
+    ["a server error (500)", new InternalServerError(500, body("api_error"), "boom", headers), true, "http_error", 500],
+    ["a conflict (409)", new ConflictError(409, body("api_error"), "boom", headers), true, "http_error", 409],
+    ["a request timeout (408)", APIError.generate(408, body("timeout_error"), "boom", headers), true, "http_error", 408],
+    ["no connection", new APIConnectionError({ message: "fetch failed" }), true, "unreachable", null],
+    ["a timeout", new APIConnectionTimeoutError(), true, "timeout", null],
+    ["a bad request (400)", new BadRequestError(400, body("invalid_request_error"), "boom", headers), false, "http_error", 400],
+    ["a wrong key (401)", new AuthenticationError(401, body("authentication_error"), "boom", headers), false, "http_error", 401],
+    ["no permission (403)", new PermissionDeniedError(403, body("permission_error"), "boom", headers), false, "http_error", 403],
+    ["an unknown model (404)", new NotFoundError(404, body("not_found_error"), "boom", headers), false, "http_error", 404],
+    ["the SDK refusing the request", new AnthropicError("Missing required argument"), false, "sdk", null],
+    ["a non-SDK error", new TypeError("x is not a function"), false, "unknown", null],
+  ])("maps %s to retryable %s, with the code %s and status %s for the logs", async (_label, thrown, retryable, code, status) => {
     create.mockRejectedValue(thrown);
     const error = await coachError(readIt());
     expect(error.reason).toBe("api");
     expect(error.retryable).toBe(retryable);
+    expect(error.code).toBe(code);
+    expect(error.status).toBe(status);
     expect(error.cause).toBe(thrown);
     expect(error.billed).toBeNull(); // no reply came back, so nothing to log
     expect(error.message).not.toContain("sk-test");
@@ -292,7 +294,7 @@ describe("readTranscript API errors", () => {
     vi.spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort(new DOMException("Timed out", "TimeoutError")));
     create.mockRejectedValue(new APIUserAbortError());
     const error = await coachError(readIt());
-    expect(error).toMatchObject({ reason: "api", retryable: true, message: "No reply from the Anthropic API within 6 s" });
+    expect(error).toMatchObject({ reason: "api", retryable: true, code: "deadline", message: "No reply from the Anthropic API within 6 s" });
   });
 
   it("says so when the caller cancelled", async () => {
@@ -303,13 +305,13 @@ describe("readTranscript API errors", () => {
       throw new APIUserAbortError();
     });
     const error = await coachError(readIt(caller.signal));
-    expect(error).toMatchObject({ reason: "api", retryable: true, message: "The coach call was cancelled" });
+    expect(error).toMatchObject({ reason: "api", retryable: true, code: "cancelled", message: "The coach call was cancelled" });
   });
 
   it("says the call was stopped when neither the deadline nor the caller stopped it", async () => {
     create.mockRejectedValue(new APIUserAbortError());
     const error = await coachError(readIt());
-    expect(error).toMatchObject({ reason: "api", retryable: true, message: "The coach call was stopped" });
+    expect(error).toMatchObject({ reason: "api", retryable: true, code: "stopped", message: "The coach call was stopped" });
   });
 });
 
@@ -317,7 +319,7 @@ describe("readTranscript without an API key", () => {
   it.each([[""], ["   "], [undefined]])("fails clearly for ANTHROPIC_API_KEY=%j, without a client or a call", async (value) => {
     vi.stubEnv("ANTHROPIC_API_KEY", value);
     const error = await coachError(readIt());
-    expect(error).toMatchObject({ reason: "api", retryable: false });
+    expect(error).toMatchObject({ reason: "api", retryable: false, code: "no_api_key" });
     expect(error.message).toContain("ANTHROPIC_API_KEY");
     expect(clientOptions).toHaveLength(0);
     expect(create).not.toHaveBeenCalled();
@@ -348,6 +350,7 @@ describe("readTranscript with a broken rubrics/coach.md", () => {
     expect(error).toMatchObject({
       reason: "rubric",
       retryable: false,
+      code: "rubric",
       message: "rubrics/coach.md can't be used; fix it and redeploy",
     });
     const cause = (error as Error).cause;

@@ -84,8 +84,9 @@ If a broken file ever reached production anyway: grading stops with the reason `
 in `checkins.processing_error`, without using up the check-in's attempts, and those check-ins are
 graded once the fix is deployed; a broken `coach.md` switches live check-ins off, and until it's
 fixed members get a built-in opening question and no follow-ups. The built-in question
-(`DEFAULT_OPENING_QUESTION` in `src/lib/checkin/week.ts`) keeps the wording `coach.md` was first
-shipped with: editing the opening question here doesn't change it, so the two can differ.
+(`DEFAULT_OPENING_QUESTION` in `src/lib/checkin/week.ts`) keeps the wording it was last given in
+code (today the same as `coach.md`'s): editing the opening question here doesn't change it, so the
+two can differ.
 
 ### Rules for `grading.md`
 
@@ -137,8 +138,8 @@ shipped with: editing the opening question here doesn't change it, so the two ca
     `morale_reason` and `morale_team` keep `Brief is enough: yes`.
 - **Closing lines:** exactly these four: `Everything covered`, `Time is nearly up`,
   `After a hard moment`, `Before you finish`, each at most 300 characters. "Before you finish" is a
-  lead-in: the app adds a question after it, starting in lower case ("Before you finish, how are
-  you feeling about the team at the moment?").
+  lead-in: the app adds a question after it, starting in lower case ("Before you finish, how's the
+  team been for you this week?").
 - **Settings:** every setting in [the settings table](#every-setting-in-coachmd), as a plain number
   (`2` or `0.5`, not `two` or `1e3`), inside its range, whole where it says so. "No new questions
   after" can't be earlier than "Only key topics after", and "Silence that means they have stopped"
@@ -353,8 +354,8 @@ is the only one: no live transcription and no coach calls.
    and each live session opens at most one transcription session (this closed
    [#34](https://github.com/the-newnormal/moduleone/issues/34)). The opening question from
    `coach.md` is on screen from before Start is pressed:
-   *"Talk me through your week: what you worked on, what came of it, and how you're feeling about
-   the team."*
+   *"Talk me through your week: what you worked on and what came of it, a moment you or your team
+   were at your best, and how you're feeling about the team."*
 2. **Live text.** While the recording runs as usual, the browser sends a copy of the microphone
    straight to OpenAI's realtime transcription (`STT_LIVE_MODEL`) over that connection and gets
    text back as they speak.
@@ -371,6 +372,11 @@ is the only one: no live transcription and no coach calls.
      call only, never stored);
    - its suggestion: the topic most worth asking next, its own wording for the question, and the
      member's exact words that wording quotes, if any.
+
+   Claude is told to go deeper on what they are talking about first (a topic in that area that is
+   still none or brief), then to an area they haven't touched at all, which comes first once they
+   are wrapping up. Each topic's `Ask` reaches Claude as the app's fallback question, which it need
+   not copy, so its own questions follow what the member said rather than the file's wording.
 
    Claude is sent only the text so far and the ids of topics already asked or skipped, with its
    instructions. It never sees the weights or settings, apart from "Longest question".
@@ -421,11 +427,23 @@ At every call, each topic that may be asked gets a score:
   - **0.6** ("Brief answer counts as") if it was only touched on (brief), or **0** if the topic
     says "Brief is enough: yes";
   - **0** once it is clear or declined.
-- **untouched-area bonus** (**+0.5**, "Bonus for an untouched area"): only for an area's key
+- **untouched-area bonus** (**+0.2**, "Bonus for an untouched area"): only for an area's key
   topic, while nothing at all in that area has come up yet.
-- **flow bonus** (**+0.2**, "Bonus for the area they are talking about"): for every topic in an
+- **flow bonus** (**+0.4**, "Bonus for the area they are talking about"): for every topic in an
   area whose coverage went up in the latest read, so follow-ups go with what they are talking
-  about.
+  about. A read that raises nothing ends it, except a reread of fewer than 8 new words ("hmm
+  ya", [below](#when-the-browser-calls-the-coach)), which says too little to show they have moved
+  on.
+
+The flow bonus is the bigger of the two, so going deeper on what they are talking about scores
+close to an area they haven't touched: while they talk about their work, `activity_outcome` (not
+yet mentioned) scores 0.8 + 0.4 = 1.20, level with an untouched key topic's 1.0 + 0.2. A tie goes
+to the key topic, but a topic Claude suggests within 0.5 of the best gets Claude's question (step 7
+below), so when Claude suggests a follow-up on what they said and its wording passes the checks,
+that is what's asked. As they wrap up, one area they haven't touched gets a "Before you finish"
+question, once, and after 150 s only key topics are asked. The trade-off: in a take shorter than
+that, an area can go without a follow-up (the opening question still asks about all three), so
+watch query 1's `all_three_touched`.
 
 A topic **may be asked** only if all of these hold:
 
@@ -436,7 +454,7 @@ A topic **may be asked** only if all of these hold:
   its area ("Most follow-ups per area"). Three areas at 2 each make 6, so the total never stops a
   question by itself: the scores and the floor below, not the total, decide when the questions
   stop;
-- the recording is under **360 s** ("No new questions after"), and after **270 s** only key topics
+- the recording is under **360 s** ("No new questions after"), and after **150 s** only key topics
   ("Only key topics after").
 
 The best score must also reach **the floor**, or nothing is asked:
@@ -472,7 +490,7 @@ At each call the policy goes down this list and stops at the first that applies:
    only when all of these hold:
    - Claude suggested a topic and a question in this read, and the read didn't flag
      instructions in the transcript;
-   - its topic may be asked, reaches the floor, and scores no more than **0.15** below the best
+   - its topic may be asked, reaches the floor, and scores no more than **0.5** below the best
      ("Claude's choice may score lower by up to");
    - the topic allows it (`Tailor`, never for morale);
    - the wording passes every check (`validateQuestion`): 12 to 140 characters ("Longest
@@ -494,12 +512,17 @@ At each call the policy goes down this list and stops at the first that applies:
    "well done", "good job", "bright side", "at least"), pressure ("why", "should", "only", "just",
    "didn't", "haven't", "elaborate", "more detail", "be specific", "tell me more"), personal life
    ("depressed", "anxious", "burnout", "mental", "therapy", "counselling", "health", "sick",
-   "family", "wife", "husband", "child", "kids", "parent", "money", "salary", "religion",
-   "relationship") and links. Most of them match parts of words too, so "upgrade" counts as
-   "grade": a false alarm only means the file's question is shown.
+   "family", "wife", "husband", "child", "kids", "parent", "money", "salary", "religion", and
+   "relationship" unless it is plainly a working one, such as "client relationship") and links.
+   The work words match whole words only, with their usual endings ("scored", "grader", "burnt
+   out"), so "upgrade", "departmental" or "transparent" pass. The private-life words also match in
+   any form or compound ("grandparents", "physiotherapy", "antidepressants", "healthy"), and a
+   "partner relationship" counts as personal. A false alarm ("a healthy pipeline") only means the
+   file's question is shown.
 
    If the wording fails a check, the file's question for the best topic is shown instead, and once
-   it is on screen it is counted as **rejected** (as well as in the file's wording).
+   it is on screen it is counted as **rejected** (as well as in the file's wording). Which check it
+   failed is counted at once, in `counts.rejectedWhy` (section 5).
 8. **The file's question** (`Ask`, or `Ask in a hard week` in a hard week) for the best topic.
 
 **"Different question"** (offered for follow-ups only): the topic is never offered again, and a
@@ -525,67 +548,67 @@ These numbers come from running the policy on today's `coach.md`.
 
 **Call 1, 35 s in.** They have said: *"This week mostly on the vendor onboarding for the Jurong site
 lah. Quite a lot of back and forth with their ops team, and also the usual BAU."* Claude reads
-`activity_work` clear and `activity_more` brief, everything else none, mood neutral, and suggests
-`excellence_moment` with "In the vendor onboarding for the Jurong site, where did you or the team
-get to use your superpower?" (quoting "vendor onboarding for the Jurong site"). Activity's
-coverage rose, so activity gets the flow bonus. The floor is 0.45: excellence and morale haven't
-come up.
+`activity_work` clear and `activity_more` brief, everything else none, mood neutral. Going deeper
+on what they are talking about, it suggests `activity_outcome` with "You mentioned the vendor
+onboarding for the Jurong site: where did that get to?" (quoting "vendor onboarding for the Jurong
+site"). Activity's coverage rose, so activity gets the flow bonus. The floor is 0.45: excellence
+and morale haven't come up.
 
 | Topic | Working | Score |
 | --- | --- | --- |
-| `excellence_moment` | 1.0 × 1 + 0.5 untouched | 1.50 |
-| `morale_feeling` | 1.0 × 1 + 0.5 untouched | 1.50 |
-| `activity_outcome` | 0.8 × 1 + 0.2 flow | 1.00 |
-| `activity_more` | 0.4 × 0.6 + 0.2 flow | 0.44, below the floor |
+| `excellence_moment` | 1.0 × 1 + 0.2 untouched | 1.20 |
+| `morale_feeling` | 1.0 × 1 + 0.2 untouched | 1.20 |
+| `activity_outcome` | 0.8 × 1 + 0.4 flow | 1.20 |
+| `activity_more` | 0.4 × 0.6 + 0.4 flow | 0.64 |
 | `activity_work` | clear | nothing left to ask |
 | the other four | the topic they need hasn't come up | can't be asked |
 
-`excellence_moment` and `morale_feeling` tie; both are key topics, and excellence comes before
-morale, so `excellence_moment` is best. Claude chose it too, it allows Claude's wording, and the
-wording passes the checks (the quote was said, and is in the question), so **Claude's question is
-shown** at their next pause of 2.5 s: they are past 25 s, the opening question has been up over
-20 s, and they have said more than 20 words to it.
+All three tie. The tie goes to the key topics, and excellence comes before morale, so
+`excellence_moment` is best. But Claude chose `activity_outcome`, which scores within 0.5 of the
+best (level with it), allows Claude's wording, and the wording passes the checks (the quote was
+said, and is in the question), so **Claude's question about the onboarding is shown** at their
+next pause of 2.5 s: they are past 25 s, the opening question has been up over 20 s, and they have
+said more than 20 words to it. Without Claude's suggestion, or had its wording failed the checks,
+the file's question for `excellence_moment` would have been shown: "What's one moment this week
+when you or your team were at your best?"
 
-**Call 2, 80 s in.** They add: *"Hmm, I guess I'm usually the one who helps the juniors lah. Team
-ok lah, everyone quite tired but we're fine."* Claude reads `excellence_moment` brief (a general,
-habitual example) and `morale_feeling` clear ("ok lah" is a complete answer), and suggests
-`activity_outcome` with "Where did the vendor onboarding get to by the end of the week?" (quoting
-"vendor onboarding"). The call also says the first follow-up is on screen, so `excellence_moment`
-counts as asked, and is never asked again, even though the answer was brief. Every area's key
-topic is now done (activity's clear, excellence's asked, morale's clear), so the floor is 0.6.
+**Call 2, 80 s in.** They add: *"Ya that one done liao, boss signed off on Friday. The rest of the
+week was mostly the Q3 budget deck for Finance."* Claude reads `activity_outcome` and
+`activity_more` clear. The call also says the first follow-up is on screen, so `activity_outcome`
+counts as asked. Nothing is left to go deeper on in activity, so Claude turns to an area they
+haven't touched, and suggests `excellence_moment` with "With all that back and forth with their
+ops team, when were you or the team at your best?" (quoting "back and forth with their ops team").
+The floor is still 0.45.
 
 | Topic | Working | Score |
 | --- | --- | --- |
-| `excellence_impact` | 0.7 × 1 + 0.2 flow | 0.90 |
-| `activity_outcome` | 0.8 × 1 | 0.80 |
-| `morale_reason` | 0.5 × 1 + 0.2 flow | 0.70 |
-| `excellence_strength` | 0.4 × 1 + 0.2 flow | 0.60 |
-| `morale_team` | 0.4 × 1 + 0.2 flow | 0.60 |
-| `activity_more` | 0.4 × 0.6 | 0.24, below the floor |
+| `excellence_moment` | 1.0 × 1 + 0.2 untouched | 1.20 |
+| `morale_feeling` | 1.0 × 1 + 0.2 untouched | 1.20 |
+| every activity topic | clear | nothing left to ask |
+| the other four | the topic they need hasn't come up | can't be asked |
 
-The best is `excellence_impact` (0.90), but Claude's topic scores 0.80, within 0.15 of it, so
-**Claude's question about the onboarding is shown**. Had Claude suggested `morale_reason` (0.70,
-more than 0.15 below, and morale never uses Claude's wording), the file's question for
-`excellence_impact` would have been shown instead.
+`excellence_moment` is best, Claude chose it too, and the wording passes the checks, so **Claude's
+question is shown**, in the member's own words rather than the file's.
 
-**Call 3, 150 s in.** They add: *"Ya the onboarding done liao, boss signed off on Friday. Ok I
-think that's all."* Claude reads `activity_outcome` clear, and that they are wrapping up, and
-suggests no topic. Every area has come up, so there is no "Before you finish".
-`excellence_impact` scores 0.70 (no flow bonus now), the only topic at or above 0.6, so **the
-file's question is shown**: "What difference did that make, for the team or for anyone else?"
-Wrapping up doesn't end the questions by itself:
-with "Least score worth asking once every area is touched" at 0.75, this call would have closed
-with "That covers it…" instead.
+**Call 3, 120 s in.** They add: *"Hmm, I think Wednesday lah, their system went down and I sat
+with their admin to key in the forms by hand, so we still made the deadline. Ok I think that's
+about it."* Claude reads `excellence_moment` and `excellence_impact` clear, and that they are
+wrapping up. Morale hasn't come up at all, so **"Before you finish, how's the team been for you
+this week?"** is shown: the file's question, as always for morale. This happens once per
+recording and skips the floor. Had they not been wrapping up, `morale_feeling` (1.20) would have
+been best, and a suggestion from Claude of `excellence_strength` (0.4 × 1 + 0.4 flow = 0.80,
+within 0.5 of it) would have had its own question shown.
 
-**Call 4, 185 s in.** They answer: *"Oh, the juniors can do the site checks on their own now, so
-that saved me a lot of time."* `excellence_impact` is clear. Excellence has had its 2 follow-ups,
-so `excellence_strength` can't be asked, and `morale_reason` (0.50), `morale_team` (0.40) and
-`activity_more` (0.24) are below the floor. **"That covers it, thank you. Add anything else you'd
-like, then press Finish."** No more questions in this recording: 3 follow-ups, 2 in Claude's
-wording and 1 from the file, well under the 6 allowed: the per-area limit and the floor stopped
-them, not the total. If they press Finish without saying more, no coach call comes after
-the closing line, so it is the end call that tells the server it was shown, and the session
-records it (`linesShown` holds `covered`).
+**Call 4, 160 s in.** They answer: *"Team ok lah, everyone quite tired but we're fine."* Claude reads
+`morale_feeling` clear ("ok lah" is a complete answer). Every area's key topic is now done, so the
+floor is 0.6, and past 150 s only key topics may be asked, all of them clear. **"That covers it,
+thank you. Add anything else you'd like, then press Finish."** Had this call come before 150 s,
+`morale_reason` (0.5 × 1 + 0.4 flow = 0.90) would have been best, and its file question would have
+been shown: "What's shaping how you feel about the team right now?" No more questions in this
+recording: 3 follow-ups, 2 in Claude's wording and 1 from the file, one per area, well under the 6
+allowed. If they press Finish without saying more, no coach call comes after the closing line, so
+it is the end call that tells the server it was shown, and the session records it (`linesShown`
+holds `beforeYouFinish` and `covered`).
 
 ### Pacing on screen
 
@@ -594,6 +617,13 @@ asked for after the question on screen appeared. While a newer read is still out
 read has heard more, so its answer replaces the question waiting (or drops it, if nothing is worth
 asking now, or if that read fails or Claude couldn't read it), and they aren't asked about something
 they have just covered.
+It also waits if they said anything after its read was asked for (new text, or more than 0.3 s of
+speech whose text hasn't come back yet): a "team ok lah" just then may have answered it. Their
+words are then read again (below), and that read's answer replaces the question or drops it. If
+that speech comes back as no words at all (a cough, an "mm"), the read missed nothing and the
+question no longer waits for it. If its text hasn't come back by the time they have stopped
+(6 s), or its transcription failed, the question is dropped. Once the 40 calls are used up (below)
+nothing could read it again, so the question doesn't wait for this.
 Then it appears either:
 
 - after **2.5 s** of silence, once the question on screen has been up at least **20 s** and they
@@ -617,27 +647,35 @@ These are fixed in code ([`pacing.ts`](../src/app/portal/checkin/live/pacing.ts)
 - **A call** when they pause for 1.2 s after at least 20 new words (the first time) or 15 new
   words since the last call, or pause for 4 s after any new words. At least 5 s apart, one at a
   time, at most 40 per recording. "Different question" calls at once (at least 1.2 s after the
-  last call).
+  last call). While a question waits because they said more after its read (above), any new words
+  are enough at a 1.2 s pause, without the 5 s (but still at least 1.2 s after the last call), and
+  that call asks for a reread. A turn normally needs 1 s of speech before a pause ends it; while a
+  question waits like this, any speech does, so a short remark is transcribed at once. A call
+  waits for the text of turns already ended, for up to 1.5 s after the last one ended, so it
+  hears everything said before it.
 - **A Claude read** only when the text has at least 12 words (the first time) or 8 more than at the
-  last read; otherwise the policy re-decides from what it already knows, at no cost. No reads
-  after a closing line.
+  last read, or, for a reread, any more than at the last read; otherwise the policy re-decides from
+  what it already knows, at no cost. No reads after a closing line.
 - **Server limits per session:** 120 calls, at least 1 s apart, for 15 minutes from the start (a
   recording stops at 10 minutes); 12 sessions per member in 24 hours.
 
 ### When follow-up questions stop
 
 Live coaching stops, for the rest of that recording (the metrics below call this falling back),
-when:
+when (with the code the end call sends, for the server's log, section 5):
 
 - the start doesn't come back ready (live check-ins off, `coach.md` broken, the privacy notice not
-  accepted, too many sessions, already submitted, and so on);
-- live transcription doesn't connect within 8 s, or the connection drops;
+  accepted, too many sessions, already submitted, and so on): `start_not_ready`, never sent, since
+  no session started;
+- live transcription doesn't connect within 8 s (`connect_timeout`), fails to connect
+  (`connect_failed`), or drops once connected (`connection_lost`);
 - the browser gives no microphone level within 3 s (without it, nothing can tell when they
-  pause);
-- they have spoken for 25 s and no text has come back;
-- two coach calls in a row fail (no answer within 15 s, an error, or Claude's read failed);
+  pause): `meter`;
+- they have spoken for 25 s and no text has come back: `no_text`;
+- two coach calls in a row fail (no answer within 15 s, an error, or Claude's read failed):
+  `coach_failures`;
 - the server says the session is over, isn't theirs or has made too many calls, or that they are
-  signed out.
+  signed out: `final_code`.
 
 The recording carries on. The question on screen stays, no more follow-ups are shown, **Different
 question** and the three tags go, and the recorder says, once: "Follow-up questions have stopped.
@@ -653,13 +691,13 @@ Weights (0.05 to 3, per topic) set how much each topic matters against the other
 | Most follow-up questions | 6 | 0–10, whole | Most follow-ups shown in one recording (skips don't count). At 6, with 2 per area, it never stops a question by itself: the scores decide | nothing more while "Most follow-ups per area" is 2 | shorter; at 0 only the opening question is asked |
 | Most follow-ups per area | 2 | 1–5, whole | Most follow-ups about one area (skips count) | more depth on one area | spread across areas |
 | Brief answer counts as | 0.6 | 0–1 | The need of a topic answered only briefly | more "where did that get to?"-style follow-ups on brief answers | brief answers left alone; at 0 brief is always enough |
-| Bonus for an untouched area | 0.5 | 0–3 | Added to an area's key topic while nothing in that area has come up | all three areas covered first | depth on what they said before breadth |
-| Bonus for the area they are talking about | 0.2 | 0–3 | Added to topics in the area just talked about | follows their flow | jumps to other areas |
-| Claude's choice may score lower by up to | 0.15 | 0–3 | How far below the best Claude's topic may score and still have its wording used | more of Claude's (tailored) questions | more of the file's questions; at 0 only when Claude picks the best |
+| Bonus for an untouched area | 0.2 | 0–3 | Added to an area's key topic while nothing in that area has come up | all three areas covered first | depth on what they said before breadth |
+| Bonus for the area they are talking about | 0.4 | 0–3 | Added to topics in the area just talked about | follows their flow | jumps to other areas |
+| Claude's choice may score lower by up to | 0.5 | 0–3 | How far below the best Claude's topic may score and still have its wording used | more of Claude's (tailored) questions | more of the file's questions; at 0 only when Claude picks the best |
 | Least score worth asking | 0.45 | 0–5 | The floor while some area's key topic isn't done | fewer questions | more questions, including weak ones |
 | Least score worth asking once every area is touched | 0.6 | 0–5 | The floor once every key topic is done | ends sooner with "Everything covered" | more depth questions |
 | Least score worth asking in a hard week | 0.7 | 0–5 | The lowest floor in a hard week | fewer questions in a hard week | as many as usual (it never lowers the other floors) |
-| Only key topics after (seconds) | 270 | 30–600 | From then on, only key topics are asked | more time for depth | breadth only, sooner |
+| Only key topics after (seconds) | 150 | 30–600 | From then on, only key topics are asked | more time for depth | breadth only, sooner |
 | No new questions after (seconds) | 360 | 30–600 | Then "Time is nearly up" | questions later into long recordings | earlier close; not earlier than the setting above |
 | Silence before showing a new question (seconds) | 2.5 | 0.5–10 | Pause needed to show a waiting question | fewer interruptions, later questions | questions show at shorter pauses |
 | Silence that means they have stopped (seconds) | 6 | 1–30 | Pause after which a waiting question shows regardless | longer waits when they stop | quicker help when stuck; not shorter than the setting above |
@@ -697,7 +735,12 @@ end call came) holds:
 | `counts.reads`, `counts.failures` | Successful Claude reads, and reads that failed (timeout, API error, refusal, unusable reply); a failed read is not in `reads` |
 | `counts.tailored`, `counts.bank` | Questions shown in Claude's wording, and in the file's (skipped ones included) |
 | `counts.rejected` | Questions shown in the file's wording because Claude's failed the checks (also counted in `bank`) |
+| `counts.rejectedWhy` | Why Claude's wording failed the checks: each `validateQuestion` reason code (such as `blocked_personal`, `too_long`, `quote_not_said`) and how many times. Counted every time, whether or not the file's question shown instead reached the screen, so its total can be above `rejected` |
+| `counts.noRead` | Offers (questions or closing lines) made before Claude's first successful read, so decided without it; each call's offer counts, shown or not |
 | `counts.latencyMs`, `counts.slowestMs` | Total and slowest Claude read time, in ms |
+
+Sessions saved before `rejectedWhy` and `noRead` were kept don't have them: the queries read a
+missing count as none.
 
 It also keeps what the policy needs between calls, such as the last few offers (their ids, kinds,
 topic ids and sources, never the wording), which one is on screen, the run of skips, how many
@@ -714,8 +757,8 @@ The privacy notice (`src/lib/checkin/notice.ts`) names three things this record 
 topics they were asked about, how much of each they had covered, and whether it sounded like a hard
 week or like they weren't coping (it then stops asking questions). The row keeps more than those
 three: counts and timings about how the app ran (Claude's reads and failed reads, where each
-question's wording came from, read times, how long live transcription ran, the models and the
-start time), and how many words Claude had read by its last read (`wordsRead`), which measures how
+question's wording came from and which checks Claude's wording failed, offers made without a read,
+read times, how long live transcription ran, the models and the start time), and how many words Claude had read by its last read (`wordsRead`), which measures how
 much the member said and which the notice doesn't name. Keeping anything more about what members
 say or how they seem means changing the notice and its revision, so members accept it again.
 
@@ -730,9 +773,11 @@ Starting targets are a first guess: revisit them after the first month.
 | Skip rate | Skipped ÷ (asked + skipped) | under 15% | 1: `skip_rate` |
 | Tailored share | Questions shown in Claude's wording ÷ all follow-up questions shown (tailored + bank) | no target: watch for sudden changes | 1: `tailored_share` |
 | Rejected share | Of the questions shown where Claude's wording would have been used had it passed the checks, the share where it failed them: rejected ÷ (tailored + rejected), both counted when shown | under 20% | 1: `rejected_share` |
+| Why wording is turned down | Times Claude's wording failed each check, by reason code | no target: one reason far ahead of the rest points at a check, or a blocked word, to look at | 10 |
 | Coach failure rate | Failed reads ÷ all reads (successful and failed), in submitted live check-ins | under 2% | 1: `failure_rate` |
 | Read time | Mean read time; the 95th percentile of each session's slowest read; and the slowest read of all. The row keeps only each session's total and slowest, so a per-read percentile can't be worked out | mean under 2 s, 95% of sessions' slowest read under 4 s (the limit is 6 s) | 1: `mean_read_ms`, `p95_slowest_ms`, `slowest_ms` |
 | Fallback rate | Submitted live check-ins that fell back: follow-up questions stopped part way (best estimate: Claude never read it, or two or more reads failed) | under 5% | 1: `fallback_rate`; 9 |
+| Offers without a read | Submitted live check-ins where the coach made at least one offer before Claude's first successful read, deciding without it | rare: watch for a rise | 1: `no_read_share` |
 | Ended with "Everything covered" | Share whose questions ended with "Everything covered": nothing left worth asking, 6 follow-ups reached, or two skips in a row | watch alongside skip rate: a rise from skips isn't good | 1: `ended_covered` |
 | How often each topic is asked | Per topic: times asked and skipped, and asked per session | no topic skipped much more than others | 2 |
 | Coverage at finish, per topic | How many sessions ended with each topic at each level | | 3 |
@@ -743,10 +788,10 @@ Starting targets are a first guess: revisit them after the first month.
 | Morale drift | Mean morale by week and mode | must not rise just because follow-ups were asked | 8 |
 | Coach and grader agree | The coach's excellence coverage against the excellence score | none or declined should mostly be a 1 | 9 |
 
-Query 1's figures other than `sessions`, `submitted`, `fallback_rate` and `failure_rate`, and
-queries 2, 3 and the first part of 9, cover submitted live check-ins that Claude read at least
-once: a check-in Claude never read has no coverage to measure. `fallback_rate` and `failure_rate`
-count every submitted live check-in.
+Query 1's figures other than `sessions`, `submitted`, `fallback_rate`, `no_read_share` and
+`failure_rate`, and queries 2, 3 and the first part of 9, cover submitted live check-ins that
+Claude read at least once: a check-in Claude never read has no coverage to measure.
+`fallback_rate`, `no_read_share` and `failure_rate` count every submitted live check-in.
 
 Add `coach_rubric` to a query's `select` and `group by` to compare before and after a
 `coach.md` change, and `rubric_version` for a `grading.md` change.
@@ -768,6 +813,8 @@ select
   (select round(avg(case when coalesce((n ->> 'reads')::int, 0) = 0
                           or coalesce((n ->> 'failures')::int, 0) >= 2 then 1 else 0 end), 2)
      from s where checkin_id is not null) as fallback_rate,
+  (select round(avg(case when coalesce((n ->> 'noRead')::int, 0) > 0 then 1 else 0 end), 2)
+     from s where checkin_id is not null) as no_read_share,
   round(avg(case when coalesce(cs -> 'coverage' ->> 'activity_work', 'none') <> 'none'
                   and coalesce(cs -> 'coverage' ->> 'excellence_moment', 'none') <> 'none'
                   and coalesce(cs -> 'coverage' ->> 'morale_feeling', 'none') <> 'none'
@@ -941,13 +988,47 @@ where c.audio_duration_ms > 0 and s.started_at >= now() - interval '28 days';
 Live transcription ends when the recorder falls back, so a session whose `recorded_ms` is well
 short of the recording's length most likely fell back: a second estimate of the fallback rate.
 
+**10. Why Claude's wording is turned down, last 28 days**
+
+```sql
+select r.key as reason, sum(r.value::int) as times
+from live_checkin_sessions s, jsonb_each_text(s.coach_state -> 'counts' -> 'rejectedWhy') r
+where s.started_at >= now() - interval '28 days' and s.checkin_id is not null
+group by 1 order by 2 desc;
+```
+
+`blocked_…` reasons name the group of blocked words (`grading`, `audience`, `praise`, `pressure`,
+`personal`, `links`); the others are the length, one-question and quoting checks. A
+`blocked_personal` count can hint that someone raised something personal, so, as everywhere here,
+look only at totals.
+
+### What the server logs
+
+Vercel's logs (Observability, or the project's Logs tab) can be read by anyone with access to the
+Vercel project, so the live routes log codes and counts only: never a member or session id, a
+topic id, a coverage level, a question's wording or anything said.
+
+| Line | When | What it holds |
+| --- | --- | --- |
+| `live session started` (info) | A live session starts (the start route answered ready) | `coachRubric` (the fingerprint), `sttModel`, `coachModel` |
+| `live coach: reading the transcript failed` (error) | A Claude read fails | `reason` (`api`, `refusal`, `invalid_output`, `rubric`), `retryable`, `code` (such as `deadline`, `timeout`, `unreachable`, `http_error`, `cut_off`, `not_json`, `schema`, `no_api_key`) and `status` (the API's HTTP status, for `http_error`; otherwise null). Never the error's message, which can carry what the SDK said back |
+| `live end` (info) | Each end call | `fallback` (why live coaching stopped early, one of the codes under "When follow-up questions stop", or null), then, while the session is still open, `reads`, `failures`, `tailored`, `bank`, `rejected`, `noRead` and `followUps`, as in the table above. Never `rejectedWhy` |
+
+So the logs answer "is live on, on which rubric, and how do takes end" without the database: how
+many sessions start, how often each fallback happens, and whether Claude's reads are failing and
+why. `live end` lines with a `fallback` over `live session started` lines give the fallback rate
+(roughly: an end call can be lost with a tab closed mid-take). Each `live end` line is about one
+take, and a reason such as `blocked_personal` beside a time could point at whoever recorded then,
+so `rejectedWhy` stays in `live_checkin_sessions` (query 10, read in totals). Anything about a
+topic or a person stays there, read as above.
+
 ## 6. The tuning loop
 
 1. **Pick one thing to improve**, from the metrics above, and one change that should move it: a
    weight, a setting, a topic's description, a question's wording. **One change per pull
    request**, so you know what moved the numbers.
-2. **Note the numbers before**: run the queries. Their windows differ: queries 1 to 3 and the
-   second part of 9 cover the last 28 days, 7 the last 8 weeks and 8 the last 12; 4 is by month,
+2. **Note the numbers before**: run the queries. Their windows differ: queries 1 to 3, the
+   second part of 9 and 10 cover the last 28 days, 7 the last 8 weeks and 8 the last 12; 4 is by month,
    and 5, 6 and the first part of 9 have no time limit (5 and 6 are split by `rubric_version`).
    Give 7, 8 and the first part of 9 the same 28 days, or split them by `rubric_version` or
    `coach_rubric`.

@@ -13,7 +13,7 @@ import type { ThinkingConfigParam } from "@anthropic-ai/sdk/resources/messages";
 import { RubricError } from "@/lib/rubrics/markdown";
 import { coachJsonSchema, parseCoachOutput } from "./output";
 import { coachInstructions, coachMessage } from "./prompt";
-import { CoachError, type CoachRead, type CoachUsage } from "./types";
+import { CoachError, type CoachErrorCode, type CoachRead, type CoachUsage } from "./types";
 
 export * from "./types";
 
@@ -58,11 +58,16 @@ export async function readTranscript(input: {
     instructions = coachInstructions();
   } catch (error) {
     if (!(error instanceof RubricError)) throw error;
-    throw new CoachError("rubrics/coach.md can't be used; fix it and redeploy", { reason: "rubric", retryable: false, cause: error });
+    throw new CoachError("rubrics/coach.md can't be used; fix it and redeploy", {
+      reason: "rubric",
+      retryable: false,
+      code: "rubric",
+      cause: error,
+    });
   }
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) {
-    throw new CoachError("Missing ANTHROPIC_API_KEY (server-only).", { reason: "api", retryable: false });
+    throw new CoachError("Missing ANTHROPIC_API_KEY (server-only).", { reason: "api", retryable: false, code: "no_api_key" });
   }
   const model = coachModel();
   const thinking = thinkingFor(model);
@@ -103,6 +108,7 @@ export async function readTranscript(input: {
     throw new CoachError(`Claude declined to read this transcript${category ? ` (${category})` : ""}`, {
       reason: "refusal",
       retryable: false,
+      code: "refusal",
       billed,
     });
   }
@@ -110,6 +116,7 @@ export async function readTranscript(input: {
     throw new CoachError(`The coach's reply ended early (stop_reason ${response.stop_reason})`, {
       reason: "invalid_output",
       retryable: true,
+      code: "cut_off",
       billed,
     });
   }
@@ -119,26 +126,30 @@ export async function readTranscript(input: {
     read = parseCoachOutput(text, instructions.rubric);
   } catch (error) {
     if (!(error instanceof CoachError)) throw error;
-    throw new CoachError(error.message, { reason: error.reason, retryable: error.retryable, cause: error.cause, billed });
+    throw new CoachError(error.message, { reason: error.reason, retryable: error.retryable, code: error.code, cause: error.cause, billed });
   }
   return { read, model: response.model, latencyMs, usage };
 }
 
 // As the grader's: the SDK's abort and network errors are subclasses of APIError, so they come first.
 function apiFailure(error: unknown, deadline: AbortSignal, callerSignal?: AbortSignal): CoachError {
-  const wrap = (message: string, retryable: boolean) => new CoachError(message, { reason: "api", retryable, cause: error });
+  const wrap = (message: string, retryable: boolean, code: CoachErrorCode, status: number | null = null) =>
+    new CoachError(message, { reason: "api", retryable, code, status, cause: error });
   if (error instanceof APIUserAbortError) {
-    if (deadline.aborted) return wrap(`No reply from the Anthropic API within ${COACH_DEADLINE_MS / 1000} s`, true);
-    return wrap(callerSignal?.aborted ? "The coach call was cancelled" : "The coach call was stopped", true);
+    if (deadline.aborted) return wrap(`No reply from the Anthropic API within ${COACH_DEADLINE_MS / 1000} s`, true, "deadline");
+    return callerSignal?.aborted
+      ? wrap("The coach call was cancelled", true, "cancelled")
+      : wrap("The coach call was stopped", true, "stopped");
   }
-  if (error instanceof APIConnectionTimeoutError) return wrap("Timed out waiting for the Anthropic API", true);
-  if (error instanceof APIConnectionError) return wrap("Couldn't reach the Anthropic API", true);
+  if (error instanceof APIConnectionTimeoutError) return wrap("Timed out waiting for the Anthropic API", true, "timeout");
+  if (error instanceof APIConnectionError) return wrap("Couldn't reach the Anthropic API", true, "unreachable");
   if (error instanceof APIError) {
     const retryable =
       error instanceof RateLimitError || error instanceof InternalServerError || error instanceof ConflictError || error.status === 408;
     const detail = [error.type, error.requestID && `request ${error.requestID}`].filter(Boolean).join(", ");
-    return wrap(`Anthropic API error ${error.status ?? "(no status)"}${detail ? ` (${detail})` : ""}`, retryable);
+    const status = typeof error.status === "number" ? error.status : null;
+    return wrap(`Anthropic API error ${error.status ?? "(no status)"}${detail ? ` (${detail})` : ""}`, retryable, "http_error", status);
   }
-  if (error instanceof AnthropicError) return wrap(`The Anthropic SDK rejected the request: ${error.message}`, false);
-  return wrap("The coach call failed", false);
+  if (error instanceof AnthropicError) return wrap(`The Anthropic SDK rejected the request: ${error.message}`, false, "sdk");
+  return wrap("The coach call failed", false, "unknown");
 }

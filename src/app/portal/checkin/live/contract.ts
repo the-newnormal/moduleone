@@ -4,7 +4,8 @@
 //                                 opens the session's one live transcription (no key reaches the
 //                                 browser), and the audio then goes straight to OpenAI
 //   /portal/checkin/live/coach    the transcript so far in, the next thing to show out
-//   /portal/checkin/live/end    the recording finished; how long it ran (for the cost log)
+//   /portal/checkin/live/end      the recording finished; how long it ran (for the cost log), and
+//                                 why live coaching stopped, if it did (for the server's log)
 // Route handlers rather than server actions: Next.js runs a page's server actions one at a time, so
 // a coach call every few seconds would hold up saving the take (see take.ts).
 
@@ -61,6 +62,10 @@ export type CoachRequest = {
   // replace with "Different question", if they did.
   shown: number | null;
   skip: number | null;
+  // The recorder is holding the offer this session last sent, because the member said more after
+  // the read behind it was asked for: read again with Claude however few words are new, so that
+  // offer is confirmed or replaced by a read that heard them. Left out otherwise.
+  reread?: boolean;
 };
 
 export type ShownOffer = { id: number; kind: OfferKind; text: string };
@@ -77,7 +82,22 @@ export type CoachResponse =
     }
   | LiveError;
 
+// Why the recorder gave up on live coaching for the take (use-live-coach.ts), for the end route's
+// log. start_not_ready never reaches it: with no session started, there is nothing to end.
+export const FALLBACK_REASONS = [
+  "start_not_ready",
+  "connect_timeout",
+  "connect_failed",
+  "connection_lost",
+  "meter",
+  "no_text",
+  "coach_failures",
+  "final_code",
+] as const;
+export type FallbackReason = (typeof FALLBACK_REASONS)[number];
+
 // shown: the offer on screen when the take ended, so the last question or closing line is counted
-// even when no coach call came after it.
-export type EndRequest = { sessionId: string; recordedMs: number; shown: number | null };
+// even when no coach call came after it. fallback: why live coaching stopped early, left out if it
+// didn't.
+export type EndRequest = { sessionId: string; recordedMs: number; shown: number | null; fallback?: FallbackReason };
 export type EndResponse = { status: "ended" } | LiveError;

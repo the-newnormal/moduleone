@@ -25,7 +25,7 @@ export const QUESTIONS = [
 export type QuestionId = (typeof QUESTIONS)[number]["id"];
 
 // The one open question a check-in asks when rubrics/coach.md can't be used (its "## Opening
-// question" is asked otherwise), in the wording the file was first shipped with. Deliberately not
-// kept in step with the file: people edit that without touching code.
+// question" is asked otherwise), in the file's wording as of the last code change here. Nothing
+// checks the two match: people edit the file without touching code.
 export const DEFAULT_OPENING_QUESTION =
-  "Talk me through your week: what you worked on, what came of it, and how you're feeling about the team.";
+  "Talk me through your week: what you worked on and what came of it, a moment you or your team were at your best, and how you're feeling about the team.";

@@ -1,7 +1,9 @@
 // Test data for the live coach, used only by its tests. Two things live here:
 //
-// - TEST_RUBRIC: rubrics/coach.md's topics and settings as they were when the policy tests were
-//   written, frozen, so tests that need exact scores keep passing when someone retunes the file.
+// - TEST_RUBRIC: a frozen copy of rubrics/coach.md's topics and settings, so tests that need exact
+//   scores keep passing when someone retunes the file. Its wording and scoring are the file's as
+//   retuned to follow what the member is talking about ("Most follow-up questions" and "No
+//   follow-up before" are older values). Change it only together with the tests that pin it.
 // - FIXTURES: short check-ins, each labelled with the coverage level a careful reader would give
 //   every topic by the end, its mood, and whether it tries to direct the coach. They are the seed of
 //   the coach's eval set: coach.live.test.ts runs Claude on each and reports how often it agrees.
@@ -35,13 +37,13 @@ export const TEST_SETTINGS: CoachSettings = {
   maxFollowUps: 4,
   maxPerArea: 2,
   briefNeed: 0.6,
-  untouchedBonus: 0.5,
-  flowBonus: 0.2,
-  tailorSlack: 0.15,
+  untouchedBonus: 0.2,
+  flowBonus: 0.4,
+  tailorSlack: 0.5,
   minScore: 0.45,
   minScoreAfterKeys: 0.6,
   minScoreHardWeek: 0.7,
-  keysOnlyAfterS: 270,
+  keysOnlyAfterS: 150,
   noNewQuestionsAfterS: 360,
   showAfterSilenceS: 2.5,
   stoppedSilenceS: 6,
@@ -52,7 +54,8 @@ export const TEST_SETTINGS: CoachSettings = {
 };
 
 export const TEST_RUBRIC: CoachRubric = {
-  opening: "Talk me through your week: what you worked on, what came of it, and how you're feeling about the team.",
+  opening:
+    "Talk me through your week: what you worked on and what came of it, a moment you or your team were at your best, and how you're feeling about the team.",
   coverageLevels: "- none: nothing about it yet.\n- brief: touched on.\n- clear: said plainly.\n- declined: nothing to say.",
   mood: "- neutral: an ordinary week.\n- hard_week: a tough week.\n- distress: not coping.",
   questionStyle: "- One question, one sentence, ending in \"?\".",
@@ -63,7 +66,7 @@ export const TEST_RUBRIC: CoachRubric = {
       askHardWeek: "Where do things stand with that now?",
     }),
     topic("activity_more", "activity", 0.4, "What else took up your time this week?", { needs: "activity_work" }),
-    topic("excellence_moment", "excellence", 1.0, "Where did you or your team get to use your superpower this week?", {
+    topic("excellence_moment", "excellence", 1.0, "What's one moment this week when you or your team were at your best?", {
       key: true,
       askHardWeek: "In the middle of all that, what did you or your team do that made a difference?",
     }),
@@ -74,7 +77,7 @@ export const TEST_RUBRIC: CoachRubric = {
       needs: "excellence_moment",
       askHardWeek: "What did you or the team draw on to get through it?",
     }),
-    topic("morale_feeling", "morale", 1.0, "How are you feeling about the team at the moment?", { key: true, tailor: false }),
+    topic("morale_feeling", "morale", 1.0, "How's the team been for you this week?", { key: true, tailor: false }),
     topic("morale_reason", "morale", 0.5, "What's shaping how you feel about the team right now?", {
       needs: "morale_feeling",
       tailor: false,

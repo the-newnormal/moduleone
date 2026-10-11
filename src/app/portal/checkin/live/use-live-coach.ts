@@ -2,7 +2,8 @@
 // (transport.ts), the transcript so far goes to the coach every few seconds (api.ts), and the
 // question it picks is shown when they pause (pacing.ts). The recording itself never waits on any
 // of this, and anything going wrong ends live coaching for the rest of the take: the recorder then
-// keeps the question on screen, with no more follow-ups, as without live check-ins.
+// keeps the question on screen, with no more follow-ups, as without live check-ins, and the end call
+// says what went wrong, as a code.
 //
 // createLiveCoach is the whole flow over plain callbacks, with its browser parts passed in (the
 // start, coach and end calls, the transcription connection, the level meter and the clock), so it
@@ -14,15 +15,25 @@
 import { useEffect, useState } from "react";
 import type { Pacing, Touched } from "@/lib/coach/types";
 import { askCoach, connectLive, endLive, isLiveStartReady, startLive } from "./api";
-import { MAX_TRANSCRIPT_CHARS, type CoachResponse, type LiveErrorCode, type LiveStartResponse, type ShownOffer } from "./contract";
+import {
+  MAX_TRANSCRIPT_CHARS,
+  type CoachResponse,
+  type FallbackReason,
+  type LiveErrorCode,
+  type LiveStartResponse,
+  type ShownOffer,
+} from "./contract";
 import {
   CONNECT_TIMEOUT_MS,
+  heardSinceRead,
   liveClock,
   MAX_COACH_FAILURES_IN_A_ROW,
+  MAX_READS,
   NO_TEXT_WHILE_SPEAKING_MS,
   shouldCommit,
   shouldRead,
   shouldShow,
+  TEXT_WAIT_MS,
 } from "./pacing";
 import { applyEvent, emptyTranscript, transcriptText, wordCount, type LiveTranscript, type TranscriptEvent } from "./transcript";
 import { connectLiveTranscription, type LiveConnection } from "./transport";
@@ -107,11 +118,16 @@ export type LiveCoachController = {
 
 type Timer = ReturnType<typeof setTimeout>;
 
+// When a read was asked for, and how much they had said by then: words of text, time spoken (some
+// of it may not have come back as text yet), and turns whose transcription had failed.
+type ReadAsked = { requestedAt: number; words: number; spokenAt: number; lost: number };
+
 // One take's live coaching, from Start to stop.
 type Run = {
   stopped: boolean;
-  // Gave up on live coaching for this take.
+  // Gave up on live coaching for this take, and why (sent with the end call).
   fallen: boolean;
+  fallenWhy: FallbackReason | null;
   abort: AbortController;
   sessionId: string | null;
   pacing: Pacing | null;
@@ -135,6 +151,10 @@ type Run = {
   spokenAtText: number;
   spokenAtCommit: number;
   lastCommitAt: number;
+  // Turns ended (commits), turns whose text has come back in full or failed, and those that failed.
+  commits: number;
+  turnsBack: number;
+  turnsLost: number;
   reads: number;
   lastReadAt: number | null;
   wordsAtLastRead: number;
@@ -145,8 +165,9 @@ type Run = {
   failures: number;
   // The offer they asked to replace with "Different question", until that call is sent.
   skipWanted: number | null;
-  // The coach's latest offer, waiting for a pause, and when the read behind it was asked for.
-  pending: { offer: ShownOffer; requestedAt: number } | null;
+  // The coach's latest offer, waiting for a pause, and when the read behind it was asked for (with
+  // how much they had said by then).
+  pending: ({ offer: ShownOffer } & ReadAsked) | null;
   shown: ShownOffer;
   shownAt: number;
   wordsAtShown: number;
@@ -157,6 +178,7 @@ function newRun(opening: string): Run {
   return {
     stopped: false,
     fallen: false,
+    fallenWhy: null,
     abort: new AbortController(),
     sessionId: null,
     pacing: null,
@@ -178,6 +200,9 @@ function newRun(opening: string): Run {
     spokenAtText: 0,
     spokenAtCommit: 0,
     lastCommitAt: 0,
+    commits: 0,
+    turnsBack: 0,
+    turnsLost: 0,
     reads: 0,
     lastReadAt: null,
     wordsAtLastRead: 0,
@@ -238,14 +263,15 @@ export function createLiveCoach({
     if (r.sessionId === null || r.endSent) return;
     r.endSent = true;
     const heardMs = r.connectedAt === null ? 0 : Math.max(0, (r.closedAt ?? deps.now()) - r.connectedAt);
-    deps.end({ sessionId: r.sessionId, recordedMs: Math.round(heardMs), shown: r.shown.id });
+    deps.end({ sessionId: r.sessionId, recordedMs: Math.round(heardMs), shown: r.shown.id, ...fellBack(r) });
   }
 
   // One way, for the rest of the take: the recorder keeps the question on screen, with no more
   // follow-ups.
-  function fallback(r: Run) {
+  function fallback(r: Run, why: FallbackReason) {
     if (!active(r)) return;
     r.fallen = true;
+    r.fallenWhy = why;
     shutdown(r);
     endSession(r);
     onView({ mode: "fallback", offer: r.shown });
@@ -253,7 +279,7 @@ export function createLiveCoach({
 
   function failed(r: Run) {
     r.failures += 1;
-    if (r.failures >= MAX_COACH_FAILURES_IN_A_ROW) fallback(r);
+    if (r.failures >= MAX_COACH_FAILURES_IN_A_ROW) fallback(r, "coach_failures");
   }
 
   // Live transcription must be connected this long after the recording starts (or after the key
@@ -262,17 +288,17 @@ export function createLiveCoach({
     if (r.deadline !== null) clearTimeout(r.deadline);
     r.deadline = setTimeout(() => {
       r.deadline = null;
-      if (!r.connection) fallback(r);
+      if (!r.connection) fallback(r, "connect_timeout");
     }, CONNECT_TIMEOUT_MS);
   }
 
   function started(r: Run, response: LiveStartResponse | null) {
     if (!active(r)) {
       // Answered after the take ended, or after live coaching was given up: nothing will use it.
-      if (isLiveStartReady(response)) deps.end({ sessionId: response.sessionId, recordedMs: 0, shown: null });
+      if (isLiveStartReady(response)) deps.end({ sessionId: response.sessionId, recordedMs: 0, shown: null, ...fellBack(r) });
       return;
     }
-    if (!isLiveStartReady(response)) return fallback(r);
+    if (!isLiveStartReady(response)) return fallback(r, "start_not_ready");
     r.sessionId = response.sessionId;
     r.pacing = response.pacing;
     connect(r);
@@ -295,7 +321,7 @@ export function createLiveCoach({
         },
         signal: r.abort.signal,
         onEvent: (event) => heard(r, event),
-        onFailure: () => fallback(r),
+        onFailure: () => fallback(r, "connection_lost"),
       })
       .then(
         (connection) => {
@@ -311,15 +337,19 @@ export function createLiveCoach({
           if (r.deadline !== null) clearTimeout(r.deadline);
           r.deadline = null;
         },
-        () => fallback(r),
+        () => fallback(r, "connect_failed"),
       );
   }
 
   function heard(r: Run, event: TranscriptEvent) {
     if (!active(r)) return;
+    const finished = (event.type === "completed" || event.type === "failed") && !r.transcript.items.get(event.itemId)?.final;
     const next = applyEvent(r.transcript, event);
     if (next === r.transcript) return;
     r.transcript = next;
+    // Counted even when it brings no words (a cough, an "mm"): the turn is back all the same.
+    if (finished) r.turnsBack += 1;
+    if (finished && event.type === "failed") r.turnsLost += 1;
     const text = transcriptText(next);
     if (text === r.text) return;
     r.text = text;
@@ -335,10 +365,13 @@ export function createLiveCoach({
     publish(r);
   }
 
-  async function ask(r: Run, skip: number | null) {
+  // reread: an offer is held for what they said after its read, and this read is to confirm or
+  // replace it, however few words are new (the server reads them with Claude).
+  async function ask(r: Run, skip: number | null, reread = false) {
     const sessionId = r.sessionId;
     if (sessionId === null) return;
     const at = deps.now();
+    const asked: ReadAsked = { requestedAt: at, words: r.words, spokenAt: spokenMs(r.voice, at), lost: r.turnsLost };
     const seq = ++r.seq;
     const controller = new AbortController();
     const timer = setTimeout(() => {
@@ -362,7 +395,15 @@ export function createLiveCoach({
     let response: CoachResponse | null;
     try {
       response = await deps.ask(
-        { sessionId, transcript, elapsedMs: Math.max(0, Math.round(at - r.startedAt)), shown: r.shown.id, skip },
+        {
+          sessionId,
+          transcript,
+          elapsedMs: Math.max(0, Math.round(at - r.startedAt)),
+          shown: r.shown.id,
+          skip,
+          // Only when set: a server from before reread (after a rollback) refuses keys it doesn't know.
+          ...(reread ? { reread: true } : {}),
+        },
         controller.signal,
       );
     } catch {
@@ -372,10 +413,10 @@ export function createLiveCoach({
     if (r.call?.seq !== seq) return;
     clearTimeout(timer);
     r.call = null;
-    if (active(r)) answer(r, response, at, skip);
+    if (active(r)) answer(r, response, asked, skip);
   }
 
-  function answer(r: Run, response: CoachResponse | null, requestedAt: number, skip: number | null) {
+  function answer(r: Run, response: CoachResponse | null, asked: ReadAsked, skip: number | null) {
     // A read that heard more came back with nothing to weigh (failed, or turned away): the offer
     // waiting from an earlier read may be about what they have just covered, so it goes too.
     if (skip === null && (response === null || response.status === "error")) r.pending = null;
@@ -386,7 +427,7 @@ export function createLiveCoach({
         if (skip !== null && r.skipWanted === null && r.shown.id === skip) r.skipWanted = skip;
         return;
       }
-      if (FINAL.includes(response.code)) return fallback(r);
+      if (FINAL.includes(response.code)) return fallback(r, "final_code");
       return failed(r);
     }
     const touchedNow = !sameTouched(r.touched, response.touched);
@@ -405,7 +446,7 @@ export function createLiveCoach({
     // A "Different question" waiting to be sent answers instead of this. A degraded read never heard
     // the newest speech: its offer, like the one held back for it, may be about what they have just
     // covered, so neither waits to be shown.
-    if (skip === null) r.pending = offer && !response.degraded && r.skipWanted === null ? { offer, requestedAt } : null;
+    if (skip === null) r.pending = offer && !response.degraded && r.skipWanted === null ? { offer, ...asked } : null;
     if (touchedNow) publish(r);
   }
 
@@ -413,23 +454,51 @@ export function createLiveCoach({
     if (!active(r)) return;
     const at = deps.now();
     if (!r.sampled) {
-      if (at - r.startedAt >= METER_WAIT_MS) fallback(r);
+      if (at - r.startedAt >= METER_WAIT_MS) fallback(r, "meter");
       return;
     }
     const { connection, pacing } = r;
     if (!connection || !pacing) return;
     const silence = silenceMs(r.voice, at);
     const spoken = spokenMs(r.voice, at);
+    const { pending } = r;
+    // What they said since the read behind the waiting offer came back as no words at all (a cough,
+    // an "mm"): nothing since the last commit, every turn ended is back, and none failed since the
+    // read. The read missed nothing, so that speech no longer holds the offer.
+    if (
+      pending !== null &&
+      spoken > pending.spokenAt &&
+      spoken === r.spokenAtCommit &&
+      r.words <= pending.words &&
+      r.turnsBack >= r.commits &&
+      r.turnsLost === pending.lost
+    ) {
+      pending.spokenAt = spoken;
+    }
+    // They have said more since that read was asked for: the offer isn't shown until a read that
+    // has heard it answers. With no read left to ask (MAX_READS), it shows at the pause, as before
+    // offers were held: a question that may come a little late beats none at all.
+    const held =
+      pending !== null &&
+      r.reads < MAX_READS &&
+      heardSinceRead({ words: r.words, wordsAtRead: pending.words, spokenMs: spoken, spokenAtRead: pending.spokenAt });
 
     if (
-      shouldCommit({ now: at, silenceMs: silence, speechSinceCommitMs: spoken - r.spokenAtCommit, lastCommitAt: r.lastCommitAt })
+      shouldCommit({
+        now: at,
+        silenceMs: silence,
+        speechSinceCommitMs: spoken - r.spokenAtCommit,
+        lastCommitAt: r.lastCommitAt,
+        offerHeld: held,
+      })
     ) {
       connection.commit();
+      r.commits += 1;
       r.lastCommitAt = at;
       r.spokenAtCommit = spoken;
     }
     // They have been talking and nothing has come back: live transcription isn't working.
-    if (spoken - r.spokenAtText >= NO_TEXT_WHILE_SPEAKING_MS) return fallback(r);
+    if (spoken - r.spokenAtText >= NO_TEXT_WHILE_SPEAKING_MS) return fallback(r, "no_text");
 
     // The question they wanted replaced has gone from the screen meanwhile.
     if (r.skipWanted !== null && r.skipWanted !== r.shown.id) r.skipWanted = null;
@@ -446,15 +515,23 @@ export function createLiveCoach({
           inFlight: false,
           reads: r.reads,
           ended: false,
+          offerHeld: held,
+          textOwed: r.commits > r.turnsBack && at - r.lastCommitAt < TEXT_WAIT_MS,
         })
       ) {
-        void ask(r, null);
+        void ask(r, null, held);
       }
     }
 
+    if (!pending || r.skipWanted !== null) return;
+    // They spoke after its read, and by the time they have clearly stopped its text still hasn't
+    // come back, or a turn's transcription failed: what they said is lost, and may have answered
+    // it, so the offer goes rather than shows.
+    if (held && r.words <= pending.words && silence >= pacing.stoppedSilenceMs) {
+      r.pending = null;
+      return;
+    }
     if (
-      r.pending &&
-      r.skipWanted === null &&
       shouldShow({
         now: at,
         speaking: r.voice.speaking,
@@ -464,12 +541,13 @@ export function createLiveCoach({
         wordsSinceShown: r.words - r.wordsAtShown,
         elapsedMs: at - r.startedAt,
         onOpening: r.shown.id === OPENING_OFFER_ID,
-        offerRequestedAt: r.pending.requestedAt,
+        offerRequestedAt: pending.requestedAt,
         // Any read still out was asked for after the pending offer's, which has answered.
         newerReadOut: r.call !== null,
+        heardSinceOffer: held,
       })
     ) {
-      show(r, r.pending.offer);
+      show(r, pending.offer);
     }
   }
 
@@ -529,6 +607,12 @@ export function createLiveCoach({
 
     stop,
   };
+}
+
+// The end call's reason, only when live coaching was given up: a server from before it (after a
+// rollback) refuses keys it doesn't know.
+function fellBack(r: Run): { fallback?: FallbackReason } {
+  return r.fallenWhy ? { fallback: r.fallenWhy } : {};
 }
 
 // An answer that touches nothing new doesn't re-render the recorder.

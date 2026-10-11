@@ -20,6 +20,8 @@ const Body = z.strictObject({
   elapsedMs: z.number().finite().min(0).max(3_600_000),
   shown: z.number().int().nonnegative().nullable(),
   skip: z.number().int().nonnegative().nullable(),
+  // Optional: recorders from before it never send it.
+  reread: z.boolean().optional(),
 });
 
 export async function POST(request: Request): Promise<Response> {
@@ -36,7 +38,7 @@ export async function POST(request: Request): Promise<Response> {
   const session = await liveMember({ notice: false });
   if (typeof session === "string") return refuse(session);
   const memberId = session.member.id;
-  const { sessionId, transcript, elapsedMs, shown, skip } = body.data;
+  const { sessionId, transcript, elapsedMs, shown, skip, reread } = body.data;
 
   const claim = await claimCoachCall(sessionId, memberId);
   if (typeof claim === "string") return refuse(claim);
@@ -51,9 +53,15 @@ export async function POST(request: Request): Promise<Response> {
     elapsedS: elapsed / 1000,
     shown,
     skip,
+    reread: reread === true,
     read: (alreadyAsked) => readTranscript({ transcript, alreadyAsked, signal: request.signal }),
   });
-  if (turn.failure) console.error("live coach: reading the transcript failed", { reason: turn.failure.reason, retryable: turn.failure.retryable });
+  // Its code and status, never its message: that can repeat what the SDK said back, and so Claude's
+  // reply and the member's words, or name topics.
+  if (turn.failure) {
+    const { reason, retryable, code, status } = turn.failure;
+    console.error("live coach: reading the transcript failed", { reason, retryable, code, status });
+  }
 
   // Every reply that came back is paid for, used or not.
   const billed = turn.result ?? turn.failure?.billed ?? null;

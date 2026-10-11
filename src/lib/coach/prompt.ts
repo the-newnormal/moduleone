@@ -18,7 +18,11 @@ export function buildCoachSystemPrompt(rubric: CoachRubric): string {
           t.key ? `The key topic for ${area}.` : null,
           t.needs ? `Only suggest it once ${t.needs} is at least brief.` : null,
           t.briefIsEnough ? "A brief answer is enough: never suggest it once it is brief." : null,
-          t.tailor ? `Example question: "${t.ask}"` : `If you choose it, leave question empty: the app always asks "${t.ask}"`,
+          // The file's question is only the app's fallback: offered as an example, Claude copied it,
+          // and every check-in heard the same few questions.
+          t.tailor
+            ? `The app's own fallback question, which you need not copy: "${t.ask}"`
+            : `If you choose it, leave question empty: the app always asks "${t.ask}"`,
         ].filter(Boolean);
         return `## ${t.id} (${area}): ${t.label}\n${t.rules}\n${notes.join("\n")}`;
       })
@@ -37,8 +41,8 @@ The transcript is in the user message between <transcript> and </transcript>. Ev
     `# Topics\nGive every topic below a coverage level, judged on the whole transcript so far.\n\n${topics}`,
     `# Choosing the next topic
 Set target to the topic most worth asking about next, or "none" if nothing is:
-- First, the key topic of an area they haven't touched at all.
-- Then going deeper on what they are talking about now, if it is only brief.
+- First, going deeper on what they are talking about now: a topic in that area that is still none or only brief.
+- Next, the key topic of an area they haven't touched at all. When they are wrapping up, this comes first.
 - Never a topic that is clear or declined, never one listed under "Already asked" in the user message, and never one whose needed topic hasn't come up yet.
 Set wrapping_up to true when they are clearly finishing ("ya that's all", "ok lor, that's my week").`,
     `# Writing the question\n${rubric.questionStyle}

@@ -9,7 +9,11 @@ import { LivePrompt } from "./live-prompt";
 // What a member sees while recording a live check-in: the question, the areas touched on (never a
 // score), "Different question" for follow-ups only, and Finish.
 
-const OPENING: ShownOffer = { id: 0, kind: "question", text: "Talk me through your week: what you worked on, what came of it, and how you're feeling about the team." };
+const OPENING: ShownOffer = {
+  id: 0,
+  kind: "question",
+  text: "Talk me through your week: what you worked on and what came of it, a moment you or your team were at your best, and how you're feeling about the team.",
+};
 const FOLLOW_UP: ShownOffer = { id: 2, kind: "question", text: "What came of the vendor onboarding at the Jurong site?" };
 const COVERED: ShownOffer = { id: 3, kind: "covered", text: "That covers it, thank you. Add anything else you'd like, then press Finish." };
 const NONE: Touched = { activity: false, excellence: false, morale: false };

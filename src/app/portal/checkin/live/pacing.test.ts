@@ -4,6 +4,8 @@ import {
   COMMIT_SILENCE_MS,
   FIRST_READ_WORDS,
   FORCE_COMMIT_MS,
+  HEARD_SINCE_READ_MS,
+  heardSinceRead,
   MAX_READS,
   MIN_READ_GAP_MS,
   MIN_TURN_SPEECH_MS,
@@ -16,7 +18,7 @@ import {
 } from "./pacing";
 
 describe("shouldCommit", () => {
-  const base = { now: 10_000, silenceMs: 0, speechSinceCommitMs: 0, lastCommitAt: 5_000 };
+  const base = { now: 10_000, silenceMs: 0, speechSinceCommitMs: 0, lastCommitAt: 5_000, offerHeld: false };
 
   it.each([
     ["a pause after a full turn", { silenceMs: COMMIT_SILENCE_MS, speechSinceCommitMs: MIN_TURN_SPEECH_MS }, true],
@@ -26,6 +28,10 @@ describe("shouldCommit", () => {
     ["unbroken talk reaching the limit", { now: 5_000 + FORCE_COMMIT_MS, speechSinceCommitMs: 300 }, true],
     ["unbroken talk just under the limit", { now: 5_000 + FORCE_COMMIT_MS - 1, speechSinceCommitMs: 19_000 }, false],
     ["the limit passing with no speech", { now: 5_000 + FORCE_COMMIT_MS * 3, speechSinceCommitMs: 0 }, false],
+    // A sub-second "team ok lah" after the read behind a waiting offer: the read confirming it must hear it.
+    ["a pause after a short turn, while an offer is held", { silenceMs: COMMIT_SILENCE_MS, speechSinceCommitMs: 400, offerHeld: true }, true],
+    ["a pause too short, while an offer is held", { silenceMs: COMMIT_SILENCE_MS - 1, speechSinceCommitMs: 400, offerHeld: true }, false],
+    ["a pause after nothing at all, while an offer is held", { silenceMs: Infinity, speechSinceCommitMs: 0, offerHeld: true }, false],
   ])("%s", (_label, overrides, expected) => {
     expect(shouldCommit({ ...base, ...overrides })).toBe(expected);
   });
@@ -42,6 +48,8 @@ describe("shouldRead", () => {
     inFlight: false,
     reads: 0,
     ended: false,
+    offerHeld: false,
+    textOwed: false,
   };
   // After a read: the next one needs fewer new words.
   const later = { ...base, reads: 3, wordsAtLastRead: 100, words: 100 + NEW_READ_WORDS, lastReadAt: 60_000 - MIN_READ_GAP_MS };
@@ -61,8 +69,33 @@ describe("shouldRead", () => {
     ["after the recording ended", { ...later, ended: true }, false],
     ["the last read allowed", { ...later, reads: MAX_READS - 1 }, true],
     ["past the most reads", { ...later, reads: MAX_READS }, false],
+    // A turn they have ended hasn't come back as text yet: the read waits to hear it.
+    ["a turn's text still to come", { ...later, textOwed: true }, false],
+    ["a stall, a turn's text still to come", { ...later, words: 101, silenceMs: Infinity, textOwed: true }, false],
+    // An offer held for what they said after its read: any new words are enough at the first pause.
+    ["an offer held, one new word", { ...later, words: 101, offerHeld: true }, true],
+    ["an offer held, one new word, pause too short", { ...later, words: 101, offerHeld: true, silenceMs: READ_SILENCE_MS - 1 }, false],
+    ["an offer held, nothing new yet", { ...later, words: 100, offerHeld: true, silenceMs: Infinity }, false],
+    // The read confirming it doesn't wait the usual 5 s (the recorder's gap between calls still applies).
+    ["an offer held, soon after the last read", { ...later, words: 101, offerHeld: true, lastReadAt: 60_000 - 1 }, true],
+    ["an offer held, a turn's text still to come", { ...later, words: 101, offerHeld: true, textOwed: true }, false],
+    ["an offer held, a read already in flight", { ...later, words: 101, offerHeld: true, inFlight: true }, false],
+    ["an offer held, past the most reads", { ...later, words: 101, offerHeld: true, reads: MAX_READS }, false],
   ])("%s", (_label, input, expected) => {
     expect(shouldRead(input)).toBe(expected);
+  });
+});
+
+describe("heardSinceRead", () => {
+  const base = { words: 40, wordsAtRead: 40, spokenMs: 20_000, spokenAtRead: 20_000 };
+
+  it.each([
+    ["nothing since", base, false],
+    ["new text", { ...base, words: 41 }, true],
+    ["speech whose text hasn't come back", { ...base, spokenMs: 20_000 + HEARD_SINCE_READ_MS + 1 }, true],
+    ["a breath or a click", { ...base, spokenMs: 20_000 + HEARD_SINCE_READ_MS }, false],
+  ])("%s", (_label, input, expected) => {
+    expect(heardSinceRead(input)).toBe(expected);
   });
 });
 
@@ -86,6 +119,7 @@ describe("shouldShow", () => {
     onOpening: false,
     offerRequestedAt: 90_000 as number | null,
     newerReadOut: false,
+    heardSinceOffer: false,
   };
 
   it.each([
@@ -104,7 +138,19 @@ describe("shouldShow", () => {
     ["nearly stopped, but too early", { ...base, silenceMs: 4999, shownAt: 99_000, offerRequestedAt: 99_500 }, false],
     ["a newer read still out, which has heard more", { ...base, newerReadOut: true }, false],
     ["a newer read still out, even once they have stopped", { ...base, silenceMs: 60_000, newerReadOut: true }, false],
+    ["they have said more since its read was asked for", { ...base, heardSinceOffer: true }, false],
+    ["they have said more since its read, even once they have stopped", { ...base, silenceMs: 60_000, heardSinceOffer: true }, false],
   ])("%s", (_label, input, expected) => {
     expect(shouldShow(input)).toBe(expected);
+  });
+
+  it("holds an offer while words arrive after its read was asked for, and shows a later read's once it answers", () => {
+    // "Team ok lah" (3 words) came back as text after the read at 90 s was asked for.
+    const held = heardSinceRead({ words: 43, wordsAtRead: 40, spokenMs: 21_000, spokenAtRead: 21_000 });
+    expect(shouldShow({ ...base, heardSinceOffer: held })).toBe(false);
+    expect(shouldShow({ ...base, silenceMs: 60_000, heardSinceOffer: held })).toBe(false);
+    // The read asked for at 95 s heard it: its offer shows.
+    const heard = heardSinceRead({ words: 43, wordsAtRead: 43, spokenMs: 21_000, spokenAtRead: 21_000 });
+    expect(shouldShow({ ...base, offerRequestedAt: 95_000, heardSinceOffer: heard })).toBe(true);
   });
 });

@@ -20,7 +20,7 @@ import { coachRubric } from "./rubric";
 import { AREAS, LEVELS, type Area, type CoachRead, type CoachRubric, type Level, type Tone, type Topic } from "./types";
 
 // The policy decides what the live check-in asks, from Claude's reads. Exact scores are checked
-// against TEST_RUBRIC (fixtures.ts: today's topics and settings, frozen), so retuning
+// against TEST_RUBRIC (fixtures.ts: a frozen copy of the file's topics and settings), so retuning
 // rubrics/coach.md never breaks these tests; the real file is used where only the behaviour
 // matters, and for the anti-nagging simulation, which must hold for any rubric that parses.
 
@@ -112,7 +112,17 @@ describe("initialState and parseState", () => {
     expect(state).toMatchObject({ coverage: {}, tone: "neutral", asked: [], skipped: [], followUps: 0, perArea: {}, skipsInARow: 0 });
     expect(state.linesShown).toEqual([]);
     expect(state.flow).toEqual([]);
-    expect(state.counts).toEqual({ reads: 0, failures: 0, tailored: 0, bank: 0, rejected: 0, latencyMs: 0, slowestMs: 0 });
+    expect(state.counts).toEqual({
+      reads: 0,
+      failures: 0,
+      tailored: 0,
+      bank: 0,
+      rejected: 0,
+      latencyMs: 0,
+      slowestMs: 0,
+      rejectedWhy: {},
+      noRead: 0,
+    });
   });
 
   it("gives a new state each time", () => {
@@ -130,6 +140,14 @@ describe("initialState and parseState", () => {
     state = decide(state).state;
     const stored = JSON.parse(JSON.stringify(state));
     expect(parseState(stored)).toEqual(state);
+  });
+
+  it("goes on with a state saved before the counts kept why wording was turned down and offers made without a read", () => {
+    let state = show(decide(initialState()));
+    state = mergeRead(state, read({ coverage: { activity_work: "clear" } }), R);
+    state = { ...state, counts: { ...state.counts, reads: 1, bank: 1, rejectedWhy: { blocked_pressure: 1 }, noRead: 1 } };
+    const stored = JSON.parse(JSON.stringify({ ...state, counts: without(without(state.counts, "rejectedWhy"), "noRead") }));
+    expect(parseState(stored)).toEqual({ ...state, counts: { ...state.counts, rejectedWhy: {}, noRead: 0 } });
   });
 
   it.each<[string, unknown]>([
@@ -394,18 +412,30 @@ describe("skip", () => {
 describe("candidates", () => {
   it("starts with each area's key topic, with the untouched-area bonus, activity first", () => {
     expect(ranking(initialState())).toEqual([
-      ["activity_work", 1.5],
-      ["excellence_moment", 1.5],
-      ["morale_feeling", 1.5],
+      ["activity_work", 1.2],
+      ["excellence_moment", 1.2],
+      ["morale_feeling", 1.2],
     ]);
   });
 
-  it("puts an untouched area's key topic ahead of depth on the area they are talking about", () => {
+  it("scores depth on the area they are talking about level with an untouched area's key topic", () => {
     const state = stateWith({ coverage: { activity_work: "brief" }, flow: ["activity"] });
     expect(ranking(state)).toEqual([
+      // A tie, which goes to the key topics; Claude's own choice can still win, within the slack.
+      ["excellence_moment", 1.2],
+      ["morale_feeling", 1.2],
+      // 0.8 + the flow bonus; a brief key topic needs 0.6 of its weight, and its area is touched.
+      ["activity_outcome", 1.2],
+      ["activity_work", 1],
+      ["activity_more", 0.8],
+    ]);
+  });
+
+  it("puts an untouched area's key topic ahead of depth when the bonus for it is the bigger one", () => {
+    const state = stateWith({ coverage: { activity_work: "brief" }, flow: ["activity"] });
+    expect(ranking(state, 60, rubricWith({ untouchedBonus: 0.5, flowBonus: 0.2 }))).toEqual([
       ["excellence_moment", 1.5],
       ["morale_feeling", 1.5],
-      // 0.8 + the flow bonus; a brief key topic needs 0.6 of its weight, and its area is touched.
       ["activity_outcome", 1],
       ["activity_work", 0.8],
       ["activity_more", 0.6],
@@ -470,20 +500,21 @@ describe("candidates", () => {
   const side = (id: string, area: Area, weight: number): Topic => ({ ...R.topics[1], id, label: id, area, weight, key: false, needs: null });
 
   it("breaks a tie by putting key topics first", () => {
-    // Activity's extra topic scores 1.5, like the key topics with their bonus.
-    const rubric = rubricWith({}, [...R.topics, side("activity_side", "activity", 1.5)]);
+    // Activity's extra topic scores 1.2, like the key topics with their bonus.
+    const rubric = rubricWith({}, [...R.topics, side("activity_side", "activity", 1.2)]);
     expect(ranking(initialState(), 60, rubric)).toEqual([
-      ["activity_work", 1.5],
-      ["excellence_moment", 1.5],
-      ["morale_feeling", 1.5],
-      ["activity_side", 1.5],
+      ["activity_work", 1.2],
+      ["excellence_moment", 1.2],
+      ["morale_feeling", 1.2],
+      ["activity_side", 1.2],
     ]);
   });
 
   it("treats scores equal on paper as equal, so the tie goes to the key topic", () => {
-    // excellence_strength: 0.4 and the flow bonus of 0.2, which floating point makes a hair over 0.6;
+    // excellence_strength: 0.4 and a flow bonus of 0.2, which floating point makes a hair over 0.6;
     // morale_feeling: a key topic only touched on, so 1.0 × 0.6. Equal on paper.
     expect(0.4 + 0.2).not.toBe(0.6);
+    const rubric = rubricWith({ flowBonus: 0.2 });
     const state = stateWith({
       coverage: {
         activity_work: "clear",
@@ -496,13 +527,13 @@ describe("candidates", () => {
       flow: ["excellence"],
     });
     // Exact scores, not rounded by the test.
-    expect(candidates(state, R, 60).map((c) => [c.topic.id, c.score])).toEqual([
+    expect(candidates(state, rubric, 60).map((c) => [c.topic.id, c.score])).toEqual([
       ["morale_feeling", 0.6],
       ["excellence_strength", 0.6],
       ["morale_reason", 0.5],
       ["morale_team", 0.4],
     ]);
-    expect(decide(state).offer).toMatchObject({ kind: "question", topic: "morale_feeling", source: "bank" });
+    expect(decide(state, { rubric }).offer).toMatchObject({ kind: "question", topic: "morale_feeling", source: "bank" });
   });
 
   it("then by area order, then by the file's order", () => {
@@ -573,7 +604,7 @@ describe("nextOffer", () => {
   });
 
   it("uses the hard-week wording in a hard week, where the topic has one", () => {
-    // Every key topic clear, activity in flow: activity_outcome (1.0) clears the hard-week floor.
+    // Every key topic clear, activity in flow: activity_outcome (1.2) clears the hard-week floor.
     const state = stateWith({ tone: "hard_week", coverage: KEYS_CLEAR, flow: ["activity"] });
     expect(decide(state).offer).toMatchObject({ topic: "activity_outcome", text: R.topics[1].askHardWeek });
     // excellence_impact has none, so its usual question is used.
@@ -586,8 +617,9 @@ describe("nextOffer", () => {
   });
 
   it("asks fewer questions in a hard week", () => {
-    // activity_more scores 0.6: enough in an ordinary week, not in a hard one.
-    const coverage = { ...ALL_CLEAR, activity_more: "none" as const };
+    // activity_more, only touched on, scores 0.64 with the flow bonus: enough in an ordinary week,
+    // not in a hard one.
+    const coverage = { ...ALL_CLEAR, activity_more: "brief" as const };
     expect(decide(stateWith({ coverage, flow: ["activity"] })).offer).toMatchObject({ kind: "question", topic: "activity_more" });
     expect(decide(stateWith({ coverage, flow: ["activity"], tone: "hard_week" })).offer).toMatchObject({ kind: "covered" });
   });
@@ -628,7 +660,7 @@ describe("nextOffer", () => {
     const shown = acknowledge(state, id, R);
     expect(decide(shown).offer).toBeNull();
     // Not even when they wrap up with an area untouched, or Claude suggests a question.
-    const wrapping = read({ wrappingUp: true, target: "excellence_moment", question: "Where did you use your superpower this week?" });
+    const wrapping = read({ wrappingUp: true, target: "excellence_moment", question: "When were you or your team at your best this week?" });
     expect(decide(mergeRead(shown, wrapping, R), { read: wrapping }).offer).toBeNull();
   });
 
@@ -638,11 +670,31 @@ describe("nextOffer", () => {
     expect(state.offers.map((o) => o.id)).toEqual([OPENING_OFFER_ID, 4, 5, 6]);
     expect(state.nextOfferId).toBe(7);
   });
+
+  it("counts each offer it makes before Claude has read anything", () => {
+    const first = decide(initialState());
+    expect(first.state.counts.noRead).toBe(1);
+    const second = decide(show(first));
+    expect(second.offer).toMatchObject({ kind: "question", topic: "excellence_moment" });
+    expect(second.state.counts.noRead).toBe(2);
+    // A line counts too; no offer at all counts nothing.
+    const late = decide(initialState(), { elapsedS: S.noNewQuestionsAfterS });
+    expect(late.offer).toMatchObject({ kind: "late" });
+    expect(late.state.counts.noRead).toBe(1);
+    expect(decide(show(late)).state.counts.noRead).toBe(1);
+  });
+
+  it("stops counting offers once Claude has read the transcript", () => {
+    const state = stateWith({ counts: { ...initialState().counts, reads: 1 } });
+    const decision = decide(state);
+    expect(decision.offer).toMatchObject({ kind: "question", topic: "activity_work" });
+    expect(decision.state.counts.noRead).toBe(0);
+  });
 });
 
 describe("nextOffer with Claude's wording", () => {
-  // Every key topic clear and all three areas in flow: activity_outcome is best (1.0),
-  // excellence_impact is within the slack (0.9), the rest are below it.
+  // Every key topic clear and all three areas in flow: activity_outcome is best (1.2), and every
+  // other topic is within the slack of 0.5.
   const base = stateWith({ coverage: KEYS_CLEAR, flow: ["activity", "excellence", "morale"] });
   const TRANSCRIPT =
     "Settled the vendor onboarding for the Jurong site lah. On Wednesday I took the client call and walked them through the timeline.";
@@ -655,12 +707,12 @@ describe("nextOffer with Claude's wording", () => {
 
   it("starts from this ranking", () => {
     expect(ranking(base)).toEqual([
-      ["activity_outcome", 1],
-      ["excellence_impact", 0.9],
-      ["morale_reason", 0.7],
-      ["activity_more", 0.6],
-      ["excellence_strength", 0.6],
-      ["morale_team", 0.6],
+      ["activity_outcome", 1.2],
+      ["excellence_impact", 1.1],
+      ["morale_reason", 0.9],
+      ["activity_more", 0.8],
+      ["excellence_strength", 0.8],
+      ["morale_team", 0.8],
     ]);
   });
 
@@ -679,9 +731,9 @@ describe("nextOffer with Claude's wording", () => {
   });
 
   it("uses it for a topic exactly the slack below the best, on paper", () => {
-    // excellence_impact: 0.7 and the flow bonus of 0.2, a hair under 0.9 in floating point; the best
-    // scores 1.0, and the slack is 0.1.
-    expect(0.7 + 0.2).toBeLessThan(0.9);
+    // The best, activity_outcome: 0.8 and the flow bonus of 0.4, which floating point makes a hair
+    // over 1.2; excellence_impact scores 1.1, and the slack is 0.1.
+    expect(0.8 + 0.4).toBeGreaterThan(1.2);
     const impact = { target: "excellence_impact", question: IMPACT, quote: "the client call" };
     expect(tailoredBy(impact, base, rubricWith({ tailorSlack: 0.1 })).offer).toMatchObject({
       topic: "excellence_impact",
@@ -699,7 +751,6 @@ describe("nextOffer with Claude's wording", () => {
   });
 
   it.each<[string, Partial<CoachRead>]>([
-    ["a topic scoring too far below the best", { target: "excellence_strength", question: "What strength of yours did the client call draw on?" }],
     ["a topic that is already clear", { target: "activity_work", question: "What else did the vendor onboarding involve this week?" }],
     ["no topic", { target: null, question: OUTCOME }],
     ["no question", { target: "activity_outcome", question: "" }],
@@ -708,23 +759,48 @@ describe("nextOffer with Claude's wording", () => {
     const decision = tailoredBy(overrides);
     expect(decision.offer).toMatchObject({ topic: "activity_outcome", source: "bank", text: ask("activity_outcome") });
     expect(decision.state.offers.at(-1)).toMatchObject({ id: decision.offer!.id, rejected: false });
+    expect(decision.state.counts.rejectedWhy).toEqual({});
     expect(show(decision).counts).toMatchObject({ tailored: 0, bank: 1, rejected: 0 });
   });
 
-  it.each<[string, Partial<CoachRead>]>([
-    ["breaks the question style", { target: "activity_outcome", question: "Why did the vendor onboarding take so long?" }],
-    ["quotes words they never said", { target: "activity_outcome", question: OUTCOME, quote: "vendor onboarding at Tuas" }],
-    ["is too long", { target: "activity_outcome", question: `Where did ${"the vendor onboarding and ".repeat(5)}the deck get to?` }],
-    ["says they mentioned something without quoting it", { target: "activity_outcome", question: OUTCOME, quote: "" }],
-    ["gives a quote it doesn't use", { target: "activity_outcome", question: "Where did the Jurong site work get to?", quote: "vendor onboarding" }],
-    ["puts words they never said in quotes", { target: "activity_outcome", question: "Where did \u201cthe Tuas warehouse\u201d get to?" }],
-  ])("turns down wording that %s, and counts it once the rubric's question is shown", (_label, overrides) => {
+  it.each<[string, Partial<CoachRead>, string]>([
+    ["breaks the question style", { target: "activity_outcome", question: "Why did the vendor onboarding take so long?" }, "blocked_pressure"],
+    ["quotes words they never said", { target: "activity_outcome", question: OUTCOME, quote: "vendor onboarding at Tuas" }, "quote_not_said"],
+    [
+      "is too long",
+      { target: "activity_outcome", question: `Where did ${"the vendor onboarding and ".repeat(5)}the deck get to?` },
+      "too_long",
+    ],
+    ["says they mentioned something without quoting it", { target: "activity_outcome", question: OUTCOME, quote: "" }, "claims_without_quote"],
+    [
+      "gives a quote it doesn't use",
+      { target: "activity_outcome", question: "Where did the Jurong site work get to?", quote: "vendor onboarding" },
+      "quote_not_in_question",
+    ],
+    ["puts words they never said in quotes", { target: "activity_outcome", question: "Where did \u201cthe Tuas warehouse\u201d get to?" }, "quote_not_said"],
+  ])("turns down wording that %s, counts why, and counts it as rejected once the rubric's question is shown", (_label, overrides, reason) => {
     const decision = tailoredBy(overrides);
     expect(decision.offer).toMatchObject({ topic: "activity_outcome", source: "bank", text: ask("activity_outcome") });
     expect(decision.state.offers.at(-1)).toMatchObject({ id: decision.offer!.id, source: "bank", rejected: true });
-    // Not yet: only what reaches the screen is counted, like tailored and bank.
+    // Why is counted at once; rejected not yet: only what reaches the screen is, like tailored and bank.
+    expect(decision.state.counts.rejectedWhy).toEqual({ [reason]: 1 });
     expect(decision.state.counts.rejected).toBe(0);
-    expect(show(decision).counts).toMatchObject({ tailored: 0, bank: 1, rejected: 1 });
+    expect(show(decision).counts).toMatchObject({ tailored: 0, bank: 1, rejected: 1, rejectedWhy: { [reason]: 1 } });
+  });
+
+  it("asks the best topic in the rubric's words for a topic scoring more than the slack below it", () => {
+    // activity_more, only touched on, scores 0.64: over the floor of 0.6, but more than 0.5 below
+    // activity_outcome (1.2).
+    const state = stateWith({ coverage: { ...KEYS_CLEAR, activity_more: "brief" }, flow: ["activity"] });
+    expect(ranking(state).slice(0, 3)).toEqual([
+      ["activity_outcome", 1.2],
+      ["excellence_impact", 0.7],
+      ["activity_more", 0.64],
+    ]);
+    const decision = tailoredBy({ target: "activity_more", question: "What else took up your week besides the vendor onboarding?" }, state);
+    expect(decision.offer).toMatchObject({ topic: "activity_outcome", source: "bank", text: ask("activity_outcome") });
+    expect(decision.state.offers.at(-1)).toMatchObject({ id: decision.offer!.id, rejected: false });
+    expect(show(decision).counts).toMatchObject({ tailored: 0, bank: 1, rejected: 0 });
   });
 
   it("never counts turned-down wording whose question doesn't reach the screen", () => {
@@ -734,6 +810,8 @@ describe("nextOffer with Claude's wording", () => {
     const next = decide(again.state, { transcript: TRANSCRIPT });
     expect(next.offer).toMatchObject({ topic: "activity_outcome", source: "bank" });
     expect(next.state.counts.rejected).toBe(0);
+    // Why each was turned down is still counted, each time.
+    expect(next.state.counts.rejectedWhy).toEqual({ blocked_pressure: 2 });
     const state = show(next);
     expect(state.counts).toMatchObject({ bank: 1, rejected: 0 });
     // Nor when it comes back on screen after its topic was asked.
@@ -777,7 +855,7 @@ describe("nextOffer as they wrap up", () => {
       kind: "question",
       topic: "excellence_moment",
       source: "bank",
-      text: "Before you finish, where did you or your team get to use your superpower this week?",
+      text: "Before you finish, what's one moment this week when you or your team were at your best?",
     });
     expect(decision.state.offers.at(-1)?.beforeYouFinish).toBe(true);
   });
@@ -785,7 +863,7 @@ describe("nextOffer as they wrap up", () => {
   it("passes over an area that has come up, even briefly", () => {
     expect(wrapping(stateWith({ coverage: { activity_work: "clear", excellence_moment: "brief" } })).offer).toMatchObject({
       topic: "morale_feeling",
-      text: "Before you finish, how are you feeling about the team at the moment?",
+      text: "Before you finish, how's the team been for you this week?",
     });
   });
 
@@ -825,6 +903,64 @@ describe("nextOffer as they wrap up", () => {
   });
 });
 
+// The owner's choice for rubrics/coach.md: follow up on what they are talking about, in Claude's
+// words, ahead of an area they haven't touched; turn to the untouched areas as they wrap up, and
+// only to them late in the recording. Retuning the file on purpose may mean changing these.
+describe("following what they are talking about, with rubrics/coach.md", () => {
+  const TRANSCRIPT = "This week mostly on the vendor onboarding for the Jurong site lah, a lot of back and forth with their ops team.";
+  const OUTCOME = "You mentioned the vendor onboarding: where did that get to?";
+  const onWork = read({
+    coverage: { activity_work: "clear", activity_outcome: "brief" },
+    target: "activity_outcome",
+    quote: "vendor onboarding",
+    question: OUTCOME,
+  });
+  const decideReal = (r: CoachRead, elapsedS = 60) =>
+    nextOffer(mergeRead(initialState(), r, REAL), { rubric: REAL, elapsedS, read: r, transcript: TRANSCRIPT });
+
+  it("asks Claude's follow-up on their work ahead of an untouched area's key topic", () => {
+    // The untouched key topic still ranks first, and is what the file would ask without Claude.
+    const state = mergeRead(initialState(), onWork, REAL);
+    expect(candidates(state, REAL, 60)[0].topic).toMatchObject({ id: "excellence_moment", key: true });
+    expect(decideReal(read({ coverage: onWork.coverage })).offer).toMatchObject({ topic: "excellence_moment", source: "bank" });
+    expect(decideReal(onWork).offer).toEqual({ id: 1, kind: "question", topic: "activity_outcome", source: "tailored", text: OUTCOME });
+  });
+
+  it("offers only key topics after two and a half minutes", () => {
+    const state = mergeRead(initialState(), onWork, REAL);
+    expect(REAL.settings.keysOnlyAfterS).toBe(150);
+    expect(rankedIds(state, 149, REAL)).toContain("activity_outcome");
+    expect(rankedIds(state, 150, REAL)).toEqual(["excellence_moment", "morale_feeling"]);
+    // Claude's follow-up on their work is no longer used.
+    expect(decideReal(onWork, 150).offer).toMatchObject({
+      topic: "excellence_moment",
+      source: "bank",
+      text: ask("excellence_moment", REAL),
+    });
+  });
+
+  it("asks an untouched area's key topic first as they wrap up, starting \"Before you finish\"", () => {
+    expect(decideReal({ ...onWork, wrappingUp: true }).offer).toMatchObject({
+      topic: "excellence_moment",
+      source: "bank",
+      text: `${REAL.lines.beforeYouFinish} ${lowerFirst(ask("excellence_moment", REAL))}`,
+    });
+  });
+
+  it("always asks how they feel about the team in the file's words", () => {
+    // Claude chose it, it is the best topic, and Claude's wording would pass every check.
+    const question = "How has the team been since the vendor onboarding?";
+    expect(validateQuestion(question, "", TRANSCRIPT, REAL.settings.maxQuestionChars)).toBeNull();
+    const feeling = read({ coverage: { activity_work: "clear", excellence_moment: "clear" }, target: "morale_feeling", question });
+    expect(decideReal(feeling).offer).toMatchObject({ topic: "morale_feeling", source: "bank", text: ask("morale_feeling", REAL) });
+    expect(decideReal({ ...feeling, wrappingUp: true }).offer).toMatchObject({
+      topic: "morale_feeling",
+      source: "bank",
+      text: `${REAL.lines.beforeYouFinish} ${lowerFirst(ask("morale_feeling", REAL))}`,
+    });
+  });
+});
+
 describe("validateQuestion", () => {
   const TRANSCRIPT = "Settled the vendor onboarding for the Jurong site, lah. Then the Q3 budget deck for Finance, sent Friday.";
   const MAX = S.maxQuestionChars;
@@ -852,6 +988,18 @@ describe("validateQuestion", () => {
     ["their words in double quotes", 'Where did "the vendor onboarding" get to by Friday?', "", null],
     ["their words in curly quotes, in another case", "Where did \u201cthe Q3 Budget Deck\u201d end up?", "", null],
     ["the quote, also in double quotes", 'You mentioned "the vendor onboarding": where did that get to?', "the vendor onboarding", null],
+    // Words that only contain a blocked one, or use it in a working sense.
+    ["\"departmental\"", "What did the departmental review settle for the Jurong site?", "", null],
+    ["\"environmental\"", "Where did the environmental permit for the Jurong site get to?", "", null],
+    ["\"incremental\"", "What did the incremental release change for Finance?", "", null],
+    ["\"transparent\"", "What did the transparent pricing change for the vendor?", "", null],
+    ["\"apparent\"", "What became apparent on the client call?", "", null],
+    ["\"upgrade\"", "Where did the server upgrade get to by Friday?", "", null],
+    ["\"discord\"", "What came of the Discord channel for the vendor?", "", null],
+    ["\"devaluation\"", "What did the currency devaluation mean for the vendor quote?", "", null],
+    ["\"rollout of 3\"", "Where did the rollout of 3 new sites get to?", "", null],
+    ["a client relationship", "What did the client relationship need from you this week?", "", null],
+    ["\"familiar\"", "What felt familiar about the vendor onboarding?", "", null],
 
     ["a question under twelve characters", "Which one?", "", "too_short"],
     ["a question over the longest allowed", long, "", "too_long"],
@@ -863,7 +1011,15 @@ describe("validateQuestion", () => {
 
     ["a rating", "How would you rate the vendor onboarding?", "", "blocked_grading"],
     ["a score", "What score would you give your week?", "", "blocked_grading"],
+    ["their score", "How do you feel about your score this week?", "", "blocked_grading"],
+    ["their grade", "How do you feel about your grade this week?", "", "blocked_grading"],
     ["marks out of five", "Out of 5, how did the budget deck go?", "", "blocked_grading"],
+    ["a scorer", "Who was the top scorer on the sales team this week?", "", "blocked_grading"],
+    ["a scoreboard", "Where does the team sit on the scoreboard this week?", "", "blocked_grading"],
+    ["a grader", "What would the grader make of this week?", "", "blocked_grading"],
+    ["a regrade", "Did the regrade change anything for the team?", "", "blocked_grading"],
+    ["an assessor", "What did the assessor make of the deck this week?", "", "blocked_grading"],
+    ["an evaluator", "What would the evaluator say about the tender?", "", "blocked_grading"],
     ["HQ", "What would you like HQ to know about the tender?", "", "blocked_audience"],
     ["who reads it", "What do you think your boss will make of the deck?", "", "blocked_audience"],
     ["praise", "What made the vendor onboarding such a great success?", "", "blocked_praise"],
@@ -874,6 +1030,31 @@ describe("validateQuestion", () => {
     ["\"should\"", "What do you think you should change on the deck?", "", "blocked_pressure"],
     ["family", "How is your family coping with the long hours?", "", "blocked_personal"],
     ["health", "How is your health holding up with the deadlines?", "", "blocked_personal"],
+    ["mental health", "How is your mental health this week?", "", "blocked_personal"],
+    ["\"mentally\"", "How are you holding up mentally with the deadlines?", "", "blocked_personal"],
+    ["burnout", "How close to burnout are you this week?", "", "blocked_personal"],
+    ["\"burnt out\"", "Are you feeling burnt out by the deadlines?", "", "blocked_personal"],
+    ["parents", "How are your parents doing this week?", "", "blocked_personal"],
+    ["a relationship of their own", "How is your relationship holding up with the long hours?", "", "blocked_personal"],
+    // A partner is often a life partner.
+    ["a partner relationship", "Is your partner relationship ok after the late nights?", "", "blocked_personal"],
+    // Other forms and compounds of the private-life words.
+    ["grandparents", "How are your grandparents doing after the hospital stay?", "", "blocked_personal"],
+    ["grandkids", "How are the grandkids settling in this week?", "", "blocked_personal"],
+    ["grandchildren", "With your grandchildren visiting, how did the week go?", "", "blocked_personal"],
+    ["stepparents", "How did your stepparents take the long hours?", "", "blocked_personal"],
+    ["stepchildren", "How are your stepchildren settling in this week?", "", "blocked_personal"],
+    ["a housewife", "How is the housewife settling in this week?", "", "blocked_personal"],
+    ["physiotherapy", "How is the physiotherapy going this week?", "", "blocked_personal"],
+    ["psychotherapy", "How's the psychotherapy helping with the deadlines?", "", "blocked_personal"],
+    ["antidepressants", "Are the antidepressants helping you get through the week?", "", "blocked_personal"],
+    ["anxiousness", "How is your anxiousness about the deadline?", "", "blocked_personal"],
+    ["\"healthy\"", "How are you keeping healthy with all the overtime?", "", "blocked_personal"],
+    ["\"healthier\"", "Are you eating healthier now the deadline has passed?", "", "blocked_personal"],
+    ["\"unhealthy\"", "Has the crunch felt unhealthy for you this week?", "", "blocked_personal"],
+    ["healthcare", "How's your healthcare claim going this week?", "", "blocked_personal"],
+    // A false alarm, and a cheap one: the file's question is shown.
+    ["a healthy pipeline", "How healthy is the sales pipeline after the client call?", "", "blocked_personal"],
     ["a link", "Did you share the deck at www.example.com with the client?", "", "blocked_links"],
     ["an email address", "Did you send the deck to meiling@example.sg on Friday?", "", "blocked_links"],
 

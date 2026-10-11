@@ -5,7 +5,7 @@ import type { Pacing } from "@/lib/coach/types";
 import { render, text } from "@/test/dom";
 import type { LiveReady } from "./api";
 import type { CoachResponse, ShownOffer } from "./contract";
-import { CONNECT_TIMEOUT_MS, NO_TEXT_WHILE_SPEAKING_MS } from "./pacing";
+import { CONNECT_TIMEOUT_MS, MAX_READS, NO_TEXT_WHILE_SPEAKING_MS, TEXT_WAIT_MS } from "./pacing";
 import type { TranscriptEvent } from "./transcript";
 import type { LiveConnection } from "./transport";
 import {
@@ -22,7 +22,8 @@ import {
 // meter (driven by how loud the test says the room is) and the clock (Date, under fake timers).
 
 const SESSION = "5e550000-0000-4000-8000-000000000001";
-const OPENING = "Talk me through your week: what you worked on, what came of it, and how you're feeling about the team.";
+const OPENING =
+  "Talk me through your week: what you worked on and what came of it, a moment you or your team were at your best, and how you're feeling about the team.";
 const PACING: Pacing = {
   showAfterSilenceMs: 1500,
   stoppedSilenceMs: 3000,
@@ -50,6 +51,11 @@ const MORE =
 const QUESTION_1: ShownOffer = { id: 1, kind: "question", text: "What came of the vendor onboarding?" };
 const QUESTION_2: ShownOffer = { id: 2, kind: "question", text: "How is the team finding the new review process?" };
 const COVERED: ShownOffer = { id: 3, kind: "covered", text: "That covers it, thank you. Add anything else you'd like, then press Finish." };
+const TEAM_QUESTION: ShownOffer = { id: 4, kind: "question", text: "How's the team been for you this week?" };
+// What they say after the read that offered TEAM_QUESTION was asked for, which answers it.
+const TEAM_OK = "Team ok lah, quite happy.";
+// 17 words.
+const TEAM_STRETCHED = "Actually the team has been quite stretched lah, two people out sick and everyone covering for them.";
 
 function ok(offer: ShownOffer | null, degraded = false): CoachResponse {
   return { status: "ok", offer, touched: { activity: true, excellence: false, morale: false }, degraded };
@@ -110,6 +116,8 @@ function setup(overrides: Partial<Pick<LiveCoachDeps, "start" | "connect" | "exc
     connection,
     meterStopped,
     view: () => views.at(-1),
+    // Every offer that has been on screen, in order.
+    offersShown: () => views.map((v) => v.offer.id),
     signal: () => signal,
     // Start pressed, the microphone granted, the recording under way.
     async record() {
@@ -131,6 +139,14 @@ function setup(overrides: Partial<Pick<LiveCoachDeps, "start" | "connect" | "exc
       act(() => {
         onEvent?.({ type: "committed", itemId, previousItemId: item > 1 ? `item_${item - 1}` : null });
         onEvent?.({ type: "completed", itemId, transcript: words });
+      });
+    },
+    // A turn whose transcription failed.
+    fail() {
+      const itemId = `item_${++item}`;
+      act(() => {
+        onEvent?.({ type: "committed", itemId, previousItemId: item > 1 ? `item_${item - 1}` : null });
+        onEvent?.({ type: "failed", itemId });
       });
     },
     lose: () => act(() => onFailure?.()),
@@ -196,6 +212,7 @@ describe("starting", () => {
     expect(live.view()).toMatchObject({ mode: "fallback", offer: { id: 0 } });
     expect(live.deps.connect).not.toHaveBeenCalled();
     expect(live.coach.stop()).toBeNull();
+    // No session started, so there is none to end, and nowhere to send its reason (start_not_ready).
     expect(live.deps.end).not.toHaveBeenCalled();
   });
 
@@ -217,8 +234,19 @@ describe("starting", () => {
     expect(live.view()?.mode).toBe("live");
     await advance(250);
     expect(live.view()).toMatchObject({ mode: "fallback", offer: { id: 0 } });
-    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: 0, shown: 0 });
+    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: 0, shown: 0, fallback: "connect_timeout" });
     expect(live.meterStopped).toHaveBeenCalled();
+  });
+
+  it("falls back when live transcription fails to connect, and says so as it ends the session", async () => {
+    const live = setup({
+      connect: vi.fn(async () => {
+        throw new Error("live transcription: the server didn't connect it");
+      }),
+    });
+    await live.record();
+    expect(live.view()).toMatchObject({ mode: "fallback", offer: { id: 0 } });
+    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: 0, shown: 0, fallback: "connect_failed" });
   });
 
   it("falls back when the browser can't measure the microphone's level", async () => {
@@ -226,6 +254,25 @@ describe("starting", () => {
     await live.record();
     await advance(METER_WAIT_MS);
     expect(live.view()).toMatchObject({ mode: "fallback", offer: { id: 0 } });
+    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SESSION,
+      recordedMs: METER_WAIT_MS,
+      shown: 0,
+      fallback: "meter",
+    });
+  });
+
+  it("says why when a session that starts after live coaching was given up is ended", async () => {
+    const start = deferred<LiveReady>();
+    const live = setup({ start: vi.fn(() => start.promise), meter: vi.fn(() => () => {}) });
+    await live.record();
+    await advance(METER_WAIT_MS);
+    expect(live.view()).toMatchObject({ mode: "fallback", offer: { id: 0 } });
+    expect(live.deps.end).not.toHaveBeenCalled();
+    start.resolve(READY);
+    await advance(0);
+    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: 0, shown: null, fallback: "meter" });
+    expect(live.deps.connect).not.toHaveBeenCalled();
   });
 
   it("ends a session that starts only after the take has ended", async () => {
@@ -309,17 +356,21 @@ describe("while they talk", () => {
 
   it("shows the coach's question only once they have stopped talking", async () => {
     const answer = deferred<CoachResponse>();
-    const live = setup({ ask: vi.fn(() => answer.promise) });
+    const live = setup();
+    live.deps.ask.mockReturnValueOnce(answer.promise).mockResolvedValueOnce(ok(QUESTION_2));
     await firstRead(live);
     await live.speak(500);
     answer.resolve(ok(QUESTION_1));
     await live.speak(10_000);
+    live.say(MORE);
     expect(live.view()).toMatchObject({ offer: { id: 0 } });
     expect(live.view()).toMatchObject({ touched: { activity: true } });
     await live.pause(1600); // a short pause isn't enough this early in the recording
     expect(live.view()).toMatchObject({ offer: { id: 0 } });
     await live.pause(1600);
-    expect(live.view()).toMatchObject({ mode: "live", offer: QUESTION_1 });
+    // QUESTION_1's read never heard what they went on to say; the read that did decided.
+    expect(live.view()).toMatchObject({ mode: "live", offer: QUESTION_2 });
+    expect(live.offersShown()).not.toContain(QUESTION_1.id);
   });
 
   it.each([
@@ -381,6 +432,190 @@ describe("while they talk", () => {
     await live.pause(1600);
     expect(live.deps.ask.mock.calls[1][0]).toMatchObject({ shown: 1, skip: null });
   });
+
+  // Text often lands more than 0.5 s after a turn ends, so after a read at the 1.2 s pause: that
+  // read would miss the turn, and its question would then be held for it (below).
+  it("waits for the text of the turn they have just ended, so the read hears it and its question shows", async () => {
+    const live = setup();
+    live.deps.ask.mockResolvedValueOnce(ok(null)).mockResolvedValueOnce(ok(QUESTION_2));
+    await firstRead(live);
+    await live.speak(8000);
+    await live.pause(900); // a breath: the turn ends
+    await live.speak(500);
+    live.say(MORE); // its text, landing as they go on
+    await live.speak(11_500);
+    await live.pause(1500); // the last turn ends at 0.7 s; its text isn't back
+    expect(live.deps.ask).toHaveBeenCalledOnce();
+    live.say(TEAM_STRETCHED);
+    await live.pause(500);
+    expect(live.deps.ask).toHaveBeenCalledTimes(2);
+    expect(live.deps.ask.mock.calls[1][0].transcript).toContain(TEAM_STRETCHED);
+    expect(live.deps.ask.mock.calls[1][0]).not.toHaveProperty("reread");
+    expect(live.view()).toMatchObject({ mode: "live", offer: QUESTION_2 });
+  });
+
+  it("reads without a turn's text once it is 1.5 s late", async () => {
+    const live = setup();
+    await live.record();
+    await live.pause(500);
+    await live.speak(3000);
+    live.say(FIRST_ANSWER);
+    await live.pause(900);
+    await live.speak(2000); // a turn whose text never comes back
+    await live.pause(1600);
+    expect(live.deps.ask).not.toHaveBeenCalled();
+    // It ended at 0.7 s of this pause, or a tick after.
+    await live.pause(TEXT_WAIT_MS - 600 + 250);
+    expect(live.deps.ask).toHaveBeenCalledOnce();
+    expect(live.deps.ask.mock.calls[0][0]).toMatchObject({ transcript: FIRST_ANSWER });
+  });
+});
+
+// The read behind the waiting offer was asked for, then they said more before it was shown: the
+// offer may be about what they have just covered, so it waits for a read that has heard them.
+describe("an offer they have said more since", () => {
+  // Read 1 finds nothing to ask yet; read 2, at the pause after more about their work, answers when
+  // the test says.
+  async function secondRead(live: ReturnType<typeof setup>, second: Promise<CoachResponse>) {
+    live.deps.ask.mockResolvedValueOnce(ok(null)).mockReturnValueOnce(second);
+    await firstRead(live);
+    await live.speak(16_000);
+    live.say(MORE);
+    await live.pause(1600);
+    expect(live.deps.ask).toHaveBeenCalledTimes(2);
+  }
+
+  it.each([
+    ["its question", QUESTION_2, QUESTION_2],
+    ["nothing new when it finds nothing worth asking", null, { id: 0 }],
+  ] as const)("isn't shown after a short remark its read never heard; a read that heard it shows %s", async (_label, confirmed, shown) => {
+    const second = deferred<CoachResponse>();
+    const live = setup();
+    await secondRead(live, second.promise);
+    live.deps.ask.mockResolvedValueOnce(ok(confirmed));
+    await live.speak(1500);
+    live.say(TEAM_OK);
+    second.resolve(ok(TEAM_QUESTION));
+    await live.pause(1000); // the remark's turn ends; too soon for a read
+    expect(live.view()).toMatchObject({ offer: { id: 0 } });
+    expect(live.deps.ask).toHaveBeenCalledTimes(2);
+    // TEAM_QUESTION used to show after 1.5 s of this. The read to confirm it goes at the 1.2 s
+    // pause, without waiting the usual 5 s after the last, and its answer is what shows.
+    await live.pause(1500);
+    expect(live.deps.ask).toHaveBeenCalledTimes(3);
+    expect(live.deps.ask.mock.calls[2][0]).toMatchObject({ reread: true, transcript: expect.stringContaining(TEAM_OK) });
+    expect(live.view()).toMatchObject({ mode: "live", offer: shown });
+    expect(live.offersShown()).not.toContain(TEAM_QUESTION.id);
+    // Ordinary reads don't say reread at all.
+    expect(live.deps.ask.mock.calls[1][0]).not.toHaveProperty("reread");
+  });
+
+  it("is held while the text of what they went on to say is late, then a read of it decides", async () => {
+    const second = deferred<CoachResponse>();
+    const live = setup();
+    await secondRead(live, second.promise);
+    live.deps.ask.mockResolvedValueOnce(ok(QUESTION_2));
+    await live.speak(4000);
+    second.resolve(ok(TEAM_QUESTION));
+    await live.pause(2000); // no text back yet
+    expect(live.view()).toMatchObject({ offer: { id: 0 } });
+    expect(live.deps.ask).toHaveBeenCalledTimes(2);
+    live.say(TEAM_STRETCHED);
+    await live.pause(500);
+    expect(live.deps.ask.mock.calls[2][0]).toMatchObject({ reread: true, transcript: expect.stringContaining(TEAM_STRETCHED) });
+    expect(live.view()).toMatchObject({ mode: "live", offer: QUESTION_2 });
+    expect(live.offersShown()).not.toContain(TEAM_QUESTION.id);
+  });
+
+  it("is dropped, not shown, when what they went on to say never comes back as text", async () => {
+    const second = deferred<CoachResponse>();
+    const live = setup();
+    await secondRead(live, second.promise);
+    await live.speak(1500);
+    second.resolve(ok(TEAM_QUESTION));
+    await live.pause(10_000);
+    expect(live.view()).toMatchObject({ offer: { id: 0 } });
+    expect(live.deps.ask).toHaveBeenCalledTimes(2);
+    // Text that comes back after that is read as usual, with nothing held to confirm.
+    live.say(TEAM_OK);
+    await live.pause(500);
+    expect(live.deps.ask).toHaveBeenCalledTimes(3);
+    expect(live.deps.ask.mock.calls[2][0]).not.toHaveProperty("reread");
+    expect(live.offersShown()).not.toContain(TEAM_QUESTION.id);
+  });
+
+  it("has a sub-second remark transcribed at the pause, and a read of it decides", async () => {
+    const second = deferred<CoachResponse>();
+    const live = setup();
+    await secondRead(live, second.promise);
+    live.deps.ask.mockResolvedValueOnce(ok(QUESTION_2));
+    const commits = live.connection.commit.mock.calls.length;
+    await live.speak(600);
+    second.resolve(ok(TEAM_QUESTION));
+    await live.pause(1000);
+    // Shorter than a turn has to be otherwise.
+    expect(live.connection.commit).toHaveBeenCalledTimes(commits + 1);
+    live.say("Team ok lah.");
+    await live.pause(3500);
+    expect(live.deps.ask.mock.calls[2][0]).toMatchObject({ reread: true, transcript: expect.stringContaining("Team ok lah.") });
+    expect(live.view()).toMatchObject({ mode: "live", offer: QUESTION_2 });
+    expect(live.offersShown()).not.toContain(TEAM_QUESTION.id);
+  });
+
+  // A cough, a laugh or an "mm" after the read: long enough to count as speech, but no words.
+  it.each([
+    ["no text", ""],
+    ["only punctuation", "..."],
+  ])("is shown once what they went on to say comes back as %s: the read missed nothing", async (_label, transcript) => {
+    const second = deferred<CoachResponse>();
+    const live = setup();
+    await secondRead(live, second.promise);
+    await live.speak(400);
+    second.resolve(ok(TEAM_QUESTION));
+    await live.pause(1000);
+    expect(live.view()).toMatchObject({ offer: { id: 0 } });
+    live.say(transcript);
+    await live.pause(1000);
+    expect(live.view()).toMatchObject({ mode: "live", offer: TEAM_QUESTION });
+    // Nothing new to read.
+    expect(live.deps.ask).toHaveBeenCalledTimes(2);
+  });
+
+  it("is dropped when what they went on to say failed to transcribe", async () => {
+    const second = deferred<CoachResponse>();
+    const live = setup();
+    await secondRead(live, second.promise);
+    await live.speak(400);
+    second.resolve(ok(TEAM_QUESTION));
+    await live.pause(1000);
+    live.fail();
+    await live.pause(10_000);
+    expect(live.view()).toMatchObject({ offer: { id: 0 } });
+    expect(live.offersShown()).not.toContain(TEAM_QUESTION.id);
+  });
+
+  it("is shown at the pause when no read is left to confirm it", async () => {
+    const last = deferred<CoachResponse>();
+    const live = setup();
+    await firstRead(live);
+    for (let reads = 1; reads < MAX_READS - 1; reads++) {
+      await live.speak(3000);
+      live.say(MORE);
+      await live.pause(2500);
+    }
+    expect(live.deps.ask).toHaveBeenCalledTimes(MAX_READS - 1);
+    live.deps.ask.mockReturnValueOnce(last.promise);
+    await live.speak(3000);
+    live.say(MORE);
+    await live.pause(1600);
+    expect(live.deps.ask).toHaveBeenCalledTimes(MAX_READS);
+    await live.speak(1500);
+    live.say(TEAM_OK);
+    last.resolve(ok(COVERED));
+    await live.pause(2000);
+    expect(live.view()).toMatchObject({ mode: "live", offer: COVERED });
+    expect(live.deps.ask).toHaveBeenCalledTimes(MAX_READS);
+  });
 });
 
 describe("Different question", () => {
@@ -440,7 +675,12 @@ describe("falling back", () => {
     expect(live.deps.ask).toHaveBeenCalledTimes(2);
     expect(live.view()).toMatchObject({ mode: "fallback", offer: { id: 0 } });
     expect(live.connection.close).toHaveBeenCalledOnce();
-    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: expect.any(Number), shown: 0 });
+    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SESSION,
+      recordedMs: expect.any(Number),
+      shown: 0,
+      fallback: "coach_failures",
+    });
     expect(live.coach.stop()).toBe(SESSION); // the take still records which session it was
     expect(live.deps.end).toHaveBeenCalledOnce();
   });
@@ -465,6 +705,7 @@ describe("falling back", () => {
     const live = setup({ ask: vi.fn(async () => ({ status: "error", code }) as const) });
     await firstRead(live);
     expect(live.view()).toMatchObject({ mode: "fallback", offer: { id: 0 } });
+    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: SESSION, fallback: "final_code" }));
   });
 
   it("falls back when the transcription connection is lost", async () => {
@@ -472,6 +713,7 @@ describe("falling back", () => {
     await live.record();
     live.lose();
     expect(live.view()).toMatchObject({ mode: "fallback", offer: { id: 0 } });
+    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: SESSION, fallback: "connection_lost" }));
   });
 
   it("falls back when they keep talking and no text comes back", async () => {
@@ -482,6 +724,7 @@ describe("falling back", () => {
     expect(live.view()?.mode).toBe("live");
     await live.speak(1500);
     expect(live.view()).toMatchObject({ mode: "fallback", offer: { id: 0 } });
+    expect(live.deps.end).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: SESSION, fallback: "no_text" }));
   });
 
   it("stays without follow-ups for the rest of the take", async () => {
@@ -502,6 +745,8 @@ describe("finishing", () => {
     await live.pause(30_000);
     expect(live.coach.stop()).toBe(SESSION);
     expect(live.deps.end).toHaveBeenCalledExactlyOnceWith({ sessionId: SESSION, recordedMs: 30_000, shown: 0 });
+    // No reason: live coaching never stopped early (and a server from before it would refuse the key).
+    expect(live.deps.end.mock.calls[0][0]).not.toHaveProperty("fallback");
     expect(live.connection.close).toHaveBeenCalledOnce();
     expect(live.meterStopped).toHaveBeenCalledOnce();
     expect(live.signal()?.aborted).toBe(true);

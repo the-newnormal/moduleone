@@ -8,7 +8,9 @@ import { acknowledge, mergeRead, nextOffer, skip, touched, type CoachState } fro
 import { CoachError, type CoachRead, type CoachRubric, type Offer, type Touched } from "./types";
 
 // Claude reads the transcript only once there is something new to read: the first time at this many
-// words, then after this many more. A call with fewer just re-decides from what is known.
+// words, then after this many more. A call with fewer just re-decides from what is known, unless it
+// is a reread: the recorder is holding the last offer because they said more after its read ("team
+// ok lah"), and re-deciding from the old coverage would only offer the same thing again.
 export const FIRST_READ_WORDS = 12;
 export const NEW_READ_WORDS = 8;
 
@@ -31,6 +33,8 @@ export async function coachTurn<R extends TurnRead>(input: {
   // The offer on screen now, and the one the member asked to replace ("Different question").
   shown: number | null;
   skip: number | null;
+  // Any new words are worth a read (see above).
+  reread?: boolean;
   read: (alreadyAsked: string[]) => Promise<R>;
 }): Promise<TurnResult<R>> {
   const { rubric, transcript, elapsedS } = input;
@@ -41,19 +45,25 @@ export async function coachTurn<R extends TurnRead>(input: {
 
   const ended = state.tone === "distress" || state.linesShown.some((l) => l !== "beforeYouFinish");
   const words = countWords(transcript);
-  const enough = state.counts.reads === 0 ? words >= FIRST_READ_WORDS : words >= state.wordsRead + NEW_READ_WORDS;
+  const enough =
+    (state.counts.reads === 0 ? words >= FIRST_READ_WORDS : words >= state.wordsRead + NEW_READ_WORDS) ||
+    (input.reread === true && words > state.wordsRead);
   let result: R | null = null;
   let failure: CoachError | null = null;
   // A skip wants a new question straight away, from what is already known.
   if (!skipping && !ended && enough) {
     try {
       result = await input.read([...state.asked, ...state.skipped]);
-      state = mergeRead(state, result.read, rubric);
+      const merged = mergeRead(state, result.read, rubric);
+      // A read that raises nothing means they have moved off what they were talking about, but not
+      // a reread of a few words ("hmm ya"): that says too little, so they keep the flow bonus.
+      const tooFew = merged.flow.length === 0 && words - state.wordsRead < NEW_READ_WORDS;
       state = {
-        ...state,
+        ...merged,
+        flow: tooFew ? state.flow : merged.flow,
         wordsRead: words,
         counts: {
-          ...state.counts,
+          ...merged.counts,
           reads: state.counts.reads + 1,
           latencyMs: state.counts.latencyMs + result.latencyMs,
           slowestMs: Math.max(state.counts.slowestMs, result.latencyMs),

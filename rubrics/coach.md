@@ -28,7 +28,7 @@ The rules for this file (a test checks them on every pull request):
 
 ## Opening question
 
-Talk me through your week: what you worked on, what came of it, and how you're feeling about the team.
+Talk me through your week: what you worked on and what came of it, a moment you or your team were at your best, and how you're feeling about the team.
 
 ## Coverage levels
 
@@ -83,7 +83,7 @@ The same piece of work described twice in different words is still one piece.
 - Area: excellence
 - Weight: 1.0
 - Key topic: yes
-- Ask: Where did you or your team get to use your superpower this week?
+- Ask: What's one moment this week when you or your team were at your best?
 - Ask in a hard week: In the middle of all that, what did you or your team do that made a difference?
 
 Clear when they describe a specific situation this week where they or their team used a strength: what happened and what they did ("Wednesday the client escalated, I took the call and walked them through the fix step by step", "we turned the tender docs around in one day because everyone knew their part"). Team examples count.
@@ -116,7 +116,7 @@ A task on its own ("I did the report") is not a strength.
 - Weight: 1.0
 - Key topic: yes
 - Tailor: no
-- Ask: How are you feeling about the team at the moment?
+- Ask: How's the team been for you this week?
 
 Clear when they say how they feel about the team, in any direction or mixed ("quite happy with the team", "honestly a bit frustrated with how things are", "shiok working with them", "team ok lah", "sian lah, everyone tired", "mixed feelings this week"). "Ok lah" is a complete, neutral answer.
 Brief when they talk only about their own week or workload with nothing about the team ("very tiring week", "quite stressed with deadlines"), or only give facts about the team ("we had team lunch", "two people resigned").
@@ -174,13 +174,13 @@ How many follow-ups there are and how they are chosen:
 - Most follow-up questions: 6
 - Most follow-ups per area: 2
 - Brief answer counts as: 0.6
-- Bonus for an untouched area: 0.5
-- Bonus for the area they are talking about: 0.2
-- Claude's choice may score lower by up to: 0.15
+- Bonus for an untouched area: 0.2
+- Bonus for the area they are talking about: 0.4
+- Claude's choice may score lower by up to: 0.5
 - Least score worth asking: 0.45
 - Least score worth asking once every area is touched: 0.6
 - Least score worth asking in a hard week: 0.7
-- Only key topics after (seconds): 270
+- Only key topics after (seconds): 150
 - No new questions after (seconds): 360
 
 How the screen paces them:

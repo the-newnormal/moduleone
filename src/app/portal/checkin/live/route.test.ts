@@ -44,6 +44,7 @@ beforeEach(() => {
   vi.mocked(mintLiveTranscriptionKey).mockReset();
   vi.mocked(openLiveTranscription).mockReset();
   vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "info").mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -89,6 +90,29 @@ describe("POST /portal/checkin/live", () => {
       MEMBER,
       expect.objectContaining({ stt: "openai:gpt-4o-transcribe", coach: "claude-sonnet-5-5" }),
     );
+  });
+
+  it("logs that a session started, with the rubric's fingerprint and the models, and nothing about who", async () => {
+    vi.stubEnv("COACH_MODEL", "claude-sonnet-5-5");
+    await POST(post());
+    expect(console.info).toHaveBeenCalledExactlyOnceWith("live session started", {
+      coachRubric: vi.mocked(startLiveSession).mock.calls[0][1].coachRubric,
+      sttModel: "gpt-live-transcribe",
+      coachModel: "claude-sonnet-5-5",
+    });
+    const logged = JSON.stringify(vi.mocked(console.info).mock.calls);
+    for (const id of [MEMBER, SESSION_ID, SESSION.authUserId]) expect(logged).not.toContain(id);
+  });
+
+  it.each([
+    ["live check-ins are off", () => vi.stubEnv("LIVE_CHECKIN", "off")],
+    ["the caller is signed out", () => vi.mocked(sessionMember).mockResolvedValue("signed_out")],
+    ["the notice isn't accepted", () => vi.mocked(noticeAccepted).mockResolvedValue(false)],
+    ["the session can't start", () => vi.mocked(startLiveSession).mockResolvedValue("too_many_sessions")],
+  ])("logs no start when %s", async (_label, arrange) => {
+    arrange();
+    await POST(post());
+    expect(console.info).not.toHaveBeenCalled();
   });
 
   it("never mints a key or opens a transcription (the connect route does, once per session)", async () => {
