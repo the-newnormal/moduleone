@@ -94,6 +94,7 @@ describe("POST /portal/checkin/live/coach", () => {
       offer: { id: 1, kind: "question", text: expect.any(String) },
       touched: { activity: true, excellence: false, morale: true },
       degraded: false,
+      more: true,
     });
     // A question from rubrics/coach.md (Claude offered no wording of its own).
     expect(asks()).toContain(body.offer.text);
@@ -125,9 +126,10 @@ describe("POST /portal/checkin/live/coach", () => {
     for (const word of ["Jurong", "vendor", "contract", "lah"]) expect(state).not.toContain(word);
   });
 
-  it("sends back only the offer's id, kind and text, and which areas are touched", async () => {
+  it("sends back only the offer's id, kind and text, which areas are touched, and whether more can follow", async () => {
     const body = await (await POST(post())).json();
-    expect(Object.keys(body).sort()).toEqual(["degraded", "offer", "status", "touched"]);
+    expect(Object.keys(body).sort()).toEqual(["degraded", "more", "offer", "status", "touched"]);
+    expect(typeof body.more).toBe("boolean");
     expect(Object.keys(body.offer).sort()).toEqual(["id", "kind", "text"]);
     expect(body.touched).toEqual({ activity: expect.any(Boolean), excellence: expect.any(Boolean), morale: expect.any(Boolean) });
     const text = JSON.stringify(body);
@@ -146,6 +148,57 @@ describe("POST /portal/checkin/live/coach", () => {
       offer: null,
       touched: { activity: true, excellence: false, morale: true },
       degraded: false,
+      more: true,
+    });
+  });
+
+  // moreToAsk (policy.ts): only whether the questions have run their course, never coverage.
+  describe("whether more can follow", () => {
+    const question = (id: number, topic: string) =>
+      ({ id, kind: "question", topic, source: "bank", beforeYouFinish: false, rejected: false }) as const;
+
+    it("says none can once the offer it sends is the last follow-up allowed", async () => {
+      const max = RUBRIC.settings.maxFollowUps;
+      const asked = RUBRIC.topics.filter((t) => t.area !== "excellence").slice(0, max - 1).map((t) => t.id);
+      const state: CoachState = {
+        ...initialState(),
+        coverage: Object.fromEntries(asked.map((id) => [id, "clear"])),
+        asked,
+        followUps: max - 1,
+        nextOfferId: 2,
+        counts: { ...initialState().counts, reads: 3 },
+      };
+      vi.mocked(claimCoachCall).mockResolvedValue(claim({ state }));
+      const body = await (await POST(post())).json();
+      expect(body).toMatchObject({ offer: { kind: "question" }, more: false });
+    });
+
+    it("says more can follow while it may still ask, after a question that isn't the last", async () => {
+      const body = await (await POST(post())).json();
+      expect(body).toMatchObject({ offer: { kind: "question" }, more: true });
+    });
+
+    it("says none can with the closing line once the time for new questions is up", async () => {
+      vi.mocked(claimCoachCall).mockResolvedValue(claim({ startedAt: new Date(NOW.getTime() - 3_600_000).toISOString() }));
+      const body = await (await POST(post({ elapsedMs: (RUBRIC.settings.noNewQuestionsAfterS + 1) * 1000 }))).json();
+      expect(body).toMatchObject({ offer: { kind: "late" }, more: false });
+    });
+
+    it("says none can with nothing new once a closing line is on screen", async () => {
+      const state: CoachState = {
+        ...initialState(),
+        offers: [...initialState().offers, { ...question(1, "excellence_moment"), kind: "covered", topic: null, source: "line" }],
+        nextOfferId: 2,
+      };
+      vi.mocked(claimCoachCall).mockResolvedValue(claim({ state }));
+      const body = await (await POST(post({ shown: 1 }))).json();
+      expect(body).toMatchObject({ offer: null, more: false });
+    });
+
+    it("says more can follow, with nothing new, while a later call has moved on", async () => {
+      vi.mocked(saveCoachState).mockResolvedValue(false);
+      const body = await (await POST(post())).json();
+      expect(body).toMatchObject({ offer: null, more: true });
     });
   });
 

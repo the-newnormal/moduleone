@@ -1,8 +1,9 @@
 // When the recorder ends a transcription turn, asks the coach for a read, and shows the next
-// question; and when it gives up on live coaching and carries on without follow-ups. Pure
-// decisions over plain numbers, all in milliseconds on one clock (liveClock), so they can be tested
-// without a browser. The coach's own pacing (how long to wait before showing a question) comes from
-// rubrics/coach.md through the start response; the rest is fixed here.
+// question; what the member is told is coming; and when it gives up on live coaching and carries on
+// without follow-ups. Pure decisions over plain numbers, all in milliseconds on one clock
+// (liveClock), so they can be tested without a browser. The coach's own pacing (how long to wait
+// before showing a question, and when new questions stop) comes from rubrics/coach.md through the
+// start response; the rest is fixed here.
 
 import type { Pacing } from "@/lib/coach/types";
 
@@ -200,6 +201,92 @@ export function shouldShow({
   if (speaking || newerReadOut || heardSinceOffer || offerRequestedAt === null || offerRequestedAt < shownAt) return false;
   if (silenceMs >= pacing.stoppedSilenceMs) return true;
   return silenceMs >= pacing.showAfterSilenceMs && questionHadItsTime({ now, pacing, shownAt, wordsSinceShown, elapsedMs, onOpening });
+}
+
+// --- No new questions after ----------------------------------------------------------------------
+// The server asks nothing new once the recording is "No new questions after" in (coach.md). It takes
+// the lesser of the recorder's time and the time since it started the session, which it did after
+// the recording started and before the start answered. So by the recorder's own clock that time is
+// surely still to come before then ("open"), and surely past only once that long has gone by since
+// the start answered ("over"), give or take the server's and the database's clocks (LIMIT_SLACK_MS);
+// in between, it may be either ("unsure").
+export const LIMIT_SLACK_MS = 2000;
+export type QuestionTime = "open" | "unsure" | "over";
+
+export function questionTime({
+  now,
+  startedAt,
+  startAnsweredAt,
+  limitMs,
+}: {
+  now: number;
+  // When the recording started, and when the start answered (null until it has).
+  startedAt: number;
+  startAnsweredAt: number | null;
+  // From the start's pacing; undefined from a server from before it, which is then never over.
+  limitMs: number | undefined;
+}): QuestionTime {
+  if (limitMs === undefined || now - startedAt < limitMs) return "open";
+  return startAnsweredAt !== null && now - startAnsweredAt >= limitMs + LIMIT_SLACK_MS ? "over" : "unsure";
+}
+
+// --- Telling them what's coming ---------------------------------------------------------------
+// The line under the question (live-prompt.tsx). It promises a follow-up only once one is lined up:
+// "ready" while a question waits that will show at their next pause (the question on screen has had
+// its time, or they have paused long enough that it shows once they have clearly stopped). A coach
+// call out a while says "checking", which promises nothing (it may bring a question, a closing line
+// or nothing new), and only when it could bring a question that could show at their next pause:
+// earlier ones would only flash for questions that never show. "No more" once nothing but
+// "Different question" can bring a follow-up (moreToCome); that only swaps the question on screen,
+// so the line keeps saying it while one is on its way. A call that answers within CHECKING_AFTER_MS
+// never makes it say checking, so a quick read or a quick "Different question" doesn't flicker; and
+// once it says checking or ready, it says so for MIN_BUSY_MS at least (ready only while the question
+// still waits), unless a question or closing line shows meanwhile, so talk resumed, or a read that
+// finds nothing, just after it appeared doesn't flash it either.
+export const CHECKING_AFTER_MS = 1000;
+export const MIN_BUSY_MS = 1000;
+export type FollowUpStatus = "starting" | "listening" | "checking" | "ready" | "no_more";
+export type BusyStatus = Extract<FollowUpStatus, "checking" | "ready">;
+
+export function followUpStatus({
+  connected,
+  closingShown,
+  waiting,
+  call,
+  busy,
+  due,
+  paused,
+  moreToCome,
+}: {
+  connected: boolean;
+  closingShown: boolean;
+  // What waits to be shown, from a read asked for since the question on screen appeared: a question
+  // that can still show, or a closing line. A question that can only give way to a closing line
+  // counts as nothing.
+  waiting: "question" | "closing" | null;
+  // The coach call out, if it could bring a question back: how long it has been out (a "Different
+  // question" from when it was pressed, even while it waits to be sent), and whether it is one.
+  call: { ms: number; skip: boolean } | null;
+  // What the line says now, if checking or ready, and how long it has said either.
+  busy: { status: BusyStatus; ms: number } | null;
+  // questionHadItsTime, kept until the next question shows.
+  due: boolean;
+  // Quiet for showAfterSilenceMs or more.
+  paused: boolean;
+  // A later read could still bring a follow-up question: the server hasn't said none can, reads are
+  // left, and it isn't surely past "No new questions after" (questionTime).
+  moreToCome: boolean;
+}): FollowUpStatus {
+  if (closingShown) return "no_more";
+  if (!connected) return "starting";
+  // While they stay quiet after the line said checking, the question is about to show: it keeps
+  // saying checking rather than flash ready just before.
+  if (waiting === "question" && (due || paused)) return paused && busy?.status === "checking" ? "checking" : "ready";
+  if (call?.skip && moreToCome && (call.ms >= CHECKING_AFTER_MS || busy)) return "checking";
+  if (call && !call.skip && waiting === null && (due || paused) && call.ms >= CHECKING_AFTER_MS) return "checking";
+  if (busy && busy.ms < MIN_BUSY_MS && (busy.status === "checking" || waiting === "question")) return busy.status;
+  if (!moreToCome && waiting !== "question" && (call === null || call.skip)) return "no_more";
+  return "listening";
 }
 
 // --- Giving up on follow-ups --------------------------------------------------------------------

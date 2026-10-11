@@ -6,6 +6,7 @@ import {
   floor,
   initialState,
   mergeRead,
+  moreToAsk,
   nextOffer,
   OPENING_OFFER_ID,
   parseState,
@@ -1115,6 +1116,53 @@ describe("validateQuestion", () => {
   });
 });
 
+describe("moreToAsk", () => {
+  const more = (state: CoachState, input: { offer?: Decision["offer"]; elapsedS?: number; rubric?: CoachRubric } = {}) =>
+    moreToAsk(state, input.offer ?? null, input.rubric ?? R, input.elapsedS ?? 60);
+
+  it("is true while questions may still come, even when nothing is worth asking right now", () => {
+    expect(more(initialState())).toBe(true);
+    // Nothing worth asking for now ("Everything covered" would be offered), but what they say next
+    // may still open a topic up.
+    const covered = stateWith({ coverage: ALL_CLEAR });
+    expect(decide(covered).offer).toMatchObject({ kind: "covered" });
+    expect(more(covered)).toBe(true);
+  });
+
+  it.each<[string, CoachState, boolean]>([
+    ["in distress", stateWith({ tone: "distress" }), false],
+    ["in a hard week", stateWith({ tone: "hard_week" }), true],
+    ["once a closing line is on screen", stateWith({ linesShown: ["covered"] }), false],
+    ["after \"Before you finish\", which is a question", stateWith({ linesShown: ["beforeYouFinish"] }), true],
+    ["at the most follow-ups", stateWith({ followUps: S.maxFollowUps }), false],
+    ["one short of the most follow-ups", stateWith({ followUps: S.maxFollowUps - 1 }), true],
+    ["after two skips in a row", stateWith({ skipsInARow: 2 }), false],
+    ["after one skip", stateWith({ skipsInARow: 1 }), true],
+  ])("with nothing new to show: %s", (_label, state, expected) => {
+    expect(more(state)).toBe(expected);
+  });
+
+  it("is false from the time new questions stop", () => {
+    expect(more(initialState(), { elapsedS: S.noNewQuestionsAfterS - 0.1 })).toBe(true);
+    expect(more(initialState(), { elapsedS: S.noNewQuestionsAfterS })).toBe(false);
+  });
+
+  it("is said for the offer it comes with, once that is on screen", () => {
+    const state = stateWith({ followUps: S.maxFollowUps - 1 });
+    const last = decide(state, { read: read({ coverage: {} }) });
+    expect(last.offer).toMatchObject({ kind: "question" });
+    // Shown, it is the last follow-up allowed.
+    expect(more(last.state, { offer: last.offer })).toBe(false);
+    expect(more(last.state)).toBe(true);
+    const line = decide(stateWith({ tone: "distress" }));
+    expect(line.offer).toMatchObject({ kind: "closing" });
+    expect(more(line.state, { offer: line.offer })).toBe(false);
+    const covered = decide(stateWith({ coverage: ALL_CLEAR }));
+    expect(covered.offer).toMatchObject({ kind: "covered" });
+    expect(more(covered.state, { offer: covered.offer })).toBe(false);
+  });
+});
+
 describe("a whole check-in", () => {
   it("asks each thing once, keeps to the limits and ends with the covered line", () => {
     // They start on their work, get one general example in when asked, say how they feel, and
@@ -1189,11 +1237,17 @@ function simulate(rubric: CoachRubric, seed: number) {
   let state = initialState();
   let waiting: number | null = null;
   let elapsedS = 0;
+  // What the recorder would last have been told about more coming (moreToAsk), and what each offer
+  // said, which holds once it is on screen. Unknown (true) just after a skip, whose offer the
+  // recorder shows at once but this simulation may not.
+  let moreSaid = true;
+  const moreWith = new Map<number, boolean>();
 
   for (let call = 0; call < 50 && elapsedS < s.noNewQuestionsAfterS + 60; call++) {
     elapsedS += 4 + random() * 16;
     if (waiting !== null && random() < 0.7) {
       const before = state.asked;
+      moreSaid = moreWith.get(waiting) ?? true;
       state = acknowledge(state, waiting, rubric);
       newlyAsked.push(...state.asked.filter((id) => !before.includes(id)));
       waiting = null;
@@ -1202,7 +1256,8 @@ function simulate(rubric: CoachRubric, seed: number) {
     const onScreen = state.offers.find((o) => o.id === state.current);
     let decision: Decision;
     const before = state;
-    if (onScreen?.kind === "question" && onScreen.topic && random() < 0.2) {
+    const skipped = onScreen?.kind === "question" && onScreen.topic && random() < 0.2;
+    if (skipped) {
       state = skip(state, state.current);
       decision = nextOffer(state, { rubric, elapsedS, read: null, transcript: SAID });
     } else {
@@ -1237,6 +1292,11 @@ function simulate(rubric: CoachRubric, seed: number) {
     }
     if (before.linesShown.includes("closing")) expect(offer, where).toBeNull();
     else if (ended && offer) expect(offer.kind, where).toBe("closing");
+    // Once told none can come, no read brings a question (only "Different question" swaps one).
+    if (!skipped && !moreSaid) expect(offer?.kind, where).not.toBe("question");
+    if (skipped) moreSaid = true;
+    if (offer) moreWith.set(offer.id, moreToAsk(decision.state, offer, rubric, elapsedS));
+    else if (!skipped) moreSaid = moreToAsk(decision.state, null, rubric, elapsedS);
 
     state = decision.state;
     if (offer) waiting = offer.id;

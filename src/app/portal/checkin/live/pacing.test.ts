@@ -1,16 +1,21 @@
 import { describe, expect, it } from "vitest";
 import type { Pacing } from "@/lib/coach/types";
 import {
+  CHECKING_AFTER_MS,
   COMMIT_SILENCE_MS,
   FIRST_READ_WORDS,
+  followUpStatus,
   FORCE_COMMIT_MS,
   HEARD_SINCE_READ_MS,
   heardSinceRead,
+  LIMIT_SLACK_MS,
   MAX_READS,
+  MIN_BUSY_MS,
   MIN_READ_GAP_MS,
   MIN_TURN_SPEECH_MS,
   NEW_READ_WORDS,
   questionHadItsTime,
+  questionTime,
   READ_SILENCE_MS,
   rereadDue,
   shouldCommit,
@@ -196,5 +201,96 @@ describe("shouldShow", () => {
     // The read asked for at 95 s heard it: its offer shows.
     const heard = heardSinceRead({ words: 43, wordsAtRead: 43, spokenMs: 21_000, spokenAtRead: 21_000 });
     expect(shouldShow({ ...base, offerRequestedAt: 95_000, heardSinceOffer: heard })).toBe(true);
+  });
+});
+
+describe("questionTime", () => {
+  // The recording started at 10 s on the live clock; the start answered 3 s later; no new questions
+  // after 360 s.
+  const base = { startedAt: 10_000, startAnsweredAt: 13_000, limitMs: 360_000 };
+
+  it.each([
+    ["just before the time, by the recorder's clock", 10_000 + 360_000 - 1, "open"],
+    // The server may have started the session as late as when the start answered.
+    ["at the time, by the recorder's clock", 10_000 + 360_000, "unsure"],
+    ["the time since the start answered, but within the slack", 13_000 + 360_000 + LIMIT_SLACK_MS - 1, "unsure"],
+    ["the time and the slack since the start answered", 13_000 + 360_000 + LIMIT_SLACK_MS, "over"],
+  ] as const)("%s", (_label, now, expected) => {
+    expect(questionTime({ ...base, now })).toBe(expected);
+  });
+
+  it("is never over before the start has answered, or from a server that doesn't say", () => {
+    expect(questionTime({ ...base, startAnsweredAt: null, now: 1_000_000 })).toBe("unsure");
+    expect(questionTime({ ...base, limitMs: undefined, now: 1_000_000 })).toBe("open");
+  });
+});
+
+describe("followUpStatus", () => {
+  // Connected, a question on screen that hasn't had its time, nothing waiting or out, more to come.
+  const base = {
+    connected: true,
+    closingShown: false,
+    waiting: null as "question" | "closing" | null,
+    call: null as { ms: number; skip: boolean } | null,
+    busy: null as { status: "checking" | "ready"; ms: number } | null,
+    due: false,
+    paused: false,
+    moreToCome: true,
+  };
+  const read = (ms: number) => ({ ms, skip: false });
+  const skip = (ms: number) => ({ ms, skip: true });
+
+  it.each([
+    ["nothing waiting or out", base, "listening"],
+    // A closing line on screen: nothing more will come, whatever else is going on.
+    ["a closing line on screen, a slow read out", { ...base, closingShown: true, call: read(5000), due: true }, "no_more"],
+    ["a closing line on screen, a question waiting", { ...base, closingShown: true, waiting: "question", due: true }, "no_more"],
+    ["a closing line on screen, a skip out", { ...base, closingShown: true, call: skip(5000) }, "no_more"],
+    ["not connected yet", { ...base, connected: false }, "starting"],
+    ["not connected yet, though they have paused", { ...base, connected: false, paused: true, due: true }, "starting"],
+    // A question waiting: ready only when it will show at their next pause.
+    ["a question waiting, the question on screen has had its time", { ...base, waiting: "question", due: true }, "ready"],
+    ["a question waiting, they have paused", { ...base, waiting: "question", paused: true }, "ready"],
+    ["a question waiting, neither", { ...base, waiting: "question" }, "listening"],
+    ["a question waiting and a newer read out, due", { ...base, waiting: "question", call: read(5000), due: true }, "ready"],
+    // After checking, while they stay quiet, the question is about to show: no flash of ready first.
+    ["a question waiting, they have paused, the line saying checking", { ...base, waiting: "question", paused: true, due: true, busy: { status: "checking", ms: 1500 } }, "checking"],
+    ["a question waiting, due, they talk on, the line saying checking", { ...base, waiting: "question", due: true, busy: { status: "checking", ms: 1500 } }, "ready"],
+    // Different question: only once it has been out a while, unless the line already said something is on its way.
+    ["a skip out just under a second", { ...base, call: skip(CHECKING_AFTER_MS - 1) }, "listening"],
+    ["a skip out a second", { ...base, call: skip(CHECKING_AFTER_MS) }, "checking"],
+    ["a quick skip while the line says checking", { ...base, call: skip(200), busy: { status: "checking", ms: 3000 } }, "checking"],
+    ["a quick skip while the line says ready", { ...base, call: skip(200), busy: { status: "ready", ms: 3000 } }, "checking"],
+    // With nothing more to come, a skip only swaps the question on screen: no more come after it.
+    ["a slow skip with nothing more to come", { ...base, call: skip(5000), moreToCome: false }, "no_more"],
+    ["a skip while the line says ready, nothing more to come", { ...base, call: skip(200), moreToCome: false, busy: { status: "ready", ms: 200 } }, "no_more"],
+    // A read out with nothing waiting: once it has been out a while, and only if its answer could show at their next pause.
+    ["a read out just under a second, due", { ...base, call: read(CHECKING_AFTER_MS - 1), due: true }, "listening"],
+    ["a read out a second, due", { ...base, call: read(CHECKING_AFTER_MS), due: true }, "checking"],
+    ["a read out a second, they have paused", { ...base, call: read(CHECKING_AFTER_MS), paused: true }, "checking"],
+    ["a read out 5 s, neither due nor paused", { ...base, call: read(5000) }, "listening"],
+    // A closing line waits: slow reads don't make the line say checking.
+    ["a slow read out, a closing line waiting", { ...base, call: read(5000), waiting: "closing", due: true, paused: true }, "listening"],
+    // Nothing more to come: no read left, the server said so, or past the time for new questions.
+    ["nothing more to come, nothing waiting or out", { ...base, moreToCome: false }, "no_more"],
+    ["nothing more to come, a closing line waiting", { ...base, moreToCome: false, waiting: "closing", due: true }, "no_more"],
+    ["nothing more to come, a question waiting, neither due nor paused", { ...base, moreToCome: false, waiting: "question" }, "listening"],
+    ["nothing more to come, a question waiting, due", { ...base, moreToCome: false, waiting: "question", due: true }, "ready"],
+    ["nothing more to come, the last read out", { ...base, moreToCome: false, call: read(200) }, "listening"],
+    ["nothing more to come, the last read out a while, due", { ...base, moreToCome: false, call: read(5000), due: true }, "checking"],
+    // Once the line says checking or ready, it says so for a second at least: talk resumed, or a read
+    // that found nothing, just after it appeared doesn't flash it.
+    ["said checking just under a second ago, nothing on its way now", { ...base, busy: { status: "checking", ms: MIN_BUSY_MS - 1 } }, "checking"],
+    ["said checking a second ago, nothing on its way now", { ...base, busy: { status: "checking", ms: MIN_BUSY_MS } }, "listening"],
+    ["said ready a moment ago, the question still waiting", { ...base, waiting: "question", busy: { status: "ready", ms: 200 } }, "ready"],
+    ["said ready a second ago, the question still waiting", { ...base, waiting: "question", busy: { status: "ready", ms: MIN_BUSY_MS } }, "listening"],
+    // Ready isn't held for a question that no longer waits: that would promise one that isn't coming.
+    ["said ready a moment ago, the question gone", { ...base, busy: { status: "ready", ms: 200 } }, "listening"],
+    ["said ready a moment ago, the question gone, nothing more to come", { ...base, moreToCome: false, busy: { status: "ready", ms: 200 } }, "no_more"],
+    ["said checking a moment ago, nothing more to come", { ...base, busy: { status: "checking", ms: 200 }, moreToCome: false }, "checking"],
+    ["said checking a second ago, nothing more to come", { ...base, busy: { status: "checking", ms: MIN_BUSY_MS }, moreToCome: false }, "no_more"],
+    ["said checking a moment ago, a closing line now on screen", { ...base, busy: { status: "checking", ms: 200 }, closingShown: true }, "no_more"],
+  ] as const)("%s", (_label, input, expected) => {
+    expect(followUpStatus(input)).toBe(expected);
   });
 });

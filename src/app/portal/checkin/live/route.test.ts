@@ -68,6 +68,7 @@ describe("POST /portal/checkin/live", () => {
         minQuestionMs: RUBRIC.settings.minQuestionS * 1000,
         minWordsPerQuestion: RUBRIC.settings.minWordsPerQuestion,
         firstFollowUpAfterMs: RUBRIC.settings.firstFollowUpAfterS * 1000,
+        noNewQuestionsAfterMs: RUBRIC.settings.noNewQuestionsAfterS * 1000,
       },
     });
     expect(RUBRIC.opening).not.toBe("");

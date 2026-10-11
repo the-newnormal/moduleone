@@ -79,6 +79,10 @@ export type CoachResponse =
       touched: Record<Area, boolean>;
       // Claude's read failed this time (the offer, if any, comes from what was known before).
       degraded: boolean;
+      // false once no later read can bring a follow-up question, with this offer (if any) on screen
+      // (moreToAsk in src/lib/coach/policy.ts), so the recorder can say none are coming. Left out by
+      // a server from before it (after a rollback): the recorder then takes it as true.
+      more?: boolean;
     }
   | LiveError;
 

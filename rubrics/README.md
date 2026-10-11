@@ -394,7 +394,28 @@ is the only one: no live transcription and no coach calls.
 
 The member sees the question, three tags ("What you did", "At your best", "The team") that tick
 once each area has come up, **Different question** for follow-ups, and **Finish** (the tags and
-**Different question** go if [follow-ups stop](#when-follow-up-questions-stop)). They never see
+**Different question** go if [follow-ups stop](#when-follow-up-questions-stop)). Under the question,
+one line says what is coming, and only ever promises a follow-up once one is lined up:
+
+- "Starting follow-ups…" while live transcription connects;
+- "Listening…";
+- "Checking for a follow-up…" while a call that could bring a question back has been out a
+  second (a read, once the question on screen has had its time or they have paused; or
+  **Different question**). It promises nothing: the call may bring a question, a closing line or
+  nothing new;
+- "A follow-up will show when you pause." while a question waits that will show at their next
+  pause (the question on screen has had its time, or they have paused). It stays still, however
+  long they talk;
+- "No more follow-ups." under a closing line, or once nothing but **Different question** can bring
+  a follow-up ([what may still come](#what-may-still-come)); under a follow-up it says "No more
+  follow-ups after this one.", which stays true while **Different question** swaps it.
+
+Its dots move only while starting or checking, and only when the device allows motion. So that it
+doesn't flicker, a call that answers within a second never makes it say checking; once it says
+checking or that one will show, it keeps saying so for a second at least (the second only while
+that question still waits), unless a question or closing line shows sooner; and a question that
+can show at once, or that a call brings while they stay quiet, shows without the line first saying
+it will. Screen readers hear none of it but "No more follow-ups", once a recording. They never see
 coverage levels or scores. The app keeps topic ids, levels, the mood and counts for each session,
 never the member's words or the questions' wording.
 
@@ -674,6 +695,23 @@ These are fixed in code ([`pacing.ts`](../src/app/portal/checkin/live/pacing.ts)
 - **Server limits per session:** 120 calls, at least 1 s apart, for 15 minutes from the start (a
   recording stops at 10 minutes); 12 sessions per member in 24 hours.
 
+#### What may still come
+
+Each coach call's answer says whether a later call could still bring a follow-up question once its
+offer, if any, is on screen (`more`, from `moreToAsk` in
+[`policy.ts`](../src/lib/coach/policy.ts)): not after distress or a closing line, from **360 s**,
+at **6** follow-ups, or after two skips in a row. "Nothing worth asking now" doesn't count, since
+what they say next may open a topic up. **Different question** can still swap the question on
+screen at 6 follow-ups, as a skip doesn't count as one. It says nothing about coverage.
+
+The start also sends "No new questions after" with the pacing. The server measures it from when
+it started the session (or by the recorder's clock, if that is less), which was before the start
+answered, so the recorder takes it as surely past only once that long, and 2 s more for the
+server's and the database's clocks, has gone by since the start answered. From then on, and once
+the 40 calls are used up, it says none can come. Once its own clock is past it, a question held for
+what they said since its read isn't said to be coming any more: that read again may bring "Time is
+nearly up". A question that waits for nothing still shows, and is said to.
+
 ### When follow-up questions stop
 
 Live coaching stops, for the rest of that recording (the metrics below call this falling back),
@@ -694,7 +732,9 @@ when (with the code the end call sends, for the server's log, section 5):
 
 The recording carries on. The question on screen stays, no more follow-ups are shown, **Different
 question** and the three tags go, and the recorder says, once: "Follow-up questions have stopped.
-Keep going, and press Finish when you're done." It doesn't switch to the three fixed questions any
+Keep going, and press Finish when you're done." When live coaching never got going (the start
+refused, or live transcription never connected), it says instead: "No follow-up questions this
+time. Answer out loud, then press Finish." It doesn't switch to the three fixed questions any
 more. The recording itself is never interrupted, and grading works the same either way.
 
 ### Every setting in `coach.md`

@@ -311,6 +311,24 @@ export function nextOffer(
   return question(counted, best.topic, "bank", bankText(state, best.topic), false, problem !== null);
 }
 
+// Whether a later read could still bring a follow-up question once `offer` (this call's, if any) is
+// on screen, so the recorder can say when none are coming. False only where nothing they go on to
+// say can change that: distress, a closing line shown, "No new questions after" reached, the most
+// follow-ups shown, or two skips in a row. "Nothing worth asking now" isn't final (a topic that
+// needs another can open up, the flow bonus moves), so it stays true. "Different question" can still
+// swap the question on screen at the most follow-ups (a skip doesn't count as one).
+export function moreToAsk(state: CoachState, offer: Offer | null, rubric: CoachRubric, elapsedS: number): boolean {
+  const s = rubric.settings;
+  const next = offer ? acknowledge(state, offer.id, rubric) : state;
+  return !(
+    next.tone === "distress" ||
+    next.linesShown.some((l) => l !== "beforeYouFinish") ||
+    elapsedS >= s.noNewQuestionsAfterS ||
+    next.followUps >= s.maxFollowUps ||
+    next.skipsInARow >= 2
+  );
+}
+
 // Only the reason code is kept, never the wording that failed; and for a blocked word, not which
 // group it was in. Claude words its question from what they said, so `blocked_personal` would mostly
 // record that they raised something personal, which the privacy notice doesn't name.

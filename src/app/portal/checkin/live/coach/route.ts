@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { readTranscript } from "@/lib/coach";
-import { parseState } from "@/lib/coach/policy";
+import { moreToAsk, parseState } from "@/lib/coach/policy";
 import { coachInstructions } from "@/lib/coach/prompt";
 import { coachTurn } from "@/lib/coach/turn";
 import { liveCheckinEnabled } from "@/lib/checkin/live-config";
@@ -71,6 +71,10 @@ export async function POST(request: Request): Promise<Response> {
   ]);
   // A later call has moved on (or the session ended): this one's offer was never kept, so it can't
   // be shown.
-  const offer = saved && turn.offer ? { id: turn.offer.id, kind: turn.offer.kind, text: turn.offer.text } : null;
-  return json({ status: "ok", offer, touched: turn.touched, degraded: turn.failure !== null } satisfies CoachResponse);
+  const sent = saved ? turn.offer : null;
+  const offer = sent ? { id: sent.id, kind: sent.kind, text: sent.text } : null;
+  // Whether a follow-up question can still come once that offer is on screen: never coverage, only
+  // whether the questions have run their course (moreToAsk).
+  const more = moreToAsk(turn.state, sent, instructions.rubric, elapsed / 1000);
+  return json({ status: "ok", offer, touched: turn.touched, degraded: turn.failure !== null, more } satisfies CoachResponse);
 }

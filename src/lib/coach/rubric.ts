@@ -248,6 +248,7 @@ export function pacingFrom(settings: CoachSettings): Pacing {
     minQuestionMs: settings.minQuestionS * 1000,
     minWordsPerQuestion: settings.minWordsPerQuestion,
     firstFollowUpAfterMs: settings.firstFollowUpAfterS * 1000,
+    noNewQuestionsAfterMs: settings.noNewQuestionsAfterS * 1000,
   };
 }
 
