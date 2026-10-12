@@ -405,12 +405,14 @@ one line says what is coming, and only ever promises a follow-up once one is lin
   **Different question**, at once if the line already says checking or that one will show). It
   promises nothing: the call may bring a question, a closing line or nothing new;
 - "A follow-up will show when you pause." while a question waits that will show, as it is, at
-  their next pause (the question on screen has had its time, or they have paused). Not for a
-  question they said more after its read (or are talking over), which waits for a read that hears
-  them, nor while a newer read is out: that read may bring another question, a closing line or
-  nothing. Once a read that heard them has brought one, it stays still, however long they talk
-  (a call that renews that question, [below](#pacing-on-screen), doesn't change it, unless
-  its answer is that nothing is worth asking now);
+  their next pause, once the question on screen has had its time (before then, a question shows
+  only once they have stopped for 6 s, and a shorter pause doesn't promise it, as they may talk
+  again first). Not for a question they said more after its read (or are talking over), which
+  waits for a read that hears them, nor while a newer read is out: that read may bring another
+  question, a closing line or nothing. Once a read that heard them has brought one, it stays
+  still, however long they talk, except while a call renews that question
+  ([below](#pacing-on-screen)): once that call has been out a second, it says checking, as its
+  answer may be that nothing is worth asking now;
 - "No more follow-ups." under a closing line, or once nothing but **Different question** can bring
   a follow-up ([what may still come](#what-may-still-come)); under a follow-up it says "No more
   follow-ups after this one.", which stays true while **Different question** swaps it.

@@ -304,11 +304,11 @@ export function createLiveCoach({
     // lined up only once nothing can stop it showing as it is: one held for what they have said since
     // is read again first, and a newer read out replaces it or drops it (shouldShow), so either may
     // bring another question, a closing line or nothing; and one they are talking over may be held a
-    // moment later. A read that renews it holds nothing back: the question shows at their next
-    // pause unless that read has answered first. Once the time for new questions may be over, a read
-    // again may only bring "Time is nearly up".
+    // moment later. That goes for a read renewing it too: it doesn't hold the question back (should
+    // they pause first, it shows), but its answer may drop it. Once the time for new questions may be
+    // over, a read again may only bring "Time is nearly up".
     const pending = r.pending && r.pending.requestedAt >= r.shownAt ? r.pending : null;
-    const newerRead = r.call !== null && r.call.skip === null && !r.call.renews;
+    const newerRead = r.call !== null && r.call.skip === null;
     const lined = (p: Pending) =>
       !holding(r, p, at).held && !newerRead && !(mayHold(r, p) && r.voice.speaking && spokenMs(r.voice, at) > p.spokenAt);
     const waiting =

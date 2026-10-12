@@ -250,7 +250,9 @@ describe("followUpStatus", () => {
     ["not connected yet, though they have paused", { ...base, connected: false, paused: true, due: true }, "starting"],
     // A question waiting: ready only when it will show at their next pause.
     ["a question waiting, the question on screen has had its time", { ...base, waiting: "question", due: true }, "ready"],
-    ["a question waiting, they have paused", { ...base, waiting: "question", paused: true }, "ready"],
+    // Before the question on screen has had its time, one shows only once they have clearly stopped:
+    // a short pause promises nothing, as they may talk again first.
+    ["a question waiting, they have paused", { ...base, waiting: "question", paused: true }, "listening"],
     ["a question waiting, neither", { ...base, waiting: "question" }, "listening"],
     // A held question (a read must confirm it, or a newer read out replaces it) isn't lined up: that
     // read may bring another question, a closing line or nothing.
@@ -262,6 +264,7 @@ describe("followUpStatus", () => {
     ["a held question waiting, its read out 5 s, neither due nor paused", { ...base, waiting: "held", call: read(5000) }, "listening"],
     // After checking, while they stay quiet, the question is about to show: no flash of ready first.
     ["a question waiting, they have paused, the line saying checking", { ...base, waiting: "question", paused: true, due: true, busy: { status: "checking", ms: 1500 } }, "checking"],
+    ["a question waiting, they have paused before the question's time, the line saying checking", { ...base, waiting: "question", paused: true, busy: { status: "checking", ms: 1500 } }, "checking"],
     ["a question waiting, due, they talk on, the line saying checking", { ...base, waiting: "question", due: true, busy: { status: "checking", ms: 1500 } }, "ready"],
     // Different question: only once it has been out a while, unless the line already said something is on its way.
     ["a skip out just under a second", { ...base, call: skip(CHECKING_AFTER_MS - 1) }, "listening"],
@@ -295,6 +298,9 @@ describe("followUpStatus", () => {
     // They talk again just after it said ready: the question waits, held for what they say now.
     ["said ready a moment ago, the question now held", { ...base, waiting: "held", due: true, busy: { status: "ready", ms: 200 } }, "ready"],
     ["said ready a second ago, the question now held", { ...base, waiting: "held", due: true, busy: { status: "ready", ms: MIN_BUSY_MS } }, "listening"],
+    // A read renewing the question it said was ready: still ready while the read is quick, then checking.
+    ["said ready a while, a read renewing it out just under a second", { ...base, waiting: "held", due: true, call: read(CHECKING_AFTER_MS - 1), busy: { status: "ready", ms: 30_000 } }, "ready"],
+    ["said ready a while, a read renewing it out a second", { ...base, waiting: "held", due: true, call: read(CHECKING_AFTER_MS), busy: { status: "ready", ms: 30_000 } }, "checking"],
     // Ready isn't held for a question that no longer waits: that would promise one that isn't coming.
     ["said ready a moment ago, the question gone", { ...base, busy: { status: "ready", ms: 200 } }, "listening"],
     ["said ready a moment ago, the question gone, nothing more to come", { ...base, moreToCome: false, busy: { status: "ready", ms: 200 } }, "no_more"],

@@ -236,16 +236,18 @@ export function questionTime({
 
 // --- Telling them what's coming ---------------------------------------------------------------
 // The line under the question (live-prompt.tsx). It promises a follow-up only once one is lined up:
-// "ready" while a question waits that will show, as it is, at their next pause (the question on
-// screen has had its time, or they have paused long enough that it shows once they have clearly
-// stopped). A question held for what they said after its read, or with a newer read out, isn't
-// lined up: that read may bring another question, a closing line or nothing. A coach call out a
+// "ready" while a question waits that will show, as it is, at their next pause: the question on
+// screen has had its time (before then, one shows only once they have clearly stopped, which a short
+// pause doesn't promise). A question held for what they said after its read, or with a newer read
+// out (one renewing it too), isn't lined up: that read may bring another question, a closing line or
+// nothing. A coach call out a
 // while says "checking", which promises nothing either, and only when it could bring a question that
 // could show at their next pause: earlier ones would only flash for questions that never show. "No
 // more" once nothing but "Different question" can bring a follow-up (moreToCome); that only swaps
 // the question on screen, so the line keeps saying it while one is on its way. A call that answers
 // within CHECKING_AFTER_MS never makes it say checking, so a quick read or a quick "Different
-// question" doesn't flicker, except that "Different question" says checking at once when the line
+// question" doesn't flicker (nor does a quick read renewing a question it said was ready: it goes on
+// saying so), except that "Different question" says checking at once when the line
 // already says checking or ready (it never goes back to listening before the new question); and
 // once it says checking or ready, it says so for MIN_BUSY_MS at least (ready only while the question
 // still waits, lined up or not), unless a question or closing line shows meanwhile, so talk resumed,
@@ -288,10 +290,14 @@ export function followUpStatus({
   if (closingShown) return "no_more";
   if (!connected) return "starting";
   // While they stay quiet after the line said checking, the question is about to show: it keeps
-  // saying checking rather than flash ready just before.
-  if (waiting === "question" && (due || paused)) return paused && busy?.status === "checking" ? "checking" : "ready";
+  // saying checking rather than flash ready just before, or go back to listening.
+  const stillChecking = paused && busy?.status === "checking";
+  if (waiting === "question" && (due || stillChecking)) return stillChecking ? "checking" : "ready";
   if (call?.skip && moreToCome && (call.ms >= CHECKING_AFTER_MS || busy)) return "checking";
   if (call && !call.skip && (waiting === null || waiting === "held") && (due || paused) && call.ms >= CHECKING_AFTER_MS) return "checking";
+  // A read renewing the question it said was ready (the only read that goes while one is): it says
+  // so still while that read is quick, as any call quicker than CHECKING_AFTER_MS changes nothing.
+  if (waiting === "held" && call && !call.skip && busy?.status === "ready") return "ready";
   const questionWaits = waiting === "question" || waiting === "held";
   if (busy && busy.ms < MIN_BUSY_MS && (busy.status === "checking" || questionWaits)) return busy.status;
   if (!moreToCome && !questionWaits && (call === null || call.skip)) return "no_more";
