@@ -82,7 +82,8 @@ export const notedForOthers = (emails: readonly string[]) =>
 // The same sentence migration 0014's trigger uses.
 export const PENDING_HAS_LOGIN =
   "This person already has a login. To change the address they sign in with, use Change email.";
-// giveLogin from Send invites: the address the page showed isn't the one noted for them any more.
+// setPendingEmail, and giveLogin from Send invites: the address the page showed isn't the one
+// noted for them any more (another admin changed, noted or forgot it).
 export const NOTE_CHANGED =
   "The email noted for this person changed while you were working. Reload the page and check it.";
 // giveLogin: an address noted for someone else's invite.

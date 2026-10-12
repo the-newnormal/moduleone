@@ -311,19 +311,22 @@ export async function removeLead(teamId: string, memberId: string): Promise<Acti
 
 // ---------- the email noted for someone's first invite ----------
 
-// Note the address someone's first invite will go to, before giving them a login, or forget it
-// (email null). Nobody is emailed: Give login offers the address later. Only for people Give login
-// is for. Written with the signed-in admin's client: RLS lets only admins write
-// pending_login_emails, and its trigger (0014) refuses anyone who can't be given a login, in the
-// same words as below. Forgetting needs no checks: any admin may forget any noted address.
-//   1. the caller is a signed-in admin; 2. a uuid and an email address, or null;
-//   3. as the admin (RLS): the person exists and wasn't removed, isn't the caller or a Master
-//      Admin, has no login and holds no grants;
-//   4. change their noted address, or note one (another admin may note one meanwhile: then the
-//      person changed);
+// Note the address someone's first invite will go to, before giving them a login, change it, or
+// forget it (email null). Nobody is emailed: Give login offers the address later. Only for people
+// Give login is for. `current` is the address the page showed as noted (null: none), so a change
+// made from an older page never overwrites or forgets another admin's correction: then the note
+// changed meanwhile, and the admin reloads. Written with the signed-in admin's client: RLS lets only
+// admins write pending_login_emails, and its trigger (0014) refuses anyone who can't be given a
+// login, in the same words as below.
+//   1. the caller is a signed-in admin;
+//   2. a uuid, an email address or null, and the current address or null (not both null);
+//   3. to note or change one, as the admin (RLS): the person exists and wasn't removed, isn't the
+//      caller or a Master Admin, has no login and holds no grants;
+//   4. change the note only while it's still `current`, note one only while there's none, or
+//      forget it only while it's still `current`;
 //   5. refresh the pages.
 // An address noted for someone else already is refused by the database (pending_login_emails_email_key).
-export async function setPendingEmail(memberId: string, email: string | null): Promise<ActionResult> {
+export async function setPendingEmail(memberId: string, email: string | null, current: string | null): Promise<ActionResult> {
   // 1.
   const admin = await requireAdmin();
   if (!admin.ok) return admin;
@@ -332,9 +335,20 @@ export async function setPendingEmail(memberId: string, email: string | null): P
   // 2.
   if (!isUuid(memberId)) return fail(BAD_REQUEST);
   const id = memberId.toLowerCase();
+  if (current !== null && typeof current !== "string") return fail(BAD_REQUEST);
+  const was = current === null ? null : parseEmail(current);
+  if (was !== null && !was.ok) return fail(BAD_REQUEST);
+  const before = was === null ? null : was.value;
   if (email === null) {
-    const { error } = await supabase.from("pending_login_emails").delete().eq("member_id", id);
+    if (before === null) return fail(BAD_REQUEST);
+    const { data, error } = await supabase
+      .from("pending_login_emails")
+      .delete()
+      .eq("member_id", id)
+      .eq("email", before)
+      .select("member_id");
     if (error) return fail(toUserMessage(error, "setPendingEmail forget"));
+    if ((data ?? []).length === 0) return fail(NOTE_CHANGED);
     revalidateTeamTree();
     return OK;
   }
@@ -359,17 +373,20 @@ export async function setPendingEmail(memberId: string, email: string | null): P
   if ((grants.data ?? []).length > 0) return fail(HOLDS_GRANTS);
 
   // 4.
-  const changed = await supabase
-    .from("pending_login_emails")
-    .update({ email: address.value })
-    .eq("member_id", id)
-    .select("member_id");
-  if (changed.error) return fail(toUserMessage(changed.error, "setPendingEmail change"));
-  if ((changed.data ?? []).length === 0) {
+  if (before !== null) {
+    const changed = await supabase
+      .from("pending_login_emails")
+      .update({ email: address.value })
+      .eq("member_id", id)
+      .eq("email", before)
+      .select("member_id");
+    if (changed.error) return fail(toUserMessage(changed.error, "setPendingEmail change"));
+    if ((changed.data ?? []).length === 0) return fail(NOTE_CHANGED);
+  } else {
     const { error } = await supabase.from("pending_login_emails").insert({ member_id: id, email: address.value });
-    // Another admin noted one between the two writes: theirs stands until this one is tried again.
+    // Another admin noted one since the page loaded.
     if (error?.code === "23505" && (error.message ?? "").includes('"pending_login_emails_pkey"')) {
-      return fail(PERSON_CHANGED);
+      return fail(NOTE_CHANGED);
     }
     if (error) return fail(toUserMessage(error, "setPendingEmail note"));
   }
@@ -494,6 +511,44 @@ async function discardLogin(service: ServiceClient, authUserId: string, createdH
   if (error) logError(`${context} cleanup`, error);
 }
 
+type LinkOutcome = { outcome: "linked" | "note_changed" | "changed"; error: { code?: string; message?: string } | null };
+
+// giveLogin's link: the new login on the member row, only if it still has none, wasn't removed and
+// isn't a Master Admin.
+async function linkLogin(service: ServiceClient, memberId: string, authUserId: string, adminMemberId: string): Promise<LinkOutcome> {
+  const { data, error } = await service
+    .from("members")
+    .update({ auth_user_id: authUserId, login_given_by: adminMemberId, login_given_at: new Date().toISOString() })
+    .eq("id", memberId)
+    .is("auth_user_id", null)
+    .is("removed_at", null)
+    .neq("role", "hq")
+    .select("id");
+  if (error) return { outcome: "changed", error };
+  return { outcome: data && data.length > 0 ? "linked" : "changed", error: null };
+}
+
+// The same, as Send invites needs it: also only if the address is still the one noted for them,
+// checked and linked in one transaction (0014's link_noted_login).
+async function linkAsNoted(
+  service: ServiceClient,
+  memberId: string,
+  authUserId: string,
+  email: string,
+  adminMemberId: string,
+): Promise<LinkOutcome> {
+  const { data, error } = await service.rpc("link_noted_login", {
+    p_member_id: memberId,
+    p_login: authUserId,
+    p_email: email,
+    p_given_by: adminMemberId,
+  });
+  if (error) return { outcome: "changed", error };
+  if (data === "linked" || data === "note_changed") return { outcome: data, error: null };
+  if (data !== "changed") logError("giveLogin link", { code: "bad_result" });
+  return { outcome: "changed", error: null };
+}
+
 // Give a member a login: invite the email (Supabase sends the invite mail) and link the new login
 // to the member row, recording which admin did it and when. Uses the service-role client, which
 // bypasses RLS, so everything it does is first checked as the signed-in admin:
@@ -509,8 +564,10 @@ async function discardLogin(service: ServiceClient, authUserId: string, createdH
 //      profile, recordings), then invite the email (its link goes to Supabase Auth's Site URL +
 //      /auth/callback, which NEXT_PUBLIC_SITE_URL must match; see siteUrl);
 //   5. service role: link the new login, only if the member still has none and still isn't a
-//      Master Admin; if that reaches no row, delete the new login again; then check again that
-//      no grant or Big Five profile arrived meanwhile, and undo the link if one did;
+//      Master Admin (and, with `asNoted`, only if the address is still the one noted for them:
+//      0014's link_noted_login, since the note may change while the invite goes out); if that
+//      reaches no row, delete the new login again, so the link in the invite opens nothing; then
+//      check again that no grant or Big Five profile arrived meanwhile, and undo the link if one did;
 //   6. refresh the team pages. (Linking the login forgets any address noted for them: 0014's
 //      members_forget_pending_email.)
 // Logs carry codes and statuses only, never the email.
@@ -589,18 +646,9 @@ export async function giveLogin(memberId: string, email: string, asNoted = false
   }
 
   // 5.
-  const { data: linked, error: linkError } = await service
-    .from("members")
-    .update({
-      auth_user_id: authUserId,
-      login_given_by: adminMemberId,
-      login_given_at: new Date().toISOString(),
-    })
-    .eq("id", row.id)
-    .is("auth_user_id", null)
-    .is("removed_at", null)
-    .neq("role", "hq")
-    .select("id");
+  const { outcome, error: linkError } = asNoted === true
+    ? await linkAsNoted(service, row.id, authUserId, address.value, adminMemberId)
+    : await linkLogin(service, row.id, authUserId, adminMemberId);
   if (linkError) {
     // The address belongs to another member's login that hasn't been used yet.
     if (linkError.code === "23505" && (linkError.message ?? "").includes("auth_user_id")) {
@@ -610,9 +658,9 @@ export async function giveLogin(memberId: string, email: string, asNoted = false
     await discardLogin(service, authUserId, createdHere);
     return fail(GENERIC_ERROR);
   }
-  if (!linked || linked.length === 0) {
+  if (outcome !== "linked") {
     await discardLogin(service, authUserId, createdHere);
-    return fail(INVITE_RACE);
+    return fail(outcome === "note_changed" ? NOTE_CHANGED : INVITE_RACE);
   }
 
   // 5b. Step 3's grant check and step 4's history check ran before the invite. If a grant or a

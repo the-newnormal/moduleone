@@ -185,7 +185,8 @@ describe("PeopleSection: Set email", () => {
     await click(button("Set email (Zed Ong)"));
     await type(address(), "  Zed.Ong@Example.COM ");
     await click(button("Save email"));
-    expect(actions.setPendingEmail).toHaveBeenCalledExactlyOnceWith("m-zed", "zed.ong@example.com");
+    // With the address the page shows as noted (none), so another admin's note is never overwritten.
+    expect(actions.setPendingEmail).toHaveBeenCalledExactlyOnceWith("m-zed", "zed.ong@example.com", null);
     expect(dialog()).toBeNull();
     expect(status()).toBe("Noted zed.ong@example.com for Zed Ong's invite. Nobody was emailed.");
     expect(actions.giveLogin).not.toHaveBeenCalled();
@@ -206,7 +207,7 @@ describe("PeopleSection: Set email", () => {
     await click(button("Edit email (Zed Ong)"));
     expect(address().value).toBe("zed@example.com");
     await click(button("Save email"));
-    expect(actions.setPendingEmail).toHaveBeenCalledExactlyOnceWith("m-zed", "zed@example.com");
+    expect(actions.setPendingEmail).toHaveBeenCalledExactlyOnceWith("m-zed", "zed@example.com", "zed@example.com");
     expect(status()).toBe("Noted zed@example.com for Zed Ong's invite. Nobody was emailed.");
   });
 
@@ -216,7 +217,7 @@ describe("PeopleSection: Set email", () => {
     await click(button("Edit email (Zed Ong)"));
     await type(address(), "not an address");
     await click(button("Forget email"));
-    expect(actions.setPendingEmail).toHaveBeenCalledExactlyOnceWith("m-zed", null);
+    expect(actions.setPendingEmail).toHaveBeenCalledExactlyOnceWith("m-zed", null, "zed@example.com");
     expect(dialog()).toBeNull();
     expect(status()).toBe("Forgot the email noted for Zed Ong.");
 
@@ -236,7 +237,7 @@ describe("PeopleSection: Set email", () => {
     expect(text(dialog()!)).toContain("Enter an email address like name@example.com.");
 
     await click(button("Forget email"));
-    expect(actions.setPendingEmail).toHaveBeenCalledExactlyOnceWith("m-zed", null);
+    expect(actions.setPendingEmail).toHaveBeenCalledExactlyOnceWith("m-zed", null, "zed@example.com");
     expect(text(dialog()!)).not.toContain("Enter an email address like name@example.com.");
     expect(text(dialog()!.querySelector('[role="alert"]')!)).toBe("This person doesn't exist any more. Reload the page.");
   });

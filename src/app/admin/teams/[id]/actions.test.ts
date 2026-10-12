@@ -234,7 +234,7 @@ const ACTIONS = {
   addMember: () => addMember(TEAM, PERSON, null),
   createMember: () => createMember(TEAM, { name: "Ana Lee", role: "member" }),
   createMembers: () => createMembers(TEAM, [{ name: "Ana Lee", role: "member", email: EMAIL }]),
-  setPendingEmail: () => setPendingEmail(PERSON, EMAIL),
+  setPendingEmail: () => setPendingEmail(PERSON, EMAIL, null),
   removeFromTeam: () => removeFromTeam(TEAM, PERSON),
   setRole: () => setRole(PERSON, "leader"),
   addLead: () => addLead(TEAM, PERSON),
@@ -1416,14 +1416,75 @@ describe("giveLogin", () => {
   };
   const ownNote = (email: string | null) => ({ data: email === null ? null : { email }, error: null });
 
-  it("sends an invite as noted when the address is still the one noted for them", async () => {
-    loginAllowed(rows(PERSON));
+  // Linked through link_noted_login (0014), which links only while the address is still the one
+  // noted for them, in the same transaction: the note may change while the invite goes out.
+  const LINK_AS_NOTED = ["link_noted_login", { p_member_id: PERSON, p_login: NEW_LOGIN, p_email: EMAIL, p_given_by: ADMIN }];
+  const linkAnswers = (answer: Result) => serviceRpc.mockResolvedValue(answer);
+
+  it("sends an invite as noted when the address is still the one noted for them, linking it as noted", async () => {
+    loginAllowed();
+    linkAnswers({ data: "linked", error: null });
     userQueue.pending_login_emails = [notedFor(PERSON), ownNote(EMAIL)];
     await expect(giveLogin(PERSON, "  Mei.Wong@Example.com ", true)).resolves.toEqual({ ok: true, value: null });
     expect(userQueries.map((q) => q.table)).toEqual(["members", "member_grants", "pending_login_emails", "pending_login_emails"]);
     expect(userQueries[3]).toEqual(OWN_NOTE);
     expect(inviteUserByEmail).toHaveBeenCalledExactlyOnceWith(EMAIL, { redirectTo: `${SITE}/auth/callback?next=/portal` });
+    expect(serviceRpc).toHaveBeenCalledExactlyOnceWith(...LINK_AS_NOTED);
+    // No plain link: only link_noted_login, then the late checks.
+    expect(serviceQueries).toEqual([...HISTORY_QUERIES, ...LATE_QUERIES]);
+    expect(deleteUser).not.toHaveBeenCalled();
     expectRevalidated();
+  });
+
+  it("deletes the new login, so the emailed link opens nothing, when the note changed while the invite went out", async () => {
+    loginAllowed(rows()); // "does anyone use this login?" before deleting it
+    linkAnswers({ data: "note_changed", error: null });
+    userQueue.pending_login_emails = [rows(), ownNote(EMAIL)];
+    await expect(giveLogin(PERSON, EMAIL, true)).resolves.toEqual({ ok: false, error: NOTE_CHANGED });
+    expect(inviteUserByEmail).toHaveBeenCalledOnce();
+    expect(deleteUser).toHaveBeenCalledExactlyOnceWith(NEW_LOGIN);
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("says the person changed when they have a login, were removed or are a Master Admin by the link, deleting the new login", async () => {
+    loginAllowed(rows());
+    linkAnswers({ data: "changed", error: null });
+    userQueue.pending_login_emails = [rows(), ownNote(EMAIL)];
+    await expect(giveLogin(PERSON, EMAIL, true)).resolves.toEqual({ ok: false, error: INVITE_RACE });
+    expect(deleteUser).toHaveBeenCalledExactlyOnceWith(NEW_LOGIN);
+  });
+
+  it("says the email is taken when its login already belongs to another member, deleting nothing", async () => {
+    loginAllowed();
+    linkAnswers(dbError("23505", 'duplicate key value violates unique constraint "members_auth_user_id_key"'));
+    userQueue.pending_login_emails = [rows(), ownNote(EMAIL)];
+    await expect(giveLogin(PERSON, EMAIL, true)).resolves.toEqual({ ok: false, error: EMAIL_TAKEN });
+    expect(deleteUser).not.toHaveBeenCalled();
+  });
+
+  it("cleans up and says 'something went wrong' when linking as noted fails otherwise, logging only code and status", async () => {
+    loginAllowed(rows());
+    linkAnswers(dbError("08006", `down for ${EMAIL}`));
+    userQueue.pending_login_emails = [rows(), ownNote(EMAIL)];
+    await expect(giveLogin(PERSON, EMAIL, true)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
+    expect(deleteUser).toHaveBeenCalledExactlyOnceWith(NEW_LOGIN);
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("giveLogin link failed", { code: "08006", status: undefined });
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("example.com");
+  });
+
+  it("treats an answer it doesn't know as the person having changed, and logs it", async () => {
+    loginAllowed(rows());
+    linkAnswers({ data: "linked-ish", error: null });
+    userQueue.pending_login_emails = [rows(), ownNote(EMAIL)];
+    await expect(giveLogin(PERSON, EMAIL, true)).resolves.toEqual({ ok: false, error: INVITE_RACE });
+    expect(console.error).toHaveBeenCalledWith("giveLogin link failed", { code: "bad_result", status: undefined });
+    expect(deleteUser).toHaveBeenCalledExactlyOnceWith(NEW_LOGIN);
+  });
+
+  it("never links as noted for Give login on a row: that uses the plain link", async () => {
+    loginAllowed(rows(PERSON));
+    await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: true, value: null });
+    expect(serviceRpc).not.toHaveBeenCalledWith("link_noted_login", expect.anything());
   });
 
   it.each([
@@ -1470,14 +1531,18 @@ describe("setPendingEmail", () => {
     calls: [["select", "id, role, auth_user_id, removed_at"], ["eq", "id", PERSON], ["maybeSingle"]],
   };
   const GRANTS: Query = { table: "member_grants", calls: [["select", "grant_name"], ["eq", "member_id", PERSON], ["limit", 1]] };
-  // Change the address noted for them, if there is one; else note one. Only the person and the
-  // address are written: who noted it, and when, are the trigger's (0014).
-  const CHANGE = (email: string): Query => ({
+  // Change the noted address only while it's still the one the page showed; note one only while
+  // there's none; forget it only while it's still the one shown. Only the person and the address
+  // are written: who noted it, and when, are the trigger's (0014).
+  const CHANGE = (from: string, to: string): Query => ({
     table: "pending_login_emails",
-    calls: [["update", { email }], ["eq", "member_id", PERSON], ["select", "member_id"]],
+    calls: [["update", { email: to }], ["eq", "member_id", PERSON], ["eq", "email", from], ["select", "member_id"]],
   });
   const NOTE = (email: string): Query => ({ table: "pending_login_emails", calls: [["insert", { member_id: PERSON, email }]] });
-  const FORGET: Query = { table: "pending_login_emails", calls: [["delete"], ["eq", "member_id", PERSON]] };
+  const FORGET = (email: string): Query => ({
+    table: "pending_login_emails",
+    calls: [["delete"], ["eq", "member_id", PERSON], ["eq", "email", email], ["select", "member_id"]],
+  });
   const changed = (...ids: string[]) => ({ data: ids.map((member_id) => ({ member_id })), error: null });
   const LATER = "mei.w@example.net";
 
@@ -1494,40 +1559,62 @@ describe("setPendingEmail", () => {
   };
 
   it("notes an address for someone who has none yet, as it's stored, and refreshes the pages", async () => {
-    emailAllowed(changed(), done());
-    await expect(setPendingEmail(PERSON, "  Mei.Wong@Example.com ")).resolves.toEqual({ ok: true, value: null });
-    // Checked as the admin (RLS applies), then the update reaches no row, so it's noted.
-    expect(userQueries).toEqual([LOAD, GRANTS, CHANGE(EMAIL), NOTE(EMAIL)]);
+    emailAllowed(done());
+    await expect(setPendingEmail(PERSON, "  Mei.Wong@Example.com ", null)).resolves.toEqual({ ok: true, value: null });
+    // Checked as the admin (RLS applies), then noted.
+    expect(userQueries).toEqual([LOAD, GRANTS, NOTE(EMAIL)]);
     expect(createServiceRoleClient).not.toHaveBeenCalled();
     expect(inviteUserByEmail).not.toHaveBeenCalled();
     expectRevalidated();
   });
 
-  it("changes the address already noted for them, with no second write", async () => {
+  it("changes the noted address only while it's still the one the page showed, read as it's stored", async () => {
     emailAllowed(changed(PERSON));
-    await expect(setPendingEmail(PERSON, LATER)).resolves.toEqual({ ok: true, value: null });
-    expect(userQueries).toEqual([LOAD, GRANTS, CHANGE(LATER)]);
+    await expect(setPendingEmail(PERSON, LATER, "  MEI.WONG@example.com ")).resolves.toEqual({ ok: true, value: null });
+    expect(userQueries).toEqual([LOAD, GRANTS, CHANGE(EMAIL, LATER)]);
     expectRevalidated();
   });
 
-  it("reads and writes by the id in lower case, whatever case the request used", async () => {
-    emailAllowed(changed(), done());
-    await expect(setPendingEmail(PERSON.toUpperCase(), EMAIL)).resolves.toEqual({ ok: true, value: null });
-    expect(userQueries).toEqual([LOAD, GRANTS, CHANGE(EMAIL), NOTE(EMAIL)]);
+  it("says the note changed when another admin changed or forgot it since the page loaded, changing nothing", async () => {
+    emailAllowed(changed());
+    await expect(setPendingEmail(PERSON, LATER, EMAIL)).resolves.toEqual({ ok: false, error: NOTE_CHANGED });
+    expect(pendingWrites()).toEqual([CHANGE(EMAIL, LATER)]);
+    expect(console.error).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 
-  it("forgets the noted address when given null, without checking the person, and refreshes the pages", async () => {
-    userQueue.pending_login_emails = [done()];
-    await expect(setPendingEmail(PERSON, null)).resolves.toEqual({ ok: true, value: null });
-    expect(userQueries).toEqual([FORGET]);
+  it("says the note changed when another admin noted one since the page loaded, keeping theirs", async () => {
+    emailAllowed(dbError("23505", 'duplicate key value violates unique constraint "pending_login_emails_pkey"'));
+    await expect(setPendingEmail(PERSON, EMAIL, null)).resolves.toEqual({ ok: false, error: NOTE_CHANGED });
+    expect(pendingWrites()).toEqual([NOTE(EMAIL)]);
+    expect(console.error).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("reads and writes by the id in lower case, whatever case the request used", async () => {
+    emailAllowed(done());
+    await expect(setPendingEmail(PERSON.toUpperCase(), EMAIL, null)).resolves.toEqual({ ok: true, value: null });
+    expect(userQueries).toEqual([LOAD, GRANTS, NOTE(EMAIL)]);
+  });
+
+  it("forgets the noted address while it's still the one shown, without checking the person, and refreshes the pages", async () => {
+    userQueue.pending_login_emails = [changed(PERSON)];
+    await expect(setPendingEmail(PERSON, null, " Mei.Wong@Example.com")).resolves.toEqual({ ok: true, value: null });
+    expect(userQueries).toEqual([FORGET(EMAIL)]);
     expect(createServiceRoleClient).not.toHaveBeenCalled();
     expectRevalidated();
   });
 
+  it("says the note changed when forgetting reaches no row (changed or forgotten meanwhile)", async () => {
+    userQueue.pending_login_emails = [changed()];
+    await expect(setPendingEmail(PERSON, null, EMAIL)).resolves.toEqual({ ok: false, error: NOTE_CHANGED });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
   it("forgets by the id in lower case", async () => {
-    userQueue.pending_login_emails = [done()];
-    await expect(setPendingEmail(PERSON.toUpperCase(), null)).resolves.toEqual({ ok: true, value: null });
-    expect(userQueries).toEqual([FORGET]);
+    userQueue.pending_login_emails = [changed(PERSON)];
+    await expect(setPendingEmail(PERSON.toUpperCase(), null, EMAIL)).resolves.toEqual({ ok: true, value: null });
+    expect(userQueries).toEqual([FORGET(EMAIL)]);
   });
 
   it.each([
@@ -1535,23 +1622,27 @@ describe("setPendingEmail", () => {
     ["a dropped connection", dbError("08006", `down for ${EMAIL}`), GENERIC_ERROR],
   ])("says so when forgetting fails (%s), refreshing nothing", async (_label, error, message) => {
     userQueue.pending_login_emails = [error];
-    await expect(setPendingEmail(PERSON, null)).resolves.toEqual({ ok: false, error: message });
+    await expect(setPendingEmail(PERSON, null, EMAIL)).resolves.toEqual({ ok: false, error: message });
     expect(revalidatePath).not.toHaveBeenCalled();
     expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("example.com");
   });
 
   it("logs a failed forget with its code and status only", async () => {
     userQueue.pending_login_emails = [dbError("08006", `down for ${EMAIL}`)];
-    await setPendingEmail(PERSON, null);
+    await setPendingEmail(PERSON, null, EMAIL);
     expect(console.error).toHaveBeenCalledExactlyOnceWith("setPendingEmail forget failed", { code: "08006", status: undefined });
   });
 
   it.each([
-    ["a bad id", () => setPendingEmail("x", EMAIL)],
-    ["a bad id, forgetting", () => setPendingEmail("x", null)],
-    ["an id that isn't a string", () => setPendingEmail(42 as never, EMAIL)],
-    ["no id, forgetting", () => setPendingEmail(null as never, null)],
-    ["an id with SQL in it", () => setPendingEmail(`${PERSON}' or '1'='1`, null)],
+    ["a bad id", () => setPendingEmail("x", EMAIL, null)],
+    ["a bad id, forgetting", () => setPendingEmail("x", null, EMAIL)],
+    ["an id that isn't a string", () => setPendingEmail(42 as never, EMAIL, null)],
+    ["no id, forgetting", () => setPendingEmail(null as never, null, EMAIL)],
+    ["an id with SQL in it", () => setPendingEmail(`${PERSON}' or '1'='1`, null, EMAIL)],
+    ["nothing to forget (no address shown)", () => setPendingEmail(PERSON, null, null)],
+    ["no current address at all (an older page)", () => setPendingEmail(PERSON, EMAIL, undefined as never)],
+    ["a current address that isn't text", () => setPendingEmail(PERSON, EMAIL, 42 as never)],
+    ["a current address that isn't an address", () => setPendingEmail(PERSON, null, "not an address")],
   ])("refuses %s without reading or writing anything", async (_label, run) => {
     await expect(run()).resolves.toEqual({ ok: false, error: BAD_REQUEST });
     expectNothingWritten();
@@ -1559,15 +1650,15 @@ describe("setPendingEmail", () => {
 
   // Only null forgets: a client that sends nothing, or an empty field, is told to enter an address.
   it.each([
-    ["an empty address", () => setPendingEmail(PERSON, ""), "Enter an email address."],
-    ["only spaces", () => setPendingEmail(PERSON, "   "), "Enter an email address."],
-    ["no address at all", () => setPendingEmail(PERSON, undefined as never), "Enter an email address."],
-    ["an address that isn't text", () => setPendingEmail(PERSON, { toString: () => EMAIL } as never), "Enter an email address."],
-    ["two @s", () => setPendingEmail(PERSON, "a@b@example.com"), "Enter an email address like name@example.com."],
-    ["no dot in the domain", () => setPendingEmail(PERSON, "mei@localhost"), "Enter an email address like name@example.com."],
-    ["a space", () => setPendingEmail(PERSON, "mei wong@example.com"), "Email addresses can't contain spaces."],
-    ["a control character", () => setPendingEmail(PERSON, "mei\u0000@example.com"), "Email addresses can't contain spaces."],
-    ["a long address", () => setPendingEmail(PERSON, `${"m".repeat(250)}@example.com`), "Email addresses can be at most 254 characters."],
+    ["an empty address", () => setPendingEmail(PERSON, "", null), "Enter an email address."],
+    ["only spaces", () => setPendingEmail(PERSON, "   ", null), "Enter an email address."],
+    ["no address at all", () => setPendingEmail(PERSON, undefined as never, null), "Enter an email address."],
+    ["an address that isn't text", () => setPendingEmail(PERSON, { toString: () => EMAIL } as never, null), "Enter an email address."],
+    ["two @s", () => setPendingEmail(PERSON, "a@b@example.com", null), "Enter an email address like name@example.com."],
+    ["no dot in the domain", () => setPendingEmail(PERSON, "mei@localhost", EMAIL), "Enter an email address like name@example.com."],
+    ["a space", () => setPendingEmail(PERSON, "mei wong@example.com", null), "Email addresses can't contain spaces."],
+    ["a control character", () => setPendingEmail(PERSON, "mei\u0000@example.com", null), "Email addresses can't contain spaces."],
+    ["a long address", () => setPendingEmail(PERSON, `${"m".repeat(250)}@example.com`, null), "Email addresses can be at most 254 characters."],
   ])("refuses %s without reading or writing anything", async (_label, run, error) => {
     await expect(run()).resolves.toEqual({ ok: false, error });
     expectNothingWritten();
@@ -1583,7 +1674,7 @@ describe("setPendingEmail", () => {
     ["has a login", memberRow({ auth_user_id: LOGIN }), PENDING_HAS_LOGIN],
   ])("refuses someone who %s before reading their grants, noting nothing", async (_label, row, error) => {
     userQueue.members = [row];
-    await expect(setPendingEmail(PERSON, EMAIL)).resolves.toEqual({ ok: false, error });
+    await expect(setPendingEmail(PERSON, EMAIL, null)).resolves.toEqual({ ok: false, error });
     expect(userQueries).toEqual([LOAD]);
     expectNothingNoted();
     expect(createServiceRoleClient).not.toHaveBeenCalled();
@@ -1591,7 +1682,7 @@ describe("setPendingEmail", () => {
 
   it("refuses the admin's own row whatever case the request used", async () => {
     userQueue.members = [memberRow({ id: ADMIN, auth_user_id: ADMIN_AUTH })];
-    await expect(setPendingEmail(ADMIN.toUpperCase(), EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_NOT_YOURSELF });
+    await expect(setPendingEmail(ADMIN.toUpperCase(), EMAIL, null)).resolves.toEqual({ ok: false, error: EMAIL_NOT_YOURSELF });
     expect(userQueries[0].calls).toContainEqual(["eq", "id", ADMIN]);
     expectNothingNoted();
   });
@@ -1599,7 +1690,7 @@ describe("setPendingEmail", () => {
   it("refuses someone who holds a grant, noting nothing", async () => {
     userQueue.members = [memberRow()];
     userQueue.member_grants = [{ data: [{ grant_name: "big_five" }], error: null }];
-    await expect(setPendingEmail(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: HOLDS_GRANTS });
+    await expect(setPendingEmail(PERSON, EMAIL, null)).resolves.toEqual({ ok: false, error: HOLDS_GRANTS });
     expect(userQueries).toEqual([LOAD, GRANTS]);
     expectNothingNoted();
   });
@@ -1616,28 +1707,20 @@ describe("setPendingEmail", () => {
     ],
   ])("says 'something went wrong' when %s can't be read, noting nothing and logging only code and status", async (_label, arrange, context) => {
     arrange();
-    await expect(setPendingEmail(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
+    await expect(setPendingEmail(PERSON, EMAIL, null)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
     expect(console.error).toHaveBeenCalledExactlyOnceWith(context, { code: "08006", status: undefined });
     expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("example.com");
     expectNothingNoted();
   });
 
-  it("says the person changed when another admin noted an address between its two writes, keeping theirs", async () => {
-    emailAllowed(changed(), dbError("23505", 'duplicate key value violates unique constraint "pending_login_emails_pkey"'));
-    await expect(setPendingEmail(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: PERSON_CHANGED });
-    expect(pendingWrites()).toEqual([CHANGE(EMAIL), NOTE(EMAIL)]);
-    expect(console.error).not.toHaveBeenCalled();
-    expect(revalidatePath).not.toHaveBeenCalled();
-  });
-
   const EMAIL_KEY = dbError("23505", 'duplicate key value violates unique constraint "pending_login_emails_email_key"');
   it.each([
-    ["changing theirs", [EMAIL_KEY], [CHANGE(EMAIL)]],
-    ["noting one", [changed(), EMAIL_KEY], [CHANGE(EMAIL), NOTE(EMAIL)]],
-  ])("says the address is noted for someone else already (%s)", async (_label, answers, queries) => {
-    emailAllowed(...answers);
-    await expect(setPendingEmail(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_NOTED });
-    expect(pendingWrites()).toEqual(queries);
+    ["changing theirs", LATER, EMAIL, CHANGE(LATER, EMAIL)],
+    ["noting one", null, EMAIL, NOTE(EMAIL)],
+  ])("says the address is noted for someone else already (%s)", async (_label, current, email, query) => {
+    emailAllowed(EMAIL_KEY);
+    await expect(setPendingEmail(PERSON, email, current)).resolves.toEqual({ ok: false, error: EMAIL_NOTED });
+    expect(pendingWrites()).toEqual([query]);
     expect(console.error).not.toHaveBeenCalled();
     expect(revalidatePath).not.toHaveBeenCalled();
   });
@@ -1651,13 +1734,13 @@ describe("setPendingEmail", () => {
     ["23514", HOLDS_GRANTS],
   ];
   it.each(
-    TRIGGER_REFUSALS.flatMap(([code, message]): [string, string, Result[]][] => [
-      [`changing theirs (${code})`, message, [dbError(code, message)]],
-      [`noting one (${code})`, message, [changed(), dbError(code, message)]],
+    TRIGGER_REFUSALS.flatMap(([code, message]): [string, string, string | null][] => [
+      [`changing theirs (${code})`, message, LATER],
+      [`noting one (${code})`, message, null],
     ]),
-  )("shows the trigger's sentence as it is when %s: %s", async (_label, message, answers) => {
-    emailAllowed(...answers);
-    await expect(setPendingEmail(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: message });
+  )("shows the trigger's sentence as it is when %s: %s", async (label, message, current) => {
+    emailAllowed(dbError(label.match(/\((\w+)\)/)![1], message));
+    await expect(setPendingEmail(PERSON, EMAIL, current)).resolves.toEqual({ ok: false, error: message });
     expect(console.error).not.toHaveBeenCalled();
     expect(revalidatePath).not.toHaveBeenCalled();
   });
@@ -1669,35 +1752,34 @@ describe("setPendingEmail", () => {
 
   it("says what the table's format check means rather than Postgres's words", async () => {
     emailAllowed(
-      changed(),
       dbError("23514", 'new row for relation "pending_login_emails" violates check constraint "pending_login_emails_email_format"'),
     );
-    await expect(setPendingEmail(PERSON, EMAIL)).resolves.toEqual({
+    await expect(setPendingEmail(PERSON, EMAIL, null)).resolves.toEqual({
       ok: false,
       error: "Enter an email address like name@example.com.",
     });
   });
 
   it.each([
-    ["changing theirs", [dbError("08006", `down for ${EMAIL}`)], "setPendingEmail change failed"],
-    ["noting one", [changed(), dbError("08006", `down for ${EMAIL}`)], "setPendingEmail note failed"],
-  ])("hides any other failure %s behind the generic sentence, logging only code and status", async (_label, answers, context) => {
-    emailAllowed(...answers);
-    await expect(setPendingEmail(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
+    ["changing theirs", LATER, "setPendingEmail change failed"],
+    ["noting one", null, "setPendingEmail note failed"],
+  ])("hides any other failure %s behind the generic sentence, logging only code and status", async (_label, current, context) => {
+    emailAllowed(dbError("08006", `down for ${EMAIL}`));
+    await expect(setPendingEmail(PERSON, EMAIL, current)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
     expect(console.error).toHaveBeenCalledExactlyOnceWith(context, { code: "08006", status: undefined });
     expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toMatch(/@|example/);
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
   it("says 'no permission' when RLS refuses the write", async () => {
-    emailAllowed(changed(), dbError("42501", 'new row violates row-level security policy for table "pending_login_emails"'));
-    await expect(setPendingEmail(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: NO_PERMISSION });
+    emailAllowed(dbError("42501", 'new row violates row-level security policy for table "pending_login_emails"'));
+    await expect(setPendingEmail(PERSON, EMAIL, null)).resolves.toEqual({ ok: false, error: NO_PERMISSION });
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
   it("checks the admin grant before reading the person", async () => {
-    emailAllowed(changed(), done());
-    await setPendingEmail(PERSON, EMAIL);
+    emailAllowed(done());
+    await setPendingEmail(PERSON, EMAIL, null);
     expect(rpc.mock.invocationCallOrder[0]).toBeLessThan(from.mock.invocationCallOrder[0]);
     expect(rpc).toHaveBeenCalledWith("app_has_grant", { requested: "admin" });
   });

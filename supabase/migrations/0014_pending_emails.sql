@@ -18,6 +18,9 @@
 --     signed-in admin (SECURITY INVOKER, so RLS and the members triggers decide each row as they
 --     do a single insert: archived nodes, the organisation, who leads where they sit). Either
 --     everyone on the list is added, or nobody.
+--   * link_noted_login: for the server only. Send invites (giveLogin) links each new login only
+--     while the address it went to is still the one noted for that person, so an invite sent as
+--     another admin corrects or forgets the note never becomes that person's login.
 
 -- ---------- pending_login_emails ----------
 create table pending_login_emails (
@@ -135,9 +138,13 @@ create trigger members_forget_pending_email after update of auth_user_id, remove
 -- Likewise once the project owner gives them a grant: the owner gives grant holders their login,
 -- and the pages offer admins nothing on their row, so an address left noted would stay out of
 -- reach and keep anyone else from using it.
+-- The person's row is locked first (FOR NO KEY UPDATE, which waits for pending_login_emails_check's
+-- FOR SHARE and the other way round), so an address noted at the same moment is either refused
+-- there, seeing the grant, or committed before this forgets it.
 create function member_grants_forget_pending_email() returns trigger
   language plpgsql security definer set search_path = '' as $$
 begin
+  perform 1 from public.members m where m.id = new.member_id for no key update;
   delete from public.pending_login_emails p where p.member_id = new.member_id;
   return null;
 end $$;
@@ -185,3 +192,36 @@ begin
 end $$;
 revoke execute on function admin_add_members(uuid, jsonb) from public, anon;
 grant execute on function admin_add_members(uuid, jsonb) to authenticated;
+
+-- ---------- link_noted_login ----------
+-- For the server (service_role) only: giveLogin, when Send invites sends someone the address noted
+-- for them. It checks that address before inviting it, but another admin may correct or forget the
+-- note while the invite is going out. So the new login is linked here only if the address is still
+-- the one noted for them, in one transaction: their row is locked first (as every path that
+-- forgets notes locks it), then their note, so neither can change until this commits; linking then
+-- forgets the note (members_forget_pending_email). Returns 'linked'; 'note_changed' when the note
+-- is gone or holds another address (the server then deletes the login it just made, so the link
+-- in that email opens nothing); or 'changed' when they have a login, were removed or are a Master
+-- Admin by now. A login another row uses fails with the unique violation, as giveLogin's own link.
+create function link_noted_login(p_member_id uuid, p_login uuid, p_email text, p_given_by uuid)
+  returns text language plpgsql set search_path = '' as $$
+begin
+  perform 1 from public.members m
+  where m.id = p_member_id and m.auth_user_id is null and m.removed_at is null and m.role <> 'hq'
+  for update;
+  if not found then
+    return 'changed';
+  end if;
+  perform 1 from public.pending_login_emails p
+  where p.member_id = p_member_id and p.email = lower(btrim(p_email))
+  for update;
+  if not found then
+    return 'note_changed';
+  end if;
+  update public.members
+  set auth_user_id = p_login, login_given_by = p_given_by, login_given_at = now()
+  where id = p_member_id;
+  return 'linked';
+end $$;
+revoke execute on function link_noted_login(uuid, uuid, text, uuid) from public, anon, authenticated;
+grant execute on function link_noted_login(uuid, uuid, text, uuid) to service_role;

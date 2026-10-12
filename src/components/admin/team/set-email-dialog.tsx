@@ -73,7 +73,9 @@ export function SetEmailForm({
     setError(null);
     onBusy?.(true);
     startSaving(async () => {
-      const result = await settle(() => setPendingEmail(person.id, address), "setPendingEmail");
+      // The address this page shows as noted: if another admin has changed it since, nothing
+      // changes and the admin is asked to reload.
+      const result = await settle(() => setPendingEmail(person.id, address, person.pendingEmail), "setPendingEmail");
       startTransition(() => {
         onBusy?.(false);
         if (result.ok) onDone(message);

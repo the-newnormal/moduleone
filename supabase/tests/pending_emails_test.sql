@@ -20,7 +20,7 @@
 --   (made a Master Admin), stays (renamed, moved, made a leader, taken out of the team) and deleted
 --   (deleted by the project owner).
 begin;
-select plan(138);
+select plan(151);
 
 -- 'SQLSTATE: message' for a statement that fails, so a test can check both; 'no error' otherwise.
 create function pg_temp.error_of(sql text) returns text language plpgsql as $$
@@ -719,6 +719,89 @@ select results_eq(
     left join pending_login_emails p on p.member_id = m.id$$,
   $$values (200, 200, 200, true)$$,
   'all 200 are in the domain, in order, each with their address noted'
+);
+
+-- ---------- link_noted_login: Send invites links a login only while the address is still noted ----------
+reset role;
+insert into auth.users (id, email) values
+  ('ae000000-0000-4000-8000-000000000010', 'link@pending.test'),
+  ('ae000000-0000-4000-8000-000000000011', 'stale@pending.test'),
+  ('ae000000-0000-4000-8000-000000000012', 'nonote@pending.test'),
+  ('ae000000-0000-4000-8000-000000000013', 'late@pending.test');
+insert into members (id, name, team_id, role) values
+  ('ce000000-0000-4000-8000-000000000030', 'PE link', 'be000000-0000-4000-8000-000000000003', 'member'),
+  ('ce000000-0000-4000-8000-000000000031', 'PE stale', 'be000000-0000-4000-8000-000000000003', 'member'),
+  ('ce000000-0000-4000-8000-000000000032', 'PE no note', 'be000000-0000-4000-8000-000000000003', 'member'),
+  ('ce000000-0000-4000-8000-000000000033', 'PE taken', 'be000000-0000-4000-8000-000000000003', 'member');
+insert into pending_login_emails (member_id, email) values
+  ('ce000000-0000-4000-8000-000000000030', 'link@pending.test'),
+  ('ce000000-0000-4000-8000-000000000031', 'corrected@pending.test'),
+  ('ce000000-0000-4000-8000-000000000033', 'taken@pending.test');
+
+select function_privs_are('public', 'link_noted_login', array['uuid', 'uuid', 'text', 'uuid'], 'service_role', array['EXECUTE'],
+  'the server can call link_noted_login');
+select function_privs_are('public', 'link_noted_login', array['uuid', 'uuid', 'text', 'uuid'], r, array[]::text[],
+  format('%s cannot call link_noted_login', r))
+  from unnest(array['anon', 'authenticated']) r;
+select is(has_function_privilege('public', 'public.link_noted_login(uuid, uuid, text, uuid)', 'execute'), false,
+  'PUBLIC cannot call link_noted_login');
+select is((select prosecdef from pg_proc where oid = 'public.link_noted_login(uuid, uuid, text, uuid)'::regprocedure),
+  false, 'link_noted_login runs as its caller, the server');
+select is((select proconfig from pg_proc where oid = 'public.link_noted_login(uuid, uuid, text, uuid)'::regprocedure),
+  array['search_path=""'], 'link_noted_login runs with an empty search_path');
+
+set local role service_role;
+set local request.jwt.claims to '{"role": "service_role"}';
+select is(
+  public.link_noted_login('ce000000-0000-4000-8000-000000000030', 'ae000000-0000-4000-8000-000000000010',
+    '  LINK@pending.test ', 'ce000000-0000-4000-8000-000000000001'),
+  'linked', 'links the login while the address it went to (in any case, with spaces) is still the one noted'
+);
+select is(
+  public.link_noted_login('ce000000-0000-4000-8000-000000000031', 'ae000000-0000-4000-8000-000000000011',
+    'stale@pending.test', 'ce000000-0000-4000-8000-000000000001'),
+  'note_changed', 'links nothing once another admin noted another address meanwhile'
+);
+select is(
+  public.link_noted_login('ce000000-0000-4000-8000-000000000032', 'ae000000-0000-4000-8000-000000000012',
+    'nonote@pending.test', 'ce000000-0000-4000-8000-000000000001'),
+  'note_changed', 'links nothing once the note was forgotten meanwhile'
+);
+select is(
+  (select array_agg(public.link_noted_login(m, 'ae000000-0000-4000-8000-000000000013', 'late@pending.test',
+     'ce000000-0000-4000-8000-000000000001') order by m)
+   from unnest(array['ce000000-0000-4000-8000-000000000012', 'ce000000-0000-4000-8000-000000000013',
+                     'ce000000-0000-4000-8000-000000000015', 'ce000000-0000-4000-8000-0000000000ff']::uuid[]) m),
+  array['changed', 'changed', 'changed', 'changed'],
+  'says the person changed for someone with a login, a Master Admin, someone removed, or nobody'
+);
+select is(
+  pg_temp.error_of($$select public.link_noted_login('ce000000-0000-4000-8000-000000000033',
+    'ae000000-0000-4000-8000-000000000006', 'taken@pending.test', 'ce000000-0000-4000-8000-000000000001')$$),
+  '23505: duplicate key value violates unique constraint "members_auth_user_id_key"',
+  'fails like giveLogin''s own link when another row uses that login'
+);
+reset role;
+select results_eq(
+  $$select m.name, m.auth_user_id, m.login_given_by, m.login_given_at is not null, p.email
+    from members m left join pending_login_emails p on p.member_id = m.id
+    where m.id in ('ce000000-0000-4000-8000-000000000030', 'ce000000-0000-4000-8000-000000000031',
+                   'ce000000-0000-4000-8000-000000000032', 'ce000000-0000-4000-8000-000000000033')
+    order by m.name$$,
+  $$values ('PE link'::text, 'ae000000-0000-4000-8000-000000000010'::uuid, 'ce000000-0000-4000-8000-000000000001'::uuid, true, null::text),
+           ('PE no note', null, null, false, null),
+           ('PE stale', null, null, false, 'corrected@pending.test'),
+           ('PE taken', null, null, false, 'taken@pending.test')$$,
+  'the linked person has the login and who gave it, and their note is forgotten; nobody else changed'
+);
+
+-- A grant given while an address is being noted: the grant's clean-up locks the person's row first,
+-- which waits for the note's FOR SHARE and the other way round (a second session can't be driven
+-- from here, so this checks the lock is taken before the address is forgotten).
+select ok(
+  pg_get_functiondef('public.member_grants_forget_pending_email()'::regprocedure)
+    ~* 'from public\.members m where m\.id = new\.member_id for no key update;\s+delete from public\.pending_login_emails',
+  'a grant''s clean-up locks the person''s row before forgetting their address'
 );
 
 reset role;
