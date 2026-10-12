@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_OPENING_QUESTION, QUESTIONS } from "@/lib/checkin/week";
 import { button, click, queryButton, render, settle, text } from "@/test/dom";
 import type { LiveReady } from "./live/api";
+import { MAX_READS } from "./live/pacing";
 import type { ShownOffer } from "./live/contract";
 import type { SaveOutcome, Take } from "./take";
 
@@ -113,6 +114,28 @@ function devices(camera: () => Promise<unknown> = async () => cameraStream(), pe
   return { microphone, getUserMedia, cameraAsks };
 }
 const video = () => document.querySelector("video");
+// Everything the recorder's live region has held, change by change (a screen reader reads each).
+function liveRegionLog() {
+  const region = document.querySelector('[aria-live="polite"]')!;
+  const said = [region.textContent ?? ""];
+  new MutationObserver(() => said.push(region.textContent ?? "")).observe(region, { childList: true, subtree: true, characterData: true });
+  return said;
+}
+// The text of every node put into the recorder's live region: a screen reader reads each as it is
+// put in, even with the same words as the one it replaces.
+function addedToLiveRegion() {
+  const region = document.querySelector('[aria-live="polite"]')!;
+  const added: string[] = [];
+  new MutationObserver((records) => {
+    for (const record of records) for (const node of record.addedNodes) added.push(node.textContent ?? "");
+  }).observe(region, { childList: true, subtree: true });
+  return added;
+}
+// The line under the live question saying what is coming (live-prompt.tsx), word for word ("No more
+// follow-ups" with its ending, under the opening question or a closing line, or after a follow-up).
+const FOLLOW_UP_LINES = ["Starting follow-ups…", "Listening…", "Checking for a follow-up…", "A follow-up will show when you pause.", "No more follow-ups"];
+const NO_FOLLOW_UPS = "No follow-up questions this time. Answer out loud, then press Finish.";
+const FELL_BACK = "Follow-up questions have stopped. Keep going, and press Finish when you're done.";
 // The recorder where the Diary has it: in this week's section of the page's <main>, under the cover,
 // above the member's entries and their players.
 function diary(recorder: ReactNode) {
@@ -841,7 +864,7 @@ describe("the one question", () => {
     expect(queryButton("Next question")).toBeNull();
     expect(queryButton("Different question")).toBeNull();
     expect(stage?.querySelector("ul")).toBeNull(); // no areas to tick off: nothing follows it up
-    expect(stage?.textContent).not.toContain("a follow-up may appear");
+    for (const line of FOLLOW_UP_LINES) expect(text()).not.toContain(line); // nothing to say is coming
     expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe(`Recording. ${QUESTION}`);
     expect(fakes.startLive).not.toHaveBeenCalled();
     for (const { text: question } of QUESTIONS) expect(text()).not.toContain(question);
@@ -1038,13 +1061,15 @@ describe("a live check-in", () => {
     expect(fakes.startLive).not.toHaveBeenCalled();
   });
 
-  it("keeps the question on the stage, and says follow-ups have stopped, when live questions aren't available", async () => {
+  it("keeps the question on the stage, and says there are no follow-ups this time, when live questions aren't available", async () => {
     await startRecording({ status: "off" });
     expect(stage()?.querySelector("h3")?.textContent).toBe(OPENING);
-    expect(stage()?.textContent).toContain("Follow-up questions have stopped. Keep going, and press Finish when you're done.");
-    expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain("Follow-up questions have stopped.");
+    expect(stage()?.textContent).toContain("No follow-up questions this time. Answer out loud, then press Finish.");
+    expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain("No follow-up questions this time.");
+    // They never started, so they haven't stopped, and there's nothing to keep going with.
+    expect(text()).not.toContain("Follow-up questions have stopped.");
     expect(stage()?.textContent).not.toContain("Not yet: What you did"); // no chips once nothing is following up
-    expect(stage()?.textContent).not.toContain("a follow-up may appear");
+    for (const line of FOLLOW_UP_LINES) expect(stage()?.textContent).not.toContain(line);
     expect(stage()?.contains(button("Finish"))).toBe(true);
     expect(queryButton("Next question")).toBeNull();
     for (const { text: question } of QUESTIONS) expect(text()).not.toContain(question);
@@ -1088,6 +1113,8 @@ describe("a live check-in", () => {
     expect(video()).toBeNull();
     expect(FakeRecorder.last?.state).toBe("recording");
     expect(page.container.querySelector("h3")?.textContent).toBe(OPENING);
+    // What is coming carries over to the card, under the question.
+    expect(page.container.querySelector("h3 + p")?.textContent).toMatch(/^(Starting follow-ups…|Listening…)$/);
     expect(document.activeElement).toBe(button("Finish"));
     expect(button("Finish").className).not.toContain("bg-white"); // the card's own button now
     expect(fakes.endLive).not.toHaveBeenCalled();
@@ -1096,6 +1123,44 @@ describe("a live check-in", () => {
     await click(button("Finish"));
     expect(fakes.endLive).toHaveBeenCalledOnce();
     expect(text(page.container)).toContain("Saving your recording");
+  });
+
+  // Without a camera, the note under the question is in the card (the stage's has its own test).
+  describe("in the card, once follow-ups have stopped", () => {
+    async function recordInCard(start: unknown = READY) {
+      let onFailure: (() => void) | null = null;
+      liveDevices(async () => {
+        throw new DOMException("none", "NotFoundError");
+      });
+      fakes.startLive.mockResolvedValue(start);
+      fakes.connectLiveTranscription.mockImplementation(async (options: { onFailure: () => void }) => {
+        onFailure = options.onFailure;
+        return connection;
+      });
+      const { Recorder } = await load();
+      const page = await render(<Recorder opening={OPENING} live />);
+      await turnOnCamera();
+      await click(button("Record without camera"));
+      await settle();
+      expect(video()).toBeNull();
+      // The card's own words under the question, not the live region's.
+      const note = () => page.container.querySelector("h3 + p")?.textContent;
+      return { note, lose: () => act(() => onFailure?.()) };
+    }
+
+    it("says there are none this time when live questions aren't available", async () => {
+      const card = await recordInCard({ status: "off" });
+      expect(card.note()).toBe(NO_FOLLOW_UPS);
+      expect(text()).not.toContain("Follow-up questions have stopped.");
+    });
+
+    it("says they have stopped when live transcription drops after it connected", async () => {
+      const card = await recordInCard();
+      expect(card.note()).toMatch(/^(Starting follow-ups…|Listening…)$/);
+      await card.lose();
+      expect(card.note()).toBe(FELL_BACK);
+      expect(text()).not.toContain("No follow-up questions this time.");
+    });
   });
 
   it("records with live questions in the card when the camera can't come on", async () => {
@@ -1145,7 +1210,8 @@ describe("a live check-in", () => {
   });
 
   // The real coach, on fake timers, taken as far as showing `offer`: the microphone's level, a
-  // transcribed answer, a pause, and the coach's answer. Then live coaching can be made to stop.
+  // transcribed answer, a pause, and the coach's answer. Then they can say more (turn), and live
+  // coaching can be made to stop. said: everything the live region has held.
   async function coachedTake(offer: ShownOffer) {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"] });
     const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
@@ -1170,36 +1236,53 @@ describe("a live check-in", () => {
     fakes.askCoach.mockResolvedValue({ status: "ok", degraded: false, offer, touched: { activity: true, excellence: false, morale: false } });
     const { Recorder } = await load();
     await render(<Recorder opening={OPENING} live />);
+    const said = liveRegionLog();
+    const added = addedToLiveRegion();
     await click(button("Turn on my camera"));
     await advance(0);
     await click(button("Start recording"));
     await advance(500); // quiet: the meter learns the room
-    level = 0.2;
-    await advance(3000); // talking
-    act(() => {
-      onEvent?.({ type: "committed", itemId: "item_1", previousItemId: null });
-      onEvent?.({
-        type: "completed",
-        itemId: "item_1",
-        transcript: "This week I mostly worked on the vendor onboarding for the Jurong site and we got the first three suppliers through the checks.",
+    let item = 0;
+    // They talk, it comes back as text, and they pause long enough for the coach to be asked.
+    async function turn(transcript: string, pauseMs: number) {
+      level = 0.2;
+      await advance(3000);
+      const itemId = `item_${++item}`;
+      act(() => {
+        onEvent?.({ type: "committed", itemId, previousItemId: item > 1 ? `item_${item - 1}` : null });
+        onEvent?.({ type: "completed", itemId, transcript });
       });
-    });
-    level = 0.002;
-    await advance(3000); // a pause: the coach is asked, and its answer shown
-    return { stop: () => act(() => onFailure?.()) };
+      level = 0.002;
+      await advance(pauseMs);
+    }
+    // A pause: the coach is asked, and its answer shown.
+    await turn("This week I mostly worked on the vendor onboarding for the Jurong site and we got the first three suppliers through the checks.", 3000);
+    return { said, added, turn, stop: () => act(() => onFailure?.()) };
   }
+
+  // Nothing the line under the question says is ever announced: a screen reader's voice could reach
+  // the microphone, and "Listening…" again and again would be noise.
+  const neverAnnounced = (said: string[]) => {
+    for (const words of ["Starting follow-ups", "Listening", "Checking for a follow-up", "will show when you pause"]) {
+      expect(said.join("\n")).not.toContain(words);
+    }
+  };
 
   it("keeps a follow-up on screen, without Different question or the areas, when live coaching stops after it", async () => {
     try {
       const take = await coachedTake({ id: 2, kind: "question", text: "What came of the vendor onboarding?" });
       expect(stage()?.querySelector("h3")?.textContent).toBe("What came of the vendor onboarding?");
+      expect(stage()?.querySelector("h3 + p")?.textContent).toBe("Listening…");
       expect(button("Different question")).toBeTruthy();
       take.stop();
       expect(stage()?.querySelector("h3")?.textContent).toBe("What came of the vendor onboarding?"); // not back to the opening
       expect(queryButton("Different question")).toBeNull();
       expect(stage()?.querySelector("ul")).toBeNull();
       expect(stage()?.textContent).toContain("Follow-up questions have stopped.");
+      expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain("Follow-up questions have stopped.");
+      for (const line of FOLLOW_UP_LINES) expect(stage()?.textContent).not.toContain(line);
       expect(document.activeElement).toBe(button("Finish"));
+      neverAnnounced(take.said);
     } finally {
       vi.useRealTimers();
     }
@@ -1210,9 +1293,68 @@ describe("a live check-in", () => {
       const closing = "Thank you for sharing that. Say as much or as little as you like, and press Finish whenever you're ready.";
       const take = await coachedTake({ id: 2, kind: "closing", text: closing }); // the line after a hard moment
       expect(stage()?.querySelector("h3")?.textContent).toBe(closing);
+      // Nothing more is coming, said under it; the closing line is announced itself, and that is enough.
+      expect(stage()?.querySelector("h3 + p")?.textContent).toBe("No more follow-ups.");
+      const region = document.querySelector('[aria-live="polite"]')?.textContent;
+      expect(region).toContain(closing);
+      expect(region).not.toContain("No more follow-ups.");
       take.stop();
       expect(stage()?.querySelector("h3")?.textContent).toBe(closing);
       expect(text()).not.toContain("Follow-up questions have stopped.");
+      expect(text()).not.toContain("No follow-up questions this time.");
+      neverAnnounced(take.said);
+      expect(take.said.join("\n")).not.toContain("No more follow-ups.");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says, once, that no more follow-ups are coming once every read is used, even as Different question swaps one", async () => {
+    const LAST = "No more follow-ups after this one.";
+    const announced = (said: string[]) => said.filter((words, i) => words.includes(LAST) && !said[i - 1]?.includes(LAST));
+    try {
+      const take = await coachedTake({ id: 2, kind: "question", text: "What came of the vendor onboarding?" });
+      // 16 words a turn: enough for a read at every pause.
+      const more = "Then on Thursday the ops team switched off the old server and nobody noticed a thing.";
+      for (let reads = 1; reads < MAX_READS; reads++) await take.turn(more, 2500);
+      expect(fakes.askCoach).toHaveBeenCalledTimes(MAX_READS);
+      expect(stage()?.querySelector("h3")?.textContent).toBe("What came of the vendor onboarding?");
+      expect(stage()?.querySelector("h3 + p")?.textContent).toBe(LAST);
+      expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain(LAST);
+      // Announced as it first appears.
+      expect(announced(take.said)).toHaveLength(1);
+
+      // Different question still swaps it; a slow swap leaves the line, and the announcement, be.
+      const swapped = { id: 3, kind: "question", text: "How is the team finding it?" };
+      fakes.askCoach.mockImplementationOnce(
+        () => new Promise((resolve) => setTimeout(() => resolve({ status: "ok", degraded: false, offer: swapped, touched: { activity: true, excellence: false, morale: false } }), 2500)),
+      );
+      await click(button("Different question"));
+      await act(() => vi.advanceTimersByTimeAsync(1500));
+      expect(stage()?.querySelector("h3")?.textContent).toBe("What came of the vendor onboarding?");
+      expect(stage()?.querySelector("h3 + p")?.textContent).toBe(LAST);
+      await act(() => vi.advanceTimersByTimeAsync(1500));
+      expect(stage()?.querySelector("h3")?.textContent).toBe(swapped.text);
+      expect(stage()?.querySelector("h3 + p")?.textContent).toBe(LAST);
+      expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe(`Follow-up question: ${swapped.text} ${LAST}`);
+      // Still said only the once: its node was put in the once, and stayed.
+      expect(announced(take.said)).toHaveLength(1);
+      expect(take.added.filter((words) => words.includes(LAST))).toHaveLength(1);
+      neverAnnounced(take.said);
+
+      // It goes with the recording: never beside "Saving your recording…", "Saved." or the next take's controls.
+      saving();
+      await click(button("Finish"));
+      const region = () => document.querySelector('[aria-live="polite"]')?.textContent ?? "";
+      expect(region()).toContain("Saving your recording…");
+      expect(region()).not.toContain("No more follow-ups");
+      await act(async () => {
+        FakeRecorder.last?.ondataavailable?.({ data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }) });
+        FakeRecorder.last?.onstop?.();
+      });
+      for (let i = 0; i < 5; i++) await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(region()).toContain("Saved.");
+      expect(region()).not.toContain("No more follow-ups");
     } finally {
       vi.useRealTimers();
     }

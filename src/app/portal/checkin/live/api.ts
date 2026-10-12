@@ -25,11 +25,14 @@ export function isLiveStartReady(response: LiveStartResponse | null): response i
 }
 
 const PACING_FIELDS = ["showAfterSilenceMs", "stoppedSilenceMs", "minQuestionMs", "minWordsPerQuestion", "firstFollowUpAfterMs"] as const;
+// Sent since the recorder says when no follow-ups are coming; a server from before it leaves it out.
+const OPTIONAL_PACING_FIELDS = ["noNewQuestionsAfterMs"] as const;
 
 type Json = Record<string, unknown>;
 
 const isObject = (value: unknown): value is Json => typeof value === "object" && value !== null && !Array.isArray(value);
 const isText = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const isLiveError = (body: Json): body is LiveError => body.status === "error" && isText(body.code);
 
 function isStart(body: Json): body is LiveStartResponse {
@@ -41,7 +44,8 @@ function isStart(body: Json): body is LiveStartResponse {
     isText(body.sttModel) &&
     isText(body.opening) &&
     isObject(pacing) &&
-    PACING_FIELDS.every((field) => typeof pacing[field] === "number" && Number.isFinite(pacing[field]))
+    PACING_FIELDS.every((field) => isFiniteNumber(pacing[field])) &&
+    OPTIONAL_PACING_FIELDS.every((field) => pacing[field] === undefined || isFiniteNumber(pacing[field]))
   );
 }
 
@@ -52,6 +56,8 @@ function isConnect(body: Json): body is ConnectResponse {
 function isCoach(body: Json): body is CoachResponse {
   if (isLiveError(body)) return true;
   if (body.status !== "ok" || typeof body.degraded !== "boolean") return false;
+  // Left out by a server from before it.
+  if (body.more !== undefined && typeof body.more !== "boolean") return false;
   const { offer, touched } = body;
   const offerOk =
     offer === null ||

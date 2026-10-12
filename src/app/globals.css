@@ -44,6 +44,9 @@
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
   --color-line-strong: var(--line-strong);
+  /* The live check-in's "preparing" dots (live-prompt.tsx): a slow fade, no movement; used only under motion-safe. */
+  --animate-follow-up: follow-up 1.4s ease-in-out infinite;
+  @keyframes follow-up { 0%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
 }
 
 /* Normal, the design system for thenewnormal's software (Paper theme): ink on paper, warm stone

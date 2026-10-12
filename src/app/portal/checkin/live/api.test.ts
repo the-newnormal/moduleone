@@ -28,7 +28,14 @@ const READY = {
   sessionId: "8b0e6f4a-3c1d-4e2f-9a7b-1c2d3e4f5a6b",
   sttModel: "gpt-live-transcribe",
   opening: "How was your week, and how is the team doing?",
-  pacing: { showAfterSilenceMs: 1500, stoppedSilenceMs: 5000, minQuestionMs: 20000, minWordsPerQuestion: 25, firstFollowUpAfterMs: 45000 },
+  pacing: {
+    showAfterSilenceMs: 1500,
+    stoppedSilenceMs: 5000,
+    minQuestionMs: 20000,
+    minWordsPerQuestion: 25,
+    firstFollowUpAfterMs: 45000,
+    noNewQuestionsAfterMs: 360000,
+  },
 };
 
 const COACH_REQUEST: CoachRequest = {
@@ -44,6 +51,7 @@ const COACH_OK = {
   offer: { id: 1, kind: "question", text: "When were you or your team at your best this week?" },
   touched: { activity: true, excellence: false, morale: false },
   degraded: false,
+  more: true,
 };
 
 const sentInit = () => fetchMock.mock.calls[0][1] as RequestInit;
@@ -65,6 +73,15 @@ describe("startLive", () => {
       redirect: "manual",
       signal,
     });
+  });
+
+  // A server from before it (after a rollback) doesn't send when new questions stop.
+  it("takes pacing without the time new questions stop", async () => {
+    const older = { ...READY.pacing, noNewQuestionsAfterMs: undefined };
+    fetchMock.mockResolvedValue(jsonResponse({ ...READY, pacing: older }));
+    const result = await startLive();
+    expect(isLiveStartReady(result)).toBe(true);
+    expect(result).toEqual({ ...READY, pacing: older });
   });
 
   it.each([
@@ -90,6 +107,10 @@ describe("startLive", () => {
     ["ready without a session", () => Promise.resolve(jsonResponse({ ...READY, sessionId: "" }))],
     ["ready without the pacing", () => Promise.resolve(jsonResponse({ ...READY, pacing: undefined }))],
     ["ready with broken pacing", () => Promise.resolve(jsonResponse({ ...READY, pacing: { ...READY.pacing, minQuestionMs: "20s" } }))],
+    [
+      "ready with a broken time new questions stop",
+      () => Promise.resolve(jsonResponse({ ...READY, pacing: { ...READY.pacing, noNewQuestionsAfterMs: "6 min" } })),
+    ],
   ])("answers null for %s", async (_label, respond) => {
     fetchMock.mockImplementation(respond);
     const result = await startLive();
@@ -137,11 +158,20 @@ describe("askCoach", () => {
     expect(await askCoach(COACH_REQUEST)).toEqual({ status: "error", code: "too_soon" });
   });
 
+  it("passes on whether more can follow, and takes an answer from a server from before it, which doesn't say", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ...COACH_OK, more: false }));
+    expect(await askCoach(COACH_REQUEST)).toEqual({ ...COACH_OK, more: false });
+    const older = { ...COACH_OK, more: undefined };
+    fetchMock.mockResolvedValueOnce(jsonResponse(older));
+    expect(await askCoach(COACH_REQUEST)).toEqual(older);
+  });
+
   it.each([
     ["an offer of an unknown kind", { ...COACH_OK, offer: { ...COACH_OK.offer, kind: "lecture" } }],
     ["an offer without text", { ...COACH_OK, offer: { id: 2, kind: "question", text: "" } }],
     ["an area missing", { ...COACH_OK, touched: { activity: true, excellence: false } }],
     ["no degraded flag", { ...COACH_OK, degraded: undefined }],
+    ["more that isn't true or false", { ...COACH_OK, more: "no" }],
   ])("answers null for %s", async (_label, body) => {
     fetchMock.mockResolvedValue(jsonResponse(body));
     expect(await askCoach(COACH_REQUEST)).toBeNull();

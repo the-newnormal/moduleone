@@ -94,6 +94,9 @@ export type Pacing = {
   minQuestionMs: number;
   minWordsPerQuestion: number;
   firstFollowUpAfterMs: number;
+  // "No new questions after", so the recorder can tell when none can come. Left out by a server from
+  // before it (after a rollback): the recorder then never takes the time as over.
+  noNewQuestionsAfterMs?: number;
 };
 
 // Which areas the member has touched on (their key topic has come up): the only coverage the

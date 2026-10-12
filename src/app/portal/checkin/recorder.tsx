@@ -11,7 +11,7 @@ import { createClient } from "@/lib/supabase/client";
 import { prepareRecording, saveDraft } from "./actions";
 import { CameraStage, ON_STAGE_MAIN, ON_STAGE_OUTLINE, STAGE_PILL } from "./camera-stage";
 import { formatClock } from "./format";
-import { LivePrompt } from "./live/live-prompt";
+import { followUpCopy, LivePrompt } from "./live/live-prompt";
 import type { ShownOffer } from "./live/contract";
 import { canSkip, OPENING_OFFER_ID, openingOffer, useLiveCoach } from "./live/use-live-coach";
 import { currentSave, holdFailedTake, holdRecording, releaseSave, trackSave, wasDeleted } from "./pending-save";
@@ -33,6 +33,8 @@ const AWAY = "Your phone may have paused the recording while you were away. List
 const CAMERA_ASKING = "If your browser asks about the camera, answer it to go on. On a computer, it's by the address bar.";
 const CAMERA_STOPPED = "Your camera stopped before the recording began. Turn it on again, or record without it.";
 const FELL_BACK = "Follow-up questions have stopped. Keep going, and press Finish when you're done.";
+// Live coaching never got going for this take (the start refused, or transcription never connected).
+const NO_FOLLOW_UPS = "No follow-up questions this time. Answer out loud, then press Finish.";
 
 type State =
   | { step: "idle"; problem: string | null }
@@ -546,11 +548,13 @@ export function Recorder({
     startRefresh(() => router.refresh());
   }
 
-  // The question on screen while recording: the live coach's, with the areas touched on while
-  // follow-ups are coming; once live coaching has stopped working, the one it last showed; without
-  // live check-ins, the opening question.
+  // The question on screen while recording: the live coach's, with what is coming and the areas
+  // touched on while follow-ups are coming; once live coaching has stopped working, the one it last
+  // showed, with a note saying follow-ups have stopped (or, if live coaching never got going, that
+  // there are none this time); without live check-ins, the opening question.
   const coached = liveView?.mode === "live" ? liveView : null;
   const fellBack = liveView?.mode === "fallback";
+  const stoppedNote = liveView?.mode === "fallback" && !liveView.started ? NO_FOLLOW_UPS : FELL_BACK;
   const offer = liveView?.offer ?? openingOffer(opening);
   const announcement =
     state.step === "idle"
@@ -572,6 +576,11 @@ export function Recorder({
   const awayNote = away && unsaved;
   // Said once, quietly, as follow-ups stop under a question; a closing line already says to finish.
   const fellBackNote = state.step === "recording" && fellBack && offer.kind === "question";
+  // The line under the question is never announced (a screen reader's voice could reach the
+  // microphone), except, once, that no more follow-ups are coming. It stays put while "Different
+  // question" swaps the question (the line keeps saying it), so it isn't said again with the new one.
+  // A closing line says so itself.
+  const noMoreNote = state.step === "recording" && coached?.status === "no_more" && offer.kind === "question";
   // A node of its own in the live region too, so a question shown in the last minute is still read.
   const lastMinute = state.step === "recording" && elapsedMs >= WARN_MS;
 
@@ -581,7 +590,8 @@ export function Recorder({
         <span>{announcement}</span>
         {lastMinute && <span> {LAST_MINUTE}</span>}
         {awayNote && <span> {AWAY}</span>}
-        {fellBackNote && <span> {FELL_BACK}</span>}
+        {fellBackNote && <span> {stoppedNote}</span>}
+        {noMoreNote && <span> {followUpCopy("no_more", offer)}</span>}
       </p>
 
       {awayNote && !staged && <p className="rounded-md bg-muted px-3 py-2 text-sm">{AWAY}</p>}
@@ -669,12 +679,13 @@ export function Recorder({
           <LivePrompt
             offer={offer}
             touched={coached?.touched ?? null}
+            status={coached?.status ?? null}
             canSkip={canSkip(liveView)}
             onSkip={coach.skip}
             onFinish={finish}
             finishRef={primary}
           >
-            {fellBackNote && <p className="text-sm text-muted-foreground">{FELL_BACK}</p>}
+            {fellBackNote && <p className="text-sm text-muted-foreground">{stoppedNote}</p>}
             {lastMinute && <p className="rounded-md bg-muted px-3 py-2 text-sm">{LAST_MINUTE}</p>}
           </LivePrompt>
         </>
@@ -775,13 +786,14 @@ export function Recorder({
             <LivePrompt
               offer={offer}
               touched={coached?.touched ?? null}
+              status={coached?.status ?? null}
               canSkip={canSkip(liveView)}
               onSkip={coach.skip}
               onFinish={finish}
               finishRef={primary}
               onStage
             >
-              {fellBackNote && <p className="text-sm text-white/75">{FELL_BACK}</p>}
+              {fellBackNote && <p className="text-sm text-white/75">{stoppedNote}</p>}
               {lastMinute && <p className="text-sm text-white/80">{LAST_MINUTE}</p>}
               {awayNote && <p className="text-sm text-white/80">{AWAY}</p>}
             </LivePrompt>

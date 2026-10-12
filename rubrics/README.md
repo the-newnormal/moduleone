@@ -395,7 +395,36 @@ is the only one: no live transcription and no coach calls.
 
 The member sees the question, three tags ("What you did", "At your best", "The team") that tick
 once each area has come up, **Different question** for follow-ups, and **Finish** (the tags and
-**Different question** go if [follow-ups stop](#when-follow-up-questions-stop)). They never see
+**Different question** go if [follow-ups stop](#when-follow-up-questions-stop)). Under the question,
+one line says what is coming, and only ever promises a follow-up once one is lined up:
+
+- "Starting follow-ups…" while live transcription connects;
+- "Listening…";
+- "Checking for a follow-up…" while a call that could bring a question back has been out a
+  second (a read, once the question on screen has had its time or they have paused; or
+  **Different question**, at once if the line already says checking or that one will show). It
+  promises nothing: the call may bring a question, a closing line or nothing new;
+- "A follow-up will show when you pause." while a question waits that will show, as it is, at
+  their next pause, once the question on screen has had its time (before then, a question shows
+  only once they have stopped for 6 s, and a shorter pause doesn't promise it, as they may talk
+  again first). Not for a question they said more after its read (or are talking over), which
+  waits for a read that hears them, nor while a newer read is out: that read may bring another
+  question, a closing line or nothing. Once a read that heard them has brought one, it stays
+  still, however long they talk, except while a call renews that question
+  ([below](#pacing-on-screen)): once that call has been out a second, it says checking, as its
+  answer may be that nothing is worth asking now;
+- "No more follow-ups." under a closing line, or once nothing but **Different question** can bring
+  a follow-up ([what may still come](#what-may-still-come)); under a follow-up it says "No more
+  follow-ups after this one.", which stays true while **Different question** swaps it.
+
+Its dots move only while starting or checking, and only when the device allows motion. So that it
+doesn't flicker, a call that answers within a second never makes it say checking, except
+**Different question** tapped while the line already says checking or that one will show, which
+says checking at once rather than go back to "Listening…" before the new question; once it says
+checking or that one will show, it keeps saying so for a second at least (the second only while
+that question still waits), unless a question or closing line shows sooner; and a question that
+can show at once, or that a call brings while they stay quiet, shows without the line first saying
+it will. Screen readers hear none of it but "No more follow-ups", once a recording. They never see
 coverage levels or scores. The app keeps topic ids, levels, the mood and counts for each session,
 never the member's words or the questions' wording.
 
@@ -631,7 +660,13 @@ speech whose text hasn't come back yet): a "team ok lah" just then may have answ
 words are then read again (below), once the question could otherwise appear, and that read's
 answer replaces the question or drops it. A question waits like this only once: the answer of the
 read that heard them appears at the next pause it may, even if they said more meanwhile, so someone
-whose pauses are shorter than a read still gets follow-ups. If that speech comes back as no words
+whose pauses are shorter than a read still gets follow-ups; no call goes out until it has (below),
+or a newer read would hold it back again, and its answer, coming once they talk again, would wait
+in turn. Only once the read behind it is 30 s old (they have talked on, with no pause long enough
+for it), so that it isn't about what they said long ago, does a call renew it: that call never holds
+it back (should they pause long enough first, it shows, and the call's answer is set aside), and
+its answer takes its place as it is (another question, or none at all should they have covered it;
+should the call fail, the question stays as it was). If that speech comes back as no words
 at all (a cough, an "mm"), the read missed nothing and the question no longer waits for it. If its
 text hasn't come back by the time they have stopped (6 s), or its transcription failed, the
 question is dropped (should the text come after all, the next call asks for a reread). Once the 40
@@ -657,8 +692,12 @@ These are fixed in code ([`pacing.ts`](../src/app/portal/checkin/live/pacing.ts)
 [`turn.ts`](../src/lib/coach/turn.ts), [`live-sessions.ts`](../src/lib/checkin/live-sessions.ts)):
 
 - **A call** when they pause for 1.2 s after at least 20 new words (the first time) or 15 new
-  words since the last call, or pause for 4 s after any new words. At least 5 s apart, one at a
-  time, at most 40 per recording. "Different question" calls at once (at least 1.2 s after the
+  words since the last call, or pause for 4 s after any new words, counting only words said since
+  the question on screen appeared (a call about what they said to the one before would bring a
+  question that replaces this one while they think). At least 5 s apart, one at a time, at most
+  40 per recording, and none while a question that a read which heard them brought waits to be
+  shown, but one to renew it once the read behind it is 30 s old (above). "Different question"
+  calls at once (at least 1.2 s after the
   last call). While a question waits because they said more after its read (above), once it could
   otherwise appear (the question on screen has been up 20 s, with 20 words said to it, and the
   opening question until 25 s into the recording; or they have stopped for 6 s), any new words are
@@ -674,6 +713,24 @@ These are fixed in code ([`pacing.ts`](../src/app/portal/checkin/live/pacing.ts)
   what it already knows, at no cost. No reads after a closing line.
 - **Server limits per session:** 120 calls, at least 1 s apart, for 15 minutes from the start (a
   recording stops at 10 minutes); 12 sessions per member in 24 hours.
+
+#### What may still come
+
+Each coach call's answer says whether a later call could still bring a follow-up question once its
+offer, if any, is on screen (`more`, from `moreToAsk` in
+[`policy.ts`](../src/lib/coach/policy.ts)): not after distress or a closing line, from **360 s**,
+at **6** follow-ups, or after two skips in a row. "Nothing worth asking now" doesn't count, since
+what they say next may open a topic up. **Different question** can still swap the question on
+screen at 6 follow-ups, as a skip doesn't count as one. It says nothing about coverage.
+
+The start also sends "No new questions after" with the pacing. The server measures it from when
+it started the session (or by the recorder's clock, if that is less), which was before the start
+answered, so the recorder takes it as surely past only once that long, and 2 s more for the
+server's and the database's clocks, has gone by since the start answered. From then on, and once
+the 40 calls are used up, it says none can come. A question held for what they said since its read
+is never said to be coming, and once its own clock is past the time it no longer keeps the line
+from saying none can come: that read again may only bring "Time is nearly up". A question that
+waits for nothing still shows, and is said to.
 
 ### When follow-up questions stop
 
@@ -695,7 +752,9 @@ when (with the code the end call sends, for the server's log, section 5):
 
 The recording carries on. The question on screen stays, no more follow-ups are shown, **Different
 question** and the three tags go, and the recorder says, once: "Follow-up questions have stopped.
-Keep going, and press Finish when you're done." It doesn't switch to the three fixed questions any
+Keep going, and press Finish when you're done." When live coaching never got going (the start
+refused, or live transcription never connected), it says instead: "No follow-up questions this
+time. Answer out loud, then press Finish." It doesn't switch to the three fixed questions any
 more. The recording itself is never interrupted, and grading works the same either way.
 
 ### Every setting in `coach.md`

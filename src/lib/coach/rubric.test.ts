@@ -156,6 +156,7 @@ describe("pacingFrom", () => {
       minQuestionS: 20,
       minWordsPerQuestion: 25,
       firstFollowUpAfterS: 45,
+      noNewQuestionsAfterS: 300,
     };
     expect(pacingFrom(settings)).toEqual({
       showAfterSilenceMs: 2500,
@@ -163,6 +164,7 @@ describe("pacingFrom", () => {
       minQuestionMs: 20_000,
       minWordsPerQuestion: 25,
       firstFollowUpAfterMs: 45_000,
+      noNewQuestionsAfterMs: 300_000,
     });
   });
 });
