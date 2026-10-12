@@ -959,8 +959,9 @@ type EmailChangeRow = {
 //   1. the caller is a signed-in admin; 2. a uuid and an email address;
 //   3. as the admin (RLS): the person exists and wasn't removed, isn't the caller or a Master
 //      Admin, has a login, holds no grants, and doesn't sit in or lead the organisation;
-//   4. service role: their login exists and isn't being deleted, and no login has the new address
-//      (theirs included: the answer doesn't say whose, so it never confirms someone's address);
+//   4. service role: their login exists and isn't being deleted, no login has the new address
+//      (theirs included: the answer doesn't say whose, so it never confirms someone's address), and
+//      it isn't noted for anyone else's invite (0014);
 //   5. a login they've used (moveUsedLogin) gets the new address in place; one they haven't
 //      (replaceUnusedLogin) is replaced by a new login invited at the new address;
 //   6. both check again afterwards (stillChangeable) and undo the change if anything in 3 stopped
@@ -1032,6 +1033,9 @@ export async function changeEmail(memberId: string, email: string): Promise<Acti
     return fail(GENERIC_ERROR);
   }
   if (inUse.data !== false) return fail(EMAIL_IN_USE);
+  // Nor noted for someone else's invite (0014): their invite would only re-send this login.
+  const notedNow = await addressNotedForOthers(service, address.value, row.id);
+  if (notedNow !== "no") return fail(notedNow === "yes" ? NOTED_FOR_SOMEONE_ELSE : GENERIC_ERROR);
 
   // 5.–6. Used: they've confirmed the address or signed in (as resendInvite decides).
   const result = user.email_confirmed_at || user.last_sign_in_at
@@ -1105,6 +1109,17 @@ async function moveUsedLogin(
     return fail(GENERIC_ERROR);
   }
 
+  // The address changed in Supabase Auth, where 0014's triggers don't see it: if it was noted for
+  // someone else's invite while this went through (after the check before it), the old address goes
+  // back. Asked under the address's lock, so a note being made right now is seen; one made after
+  // this is refused, as the login has the address by then.
+  const notedMeanwhile = await addressNotedForOthers(service, email, row.id);
+  if (notedMeanwhile !== "no") {
+    if (!(await restore())) return fail(EMAIL_NOT_RESTORED);
+    await unrecord();
+    return fail(notedMeanwhile === "yes" ? NOTED_FOR_SOMEONE_ELSE : GENERIC_ERROR);
+  }
+
   const still = await stillChangeable(service, row.id, loginId);
   if (still === "ok") return { ok: true, value: { invited: false } };
 
@@ -1129,6 +1144,18 @@ async function moveUsedLogin(
   if (!(await restore())) return fail(EMAIL_NOT_RESTORED);
   await unrecord();
   return fail(STILL_REFUSAL[still]);
+}
+
+// Whether an address is noted for anyone's invite but this person's (0014's
+// login_email_noted_for_others, which locks the address as noting one does). "unknown" when it
+// can't tell, which callers count as a refusal.
+async function addressNotedForOthers(service: ServiceClient, email: string, memberId: string): Promise<"yes" | "no" | "unknown"> {
+  const { data, error } = await service.rpc("login_email_noted_for_others", { p_email: email, p_member_id: memberId });
+  if (error) {
+    logError("changeEmail noted", error);
+    return "unknown";
+  }
+  return data === false ? "no" : "yes";
 }
 
 // Whether a removal unlinked this login and is deleting it (removed_login_id). Unsure counts as no:

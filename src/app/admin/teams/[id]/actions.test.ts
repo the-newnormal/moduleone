@@ -2664,9 +2664,16 @@ describe("changeEmail", () => {
     await expect(changeEmail(PERSON, "  Mei.W@Example.NET ")).resolves.toEqual({ ok: true, value: { invited: false } });
     // The checks, as the admin (RLS applies)
     expect(userQueries).toEqual([CHANGE_LOAD, GRANTS, ORG_LOOKUP]);
-    // then with the service role: the login, whether the address is free
+    // then with the service role: the login, whether the address is free, whether it's noted for
+    // anyone else's invite (0014), and that again once it's changed (a note made meanwhile)
     expect(getUserById).toHaveBeenCalledExactlyOnceWith(LOGIN);
-    expect(serviceRpc).toHaveBeenCalledExactlyOnceWith("login_email_in_use", { p_email: NEW_EMAIL });
+    expect(serviceRpc.mock.calls).toEqual([
+      ["login_email_in_use", { p_email: NEW_EMAIL }],
+      ["login_email_noted_for_others", { p_email: NEW_EMAIL, p_member_id: PERSON }],
+      ["login_email_noted_for_others", { p_email: NEW_EMAIL, p_member_id: PERSON }],
+    ]);
+    expect(serviceRpc.mock.invocationCallOrder[1]).toBeLessThan(updateUserById.mock.invocationCallOrder[0]);
+    expect(serviceRpc.mock.invocationCallOrder[2]).toBeGreaterThan(updateUserById.mock.invocationCallOrder[0]);
     // the change itself; Auth emails nobody about it
     expect(updateUserById).toHaveBeenCalledExactlyOnceWith(LOGIN, { email: NEW_EMAIL, email_confirm: true });
     expect(inviteUserByEmail).not.toHaveBeenCalled();
@@ -2797,6 +2804,74 @@ describe("changeEmail", () => {
       expect(revalidatePath).not.toHaveBeenCalled();
     },
   );
+
+  // 0014: an address noted for someone else's invite, asked about before the change and again
+  // after it (login_email_noted_for_others locks the address, as noting one does).
+  const notedAnswers = (...answers: Result[]) => {
+    serviceRpc.mockReset();
+    serviceRpc.mockResolvedValueOnce({ data: false, error: null }); // login_email_in_use
+    for (const answer of answers) serviceRpc.mockResolvedValueOnce(answer);
+    serviceRpc.mockResolvedValue({ data: false, error: null });
+  };
+  const noted = { data: true, error: null };
+
+  it.each([
+    ["a used login", {}],
+    ["a login nobody has used", UNUSED],
+  ])("refuses an address noted for someone else's invite before changing or inviting anything (%s)", async (_label, login) => {
+    changeAllowed();
+    getUserById.mockResolvedValue(authUser(login));
+    notedAnswers(noted);
+    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: NOTED_FOR_SOMEONE_ELSE });
+    expect(serviceRpc.mock.calls).toEqual([
+      ["login_email_in_use", { p_email: NEW_EMAIL }],
+      ["login_email_noted_for_others", { p_email: NEW_EMAIL, p_member_id: PERSON }],
+    ]);
+    expectUnchanged();
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("says 'something went wrong' when it can't tell whether the address is noted, changing nothing and logging only code and status", async () => {
+    changeAllowed();
+    notedAnswers(dbError("08006", `down for ${NEW_EMAIL}`));
+    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
+    expectUnchanged();
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("changeEmail noted failed", { code: "08006", status: undefined });
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("example");
+  });
+
+  it.each([
+    ["the address was noted for someone else while it changed", noted, NOTED_FOR_SOMEONE_ELSE],
+    ["it can't tell whether it was", dbError("08006", "down"), GENERIC_ERROR],
+  ])("puts a used login's old address back, takes the record back and refuses when %s", async (_label, after, error) => {
+    changeAllowed();
+    readsAgain();
+    notedAnswers({ data: false, error: null }, after);
+    serviceSees([rows(PERSON), done()]);
+    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error });
+    expect(updateUserById.mock.calls).toEqual([
+      [LOGIN, { email: NEW_EMAIL, email_confirm: true }],
+      [LOGIN, { email: EMAIL, email_confirm: true }],
+    ]);
+    // Asked after the address changed, before it went back.
+    expect(serviceRpc.mock.invocationCallOrder[2]).toBeGreaterThan(updateUserById.mock.invocationCallOrder[0]);
+    expect(serviceRpc.mock.invocationCallOrder[2]).toBeLessThan(updateUserById.mock.invocationCallOrder[1]);
+    // No late check of the row: the change is undone already.
+    expect(serviceQueries).toEqual([RECORD, unrecord()]);
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("says the old address couldn't be put back when that fails after a note appeared meanwhile", async () => {
+    changeAllowed();
+    readsAgain();
+    notedAnswers({ data: false, error: null }, noted);
+    serviceSees([rows(PERSON)]);
+    updateUserById
+      .mockResolvedValueOnce({ data: { user: { id: LOGIN } }, error: null })
+      .mockResolvedValueOnce({ data: { user: null }, error: { code: "unexpected_failure", status: 500 } });
+    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_NOT_RESTORED });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
 
   it("puts the old address back when the late check can't read the row, and logs only code and status", async () => {
     changeAllowed();

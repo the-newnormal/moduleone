@@ -20,7 +20,7 @@
 --   (made a Master Admin), stays (renamed, moved, made a leader, taken out of the team) and deleted
 --   (deleted by the project owner).
 begin;
-select plan(166);
+select plan(174);
 
 -- 'SQLSTATE: message' for a statement that fails, so a test can check both; 'no error' otherwise.
 create function pg_temp.error_of(sql text) returns text language plpgsql as $$
@@ -882,6 +882,48 @@ select ok(
     ~* 'for share;.*pg_advisory_xact_lock\(hashtextextended\(''moduleone:login_email:'' \|\| lower\(btrim\(new\.email\)\), 0\)\);\s+if exists \(select 1 from auth\.users',
   'noting locks the person''s row, then the address, before looking for a login (the order linking takes them in)'
 );
+
+-- Linking takes the person's own note before the address (a change to that note takes its row, then
+-- the address, so the other order could deadlock; two sessions can't be driven from here).
+select ok(
+  pg_get_functiondef('public.members_login_not_noted_elsewhere()'::regprocedure)
+    ~* 'delete from public\.pending_login_emails p where p\.member_id = new\.id;\s+perform pg_advisory_xact_lock',
+  'linking forgets the person''s own note before locking the address'
+);
+
+-- ---------- login_email_noted_for_others: Change email asks before and after changing an address ----------
+select function_privs_are('public', 'login_email_noted_for_others', array['text', 'uuid'], 'service_role', array['EXECUTE'],
+  'the server can call login_email_noted_for_others');
+select function_privs_are('public', 'login_email_noted_for_others', array['text', 'uuid'], r, array[]::text[],
+  format('%s cannot call login_email_noted_for_others', r))
+  from unnest(array['anon', 'authenticated']) r;
+select is(has_function_privilege('public', 'public.login_email_noted_for_others(text, uuid)', 'execute'), false,
+  'PUBLIC cannot call login_email_noted_for_others');
+select is(
+  (select (prosecdef, proconfig = array['search_path=""']) from pg_proc
+   where oid = 'public.login_email_noted_for_others(text, uuid)'::regprocedure)::text,
+  '(f,t)', 'it runs as its caller, the server, with an empty search_path'
+);
+select ok(
+  pg_get_functiondef('public.login_email_noted_for_others(text, uuid)'::regprocedure)
+    ~* 'perform pg_advisory_xact_lock\(hashtextextended\(''moduleone:login_email:'' \|\| lower\(btrim\(p_email\)\), 0\)\);\s+return exists',
+  'it locks the address before looking, as noting one does'
+);
+reset role;
+insert into members (id, name, team_id, role) values
+  ('ce000000-0000-4000-8000-000000000042', 'PE asked about', 'be000000-0000-4000-8000-000000000003', 'member');
+insert into pending_login_emails (member_id, email) values ('ce000000-0000-4000-8000-000000000042', 'asked@pending.test');
+set local role service_role;
+set local request.jwt.claims to '{"role": "service_role"}';
+select results_eq(
+  $$select public.login_email_noted_for_others('  ASKED@pending.test ', 'ce000000-0000-4000-8000-000000000040'),
+           public.login_email_noted_for_others('asked@pending.test', null),
+           public.login_email_noted_for_others('asked@pending.test', 'ce000000-0000-4000-8000-000000000042'),
+           public.login_email_noted_for_others('nobody@pending.test', 'ce000000-0000-4000-8000-000000000040')$$,
+  $$values (true, true, false, false)$$,
+  'it says whether an address (in any case, with spaces) is noted for anyone but the person asked about'
+);
+reset role;
 
 -- A grant given while an address is being noted: the grant's clean-up locks the person's row first,
 -- which waits for the note's FOR SHARE and the other way round (a second session can't be driven

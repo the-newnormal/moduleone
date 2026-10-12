@@ -152,6 +152,11 @@ create trigger members_forget_pending_email after update of auth_user_id, remove
 -- that person's invite would only re-send this login. The address is locked first, as
 -- pending_login_emails_check locks it (the person's row is locked already by this update, as there),
 -- so an address noted meanwhile is seen here, or refused there.
+--
+-- Their own note goes first (members_forget_pending_email would forget it after the update anyway),
+-- before the address lock: changing a note locks its row and then the address, so taking the
+-- address and then their note here could deadlock with it. This way both take the note before the
+-- address, and a change to their note waits for the link, then finds the note gone.
 create function members_login_not_noted_elsewhere() returns trigger
   language plpgsql security definer set search_path = '' as $$
 declare
@@ -164,6 +169,7 @@ begin
   if login_email is null or login_email = '' then
     return new;
   end if;
+  delete from public.pending_login_emails p where p.member_id = new.id;
   perform pg_advisory_xact_lock(hashtextextended('moduleone:login_email:' || login_email, 0));
   if exists (select 1 from public.pending_login_emails p where p.email = login_email and p.member_id <> new.id) then
     raise exception using errcode = 'check_violation',
@@ -267,3 +273,22 @@ begin
 end $$;
 revoke execute on function link_noted_login(uuid, uuid, text, uuid) from public, anon, authenticated;
 grant execute on function link_noted_login(uuid, uuid, text, uuid) to service_role;
+
+-- ---------- login_email_noted_for_others ----------
+-- For the server (service_role) only: whether an address is noted for anyone's invite but this
+-- person's. Change email asks before changing a login's address, and again after changing a used
+-- login's address, which happens in Supabase Auth, where no trigger here sees it; if a note for it
+-- appeared, the old address goes back. The address is locked first, as noting one locks it, so a
+-- note being made at that moment is seen once it commits; one made later is refused, since the
+-- login has that address by then (pending_login_emails_check).
+create function login_email_noted_for_others(p_email text, p_member_id uuid) returns boolean
+  language plpgsql set search_path = '' as $$
+begin
+  perform pg_advisory_xact_lock(hashtextextended('moduleone:login_email:' || lower(btrim(p_email)), 0));
+  return exists (
+    select 1 from public.pending_login_emails p
+    where p.email = lower(btrim(p_email)) and p.member_id is distinct from p_member_id
+  );
+end $$;
+revoke execute on function login_email_noted_for_others(text, uuid) from public, anon, authenticated;
+grant execute on function login_email_noted_for_others(text, uuid) to service_role;
