@@ -67,8 +67,10 @@ export function NodePanel({
         actions={{
           addMember: actions.addMember,
           createMember: actions.createMember,
+          createMembers: actions.createMembers,
           giveLogin: actions.giveLogin,
           resendInvite: actions.resendInvite,
+          setPendingEmail: actions.setPendingEmail,
           removeFromTeam: actions.removeFromTeam,
           setRole: actions.setRole,
           changeEmail: actions.changeEmail,

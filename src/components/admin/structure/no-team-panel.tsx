@@ -3,12 +3,12 @@
 import { XIcon } from "lucide-react";
 import { useId, useState } from "react";
 import type { Person } from "@/app/admin/teams/[id]/team-view";
-import { type PeopleActions, PersonRow } from "@/components/admin/team/people-section";
+import { PersonRow, type PersonRowActions } from "@/components/admin/team/people-section";
 import { Button } from "@/components/ui/button";
 import { useCloseOnEscape } from "./node-panel";
 
-// The side panel for everyone who sits in no division, domain or team: their logins, Change email
-// and Remove from Module One, as on a team page. Placing them is done on the canvas, by dragging
+// The side panel for everyone who sits in no division, domain or team: their logins, the email
+// noted for their invite, Change email and Remove from Module One, as on a team page. Placing them is done on the canvas, by dragging
 // them (with Show people on) onto a box. Escape or × closes it.
 export function NoTeamPanel({
   people,
@@ -16,7 +16,7 @@ export function NoTeamPanel({
   onClose,
 }: {
   people: Person[];
-  actions: Pick<PeopleActions, "giveLogin" | "resendInvite" | "removeFromTeam" | "setRole" | "changeEmail" | "removePerson">;
+  actions: PersonRowActions;
   onClose: () => void;
 }) {
   const headingId = useId();

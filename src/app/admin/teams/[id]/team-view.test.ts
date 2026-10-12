@@ -16,6 +16,8 @@ import {
   type MemberRow,
   matchesSearch,
   nameList,
+  type PendingEmailRow,
+  type PendingEmails,
   type Person,
   promoteDescription,
   removeDescription,
@@ -87,8 +89,14 @@ const LEADS = [
   { team_id: "team-ip1", member_id: "m-ana" },
 ];
 
-const view = (teamId: string, members = MEMBERS, leads = LEADS, grants: { member_id: string }[] = [], logins?: LoginStates) =>
-  buildTeamView({ teamId, adminMemberId: ADMIN, teams: TEAMS, members, leads, grants, logins });
+const view = (
+  teamId: string,
+  members = MEMBERS,
+  leads = LEADS,
+  grants: { member_id: string }[] = [],
+  logins?: LoginStates,
+  pendingEmails?: PendingEmails,
+) => buildTeamView({ teamId, adminMemberId: ADMIN, teams: TEAMS, members, leads, grants, logins, pendingEmails });
 
 // The same tree under the organisation node (0006).
 const ORG_TEAMS: TeamRow[] = [
@@ -108,6 +116,16 @@ const loginRow = (member_id: string, state: LoginRow["state"], extra: Partial<Lo
   last_sign_in_at: null,
   ...extra,
 });
+
+// What pending_login_emails (0014) holds for one person: the address noted for their first invite.
+const notedFor = (member_id: string, email: string): PendingEmailRow => ({ member_id, email });
+
+// Every email address anywhere in what the page would be sent.
+const addressesIn = (value: unknown) => JSON.stringify(value).match(/[^\s"(),]+@[^\s"(),]+/g) ?? [];
+
+// Each person's Give login, Set email and noted address, by name.
+const emailFlags = (people: readonly Person[]) =>
+  Object.fromEntries(people.map((p) => [p.name, [p.canGiveLogin, p.canSetEmail, p.pendingEmail]]));
 
 // An invite sent at 16:30 UTC on 8 Oct, which is 12:30 am on 9 Oct in Singapore.
 const SENT = "2026-10-08T16:30:00Z";
@@ -813,7 +831,7 @@ describe("buildTeamView", () => {
     });
   });
 
-  it("never carries an email address or auth user id, even with the login states", () => {
+  it("never carries a sign-in address or auth user id, even with the login states", () => {
     const rows = [
       // Even if the function ever returned more than it should.
       { ...loginRow("m-mei", "invited", { invited_at: SENT }), email: "mei@example.com", user_id: "u-mei" } as LoginRow,
@@ -839,11 +857,178 @@ describe("buildTeamView", () => {
       expect(view(teamId, [...MEMBERS, ...removed], LEADS, [], logins), teamId).toEqual(view(teamId, MEMBERS, LEADS, [], logins));
     }
   });
+
+  it("offers Set email to everyone Give login is for, each with the address noted for their own invite", () => {
+    const members = [
+      ...MEMBERS,
+      member("m-yan", "Yan Koh", "leader", "team-ip1"),
+      member("m-xia", "Xia Lu", "member", "team-ip1"),
+    ];
+    const pending = [notedFor("m-zed", "zed@example.com"), notedFor("m-yan", "yan.koh@example.org")];
+    expect(emailFlags(view("team-ip1", members, LEADS, [], undefined, pending)!.people)).toEqual({
+      "Hana Lim": [false, false, null], // a Master Admin, and the admin
+      "Leo Tan": [false, false, null], // has a login
+      "Mei Wong": [false, false, null],
+      "Xia Lu": [true, true, null], // nothing noted yet: Set email notes one
+      "Yan Koh": [true, true, "yan.koh@example.org"],
+      "Zed Ong": [true, true, "zed@example.com"],
+    });
+    // Read, with nothing noted for anyone: Set email is still offered.
+    expect(emailFlags(view("team-ip1", members, LEADS, [], undefined, [])!.people)).toMatchObject({
+      "Xia Lu": [true, true, null],
+      "Yan Koh": [true, true, null],
+      "Zed Ong": [true, true, null],
+    });
+  });
+
+  it("offers no Set email, and shows no address, when the noted addresses couldn't be read", () => {
+    const omitted = buildTeamView({ teamId: "team-ip1", adminMemberId: ADMIN, teams: TEAMS, members: MEMBERS, leads: LEADS })!;
+    for (const v of [view("team-ip1", MEMBERS, LEADS, [], undefined, null)!, view("team-ip1")!, omitted]) {
+      for (const p of v.people) expect([p.canSetEmail, p.pendingEmail], p.name).toEqual([false, null]);
+      // Give login is still offered, and asks for the address as before.
+      expect(v.people.find((p) => p.id === "m-zed")).toMatchObject({ canGiveLogin: true, canSetEmail: false });
+      expect(addressesIn(v)).toEqual([]);
+    }
+  });
+
+  it("never shows an address noted for someone Give login isn't for, even if a row was left behind", () => {
+    const members = [
+      ...MEMBERS,
+      member("m-chief", "Chief Ong", "hq", "team-ip1"), // a Master Admin with no login yet
+      member("m-x", "Xu", "owner", "team-ip1"), // an unknown role, treated as a Master Admin
+      member("m-gil", "Gil Grant", "member", "team-ip1"), // holds grants
+      member("m-rae", "Rae Koh", "member", "team-ip1", REMOVED), // removed from Module One
+    ];
+    // The database forgets these (0014's trigger), but a row read alongside a change may still be one.
+    const pending = [
+      notedFor(ADMIN, "hana@example.com"),
+      notedFor("m-leo", "leo@example.com"),
+      notedFor("m-mei", "mei@example.com"),
+      notedFor("m-chief", "chief@example.com"),
+      notedFor("m-x", "xu@example.com"),
+      notedFor("m-gil", "gil@example.com"),
+      notedFor("m-rae", "rae@example.com"),
+    ];
+    const v = view("team-ip1", members, LEADS, [{ member_id: "m-gil" }], undefined, pending)!;
+    expect(emailFlags(v.people)).toEqual({
+      "Chief Ong": [false, false, null],
+      "Gil Grant": [false, false, null],
+      "Hana Lim": [false, false, null],
+      "Leo Tan": [false, false, null],
+      "Mei Wong": [false, false, null],
+      Xu: [false, false, null],
+      "Zed Ong": [true, true, null],
+    });
+    // The grant holder's login is the project owner's to give, so the owner's invite asks for it.
+    expect(v.people.find((p) => p.id === "m-gil")).toMatchObject({ ownerGivesLogin: true });
+    expect(addressesIn(v)).toEqual([]);
+  });
+
+  it("never shows an address noted for the signed-in admin, even without a login of their own", () => {
+    // Yan is the signed-in admin (and so holds the admin grant, read or not).
+    const members = [...MEMBERS, member("m-yan", "Yan Koh", "leader", "team-ip1")];
+    const pending = [notedFor("m-yan", "yan@example.com"), notedFor("m-zed", "zed@example.com")];
+    for (const grants of [[], [{ member_id: "m-yan" }]]) {
+      const v = buildTeamView({
+        teamId: "team-ip1",
+        adminMemberId: "m-yan",
+        teams: TEAMS,
+        members,
+        leads: LEADS,
+        grants,
+        pendingEmails: pending,
+      })!;
+      expect(v.people.find((p) => p.id === "m-yan")).toMatchObject({
+        isSelf: true,
+        canGiveLogin: false,
+        canSetEmail: false,
+        pendingEmail: null,
+      });
+      expect(addressesIn(v)).toEqual(["zed@example.com"]);
+    }
+  });
+
+  it("lets an address be noted for whoever sits in the organisation and can be given a login there", () => {
+    const members = [
+      ...MEMBERS,
+      member("m-eli", "Eli Chao", "leader", "org"),
+      member("m-ivy", "Ivy Ito", "leader", "org"),
+      member("m-vp", "Vee Pang", "leader", "org", { auth_user_id: "u-vp", login_given_by: ADMIN, login_given_at: SENT }),
+      member("m-gina", "Gina Grant", "leader", "org"),
+      member("m-chief", "Chief Ong", "hq", "org"),
+    ];
+    const pending = [
+      notedFor("m-eli", "eli@example.com"),
+      notedFor("m-vp", "vee@example.com"),
+      notedFor("m-gina", "gina@example.com"),
+      notedFor("m-chief", "chief@example.com"),
+    ];
+    const org = buildTeamView({
+      teamId: "org",
+      adminMemberId: ADMIN,
+      teams: ORG_TEAMS,
+      members,
+      leads: LEADS,
+      grants: [{ member_id: "m-gina" }],
+      pendingEmails: pending,
+    })!;
+    expect(emailFlags(org.people)).toEqual({
+      "Chief Ong": [false, false, null], // a Master Admin
+      "Eli Chao": [true, true, "eli@example.com"],
+      "Gina Grant": [false, false, null], // holds grants: the owner gives it
+      "Ivy Ito": [true, true, null],
+      "Vee Pang": [false, false, null], // has a login
+    });
+    // Nothing else about them is the admin's to change.
+    expect(org.people.every((p) => !p.editable && !p.canRemove && !p.canChangeEmail)).toBe(true);
+    expect(addressesIn(org)).toEqual(["eli@example.com"]);
+  });
+
+  it("ignores an address noted for someone it doesn't know", () => {
+    const pending = [notedFor("m-zed", "zed@example.com")];
+    const withGhost = view("team-ip1", MEMBERS, LEADS, [], undefined, [notedFor("m-ghost", "ghost@example.com"), ...pending])!;
+    expect(withGhost).toEqual(view("team-ip1", MEMBERS, LEADS, [], undefined, pending));
+    expect(withGhost.people.map((p) => p.id)).not.toContain("m-ghost");
+    expect(withGhost.candidates.map((c) => c.id)).not.toContain("m-ghost");
+    expect(addressesIn(withGhost)).toEqual(["zed@example.com"]);
+  });
+
+  it("carries no address but a noted one, on that person's own row, never the address anyone signs in with", () => {
+    const logins = states([
+      // Even if the function ever returned more than it should.
+      { ...loginRow("m-mei", "invited", { invited_at: SENT }), email: "mei@example.com" } as LoginRow,
+      { ...loginRow("m-leo", "active", { last_sign_in_at: SENT }), email: "leo@example.com" } as LoginRow,
+      loginRow(ADMIN, "ready"),
+    ]);
+    const pending = [
+      notedFor("m-zed", "zed@example.com"),
+      notedFor("m-mei", "mei.first@example.com"), // noted before her login (the database forgets it)
+      notedFor("m-ben", "ben@example.com"), // offered here only as a candidate
+      notedFor("m-cat", "cat@example.com"),
+      notedFor("m-ana", "ana@example.com"), // listed here only as a lead
+      notedFor("m-eve", "eve@example.com"), // offered here only as a possible lead
+    ];
+    const v = view("team-ip1", MEMBERS, LEADS, [], logins, pending)!;
+    expect(v.candidates.map((c) => c.id)).toEqual(expect.arrayContaining(["m-ben", "m-cat"]));
+    expect(v.leads.map((l) => l.id)).toEqual(["m-ana"]);
+    expect(v.leadOptions.map((l) => l.id)).toContain("m-eve");
+    expect(addressesIn(v)).toEqual(["zed@example.com"]);
+    expect(v.people.filter((p) => p.pendingEmail !== null).map((p) => [p.id, p.pendingEmail])).toEqual([
+      ["m-zed", "zed@example.com"],
+    ]);
+    expect(JSON.stringify(v)).not.toMatch(/u-(hana|leo|mei)/);
+  });
 });
 
 describe("buildNoTeamPeople", () => {
-  const noTeam = (members = MEMBERS, leads = LEADS, grants: { member_id: string }[] = [], teams = TEAMS, logins?: LoginStates) =>
-    buildNoTeamPeople({ adminMemberId: ADMIN, teams, members, leads, grants, logins });
+  const noTeam = (
+    members = MEMBERS,
+    leads = LEADS,
+    grants: { member_id: string }[] = [],
+    teams = TEAMS,
+    logins?: LoginStates,
+    pendingEmails?: PendingEmails,
+  ) => buildNoTeamPeople({ adminMemberId: ADMIN, teams, members, leads, grants, logins, pendingEmails });
 
   it("lists everyone in no team who wasn't removed from Module One, by name", () => {
     const members = [...MEMBERS, member("m-rae", "Rae Koh", "member", null, REMOVED), member("m-abe", "Abe Chu", "member", null)];
@@ -943,6 +1128,55 @@ describe("buildNoTeamPeople", () => {
     const removed = member("m-rae", "Rae Koh", "member", null, { ...REMOVED, auth_user_id: "u-rae" });
     const logins = states([loginRow("m-rae", "invited", { invited_at: SENT })]);
     expect(noTeam([...MEMBERS, removed], LEADS, [], TEAMS, logins)).toEqual(noTeam(MEMBERS, LEADS, [], TEAMS, logins));
+  });
+
+  it("offers Set email, with the noted address, to whoever Give login is for, as a team page does", () => {
+    const members = [
+      ...MEMBERS.map((m) => (m.id === "m-cat" ? { ...m, auth_user_id: "u-cat" } : m)),
+      member("m-abe", "Abe Chu", "member", null),
+      member("m-rae", "Rae Koh", "member", null, REMOVED),
+    ];
+    const pending = [
+      notedFor("m-ben", "ben@example.com"),
+      notedFor("m-cat", "cat@example.com"), // has a login now
+      notedFor("m-boss", "boss@example.com"), // a Master Admin
+      notedFor("m-rae", "rae@example.com"), // removed from Module One
+      notedFor("m-zed", "zed@example.com"), // in a team, so not listed here
+    ];
+    const people = noTeam(members, LEADS, [], TEAMS, undefined, pending);
+    expect(emailFlags(people)).toEqual({
+      "Abe Chu": [true, true, null],
+      "Ada Boss": [false, false, null],
+      "Ben Kho": [true, true, "ben@example.com"],
+      "Cat Ng": [false, false, null],
+    });
+    expect(addressesIn(people)).toEqual(["ben@example.com"]);
+  });
+
+  it("offers no Set email, and shows no address, when the noted addresses couldn't be read", () => {
+    const omitted = buildNoTeamPeople({ adminMemberId: ADMIN, teams: TEAMS, members: MEMBERS, leads: LEADS });
+    for (const people of [noTeam(MEMBERS, LEADS, [], TEAMS, undefined, null), noTeam(), omitted]) {
+      for (const p of people) expect([p.canSetEmail, p.pendingEmail], p.name).toEqual([false, null]);
+      expect(people.find((p) => p.id === "m-ben")).toMatchObject({ canGiveLogin: true });
+    }
+  });
+
+  it("shows no address for a grant holder or the admin themselves, and one for the organisation's leads", () => {
+    const pending = [notedFor("m-ben", "ben@example.com"), notedFor("m-cat", "cat@example.com")];
+    // Ben holds grants; Cat leads the organisation through a lead row, which keeps her removal the
+    // project owner's, but admins give her a login like anyone else's.
+    const people = noTeam(MEMBERS, [...LEADS, { team_id: "org", member_id: "m-cat" }], [{ member_id: "m-ben" }], ORG_TEAMS, undefined, pending);
+    expect(emailFlags(people)).toEqual({
+      "Ada Boss": [false, false, null],
+      "Ben Kho": [false, false, null],
+      "Cat Ng": [true, true, "cat@example.com"],
+    });
+    expect(people.find((p) => p.id === "m-ben")).toMatchObject({ ownerGivesLogin: true, ownerKeeps: "grants" });
+    expect(people.find((p) => p.id === "m-cat")).toMatchObject({ canRemove: false, ownerKeeps: "organisation" });
+    // Ben signed in as the admin, without a login linked: nothing noted for him is shown.
+    const self = buildNoTeamPeople({ adminMemberId: "m-ben", teams: TEAMS, members: MEMBERS, leads: LEADS, pendingEmails: pending });
+    expect(self.find((p) => p.id === "m-ben")).toMatchObject({ isSelf: true, canSetEmail: false, pendingEmail: null });
+    expect(addressesIn(self)).toEqual(["cat@example.com"]);
   });
 });
 

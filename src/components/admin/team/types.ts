@@ -8,12 +8,14 @@ export type TeamActions = Pick<
   typeof TeamPageActions,
   | "addMember"
   | "createMember"
+  | "createMembers"
   | "removeFromTeam"
   | "setRole"
   | "addLead"
   | "removeLead"
   | "giveLogin"
   | "resendInvite"
+  | "setPendingEmail"
   | "changeEmail"
   | "removePerson"
 > & { updateNode: typeof updateNode };

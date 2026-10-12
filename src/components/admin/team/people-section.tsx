@@ -13,15 +13,33 @@ import {
 import { Tag } from "@/components/normal/tag";
 import { Badge } from "@/components/ui/badge";
 import type { Removal } from "@/app/admin/teams/[id]/actions";
+import { AddListDialog } from "./add-list-dialog";
 import { AddPeopleDialog } from "./add-people-dialog";
 import { ChangeEmailDialog } from "./change-email-dialog";
 import { ConfirmButton } from "./confirm-button";
 import { GiveLoginDialog } from "./give-login-dialog";
+import { type Invitee, SendInvitesDialog } from "./send-invites-dialog";
+import { SetEmailDialog } from "./set-email-dialog";
 import type { TeamActions } from "./types";
 
 export type PeopleActions = Pick<
   TeamActions,
-  "addMember" | "createMember" | "giveLogin" | "resendInvite" | "removeFromTeam" | "setRole" | "changeEmail" | "removePerson"
+  | "addMember"
+  | "createMember"
+  | "createMembers"
+  | "giveLogin"
+  | "resendInvite"
+  | "setPendingEmail"
+  | "removeFromTeam"
+  | "setRole"
+  | "changeEmail"
+  | "removePerson"
+>;
+
+// The person-row actions, wherever rows are listed (the No team panel lists rows too).
+export type PersonRowActions = Pick<
+  PeopleActions,
+  "giveLogin" | "resendInvite" | "setPendingEmail" | "removeFromTeam" | "setRole" | "changeEmail" | "removePerson"
 >;
 
 type Props = {
@@ -37,6 +55,12 @@ export function PeopleSection({ team, people, candidates, actions }: Props) {
   const headingId = useId();
   const [status, setStatus] = useState("");
   const noun = team.kind;
+  const heading = `[id="${headingId}"]`;
+  // Everyone here Give login is offered for, with an email noted for their invite.
+  const invitees: Invitee[] = people.flatMap((p) =>
+    p.canGiveLogin && p.pendingEmail ? [{ id: p.id, name: p.name, email: p.pendingEmail }] : [],
+  );
+  const adding = !team.archived && team.kind !== "organisation";
 
   return (
     <section aria-labelledby={headingId} className="grid gap-4 rounded-xl border bg-card p-5">
@@ -45,9 +69,19 @@ export function PeopleSection({ team, people, candidates, actions }: Props) {
         <h2 id={headingId} tabIndex={-1} className="text-2xl outline-none">
           People <span className="text-base text-muted-foreground">({people.length})</span>
         </h2>
-        {!team.archived && team.kind !== "organisation" && (
-          <AddPeopleDialog team={team} candidates={candidates} actions={actions} onDone={setStatus} />
-        )}
+        <div className="flex flex-wrap gap-2">
+          <SendInvitesDialog invitees={invitees} giveLogin={actions.giveLogin} onDone={setStatus} focusAfter={heading} />
+          {adding && (
+            <AddListDialog
+              team={team}
+              here={people.map((p) => p.name)}
+              elsewhere={candidates.map((c) => c.name)}
+              createMembers={actions.createMembers}
+              onDone={setStatus}
+            />
+          )}
+          {adding && <AddPeopleDialog team={team} candidates={candidates} actions={actions} onDone={setStatus} />}
+        </div>
       </div>
       {team.kind === "organisation" && (
         <p className="text-sm text-muted-foreground">
@@ -76,7 +110,7 @@ export function PeopleSection({ team, people, candidates, actions }: Props) {
               person={person}
               actions={actions}
               onDone={setStatus}
-              heading={`[id="${headingId}"]`}
+              heading={heading}
             />
           ))}
         </ul>
@@ -111,7 +145,7 @@ export function PersonRow({
 }: {
   team: TeamSummary | null;
   person: Person;
-  actions: Pick<PeopleActions, "giveLogin" | "resendInvite" | "removeFromTeam" | "setRole" | "changeEmail" | "removePerson">;
+  actions: PersonRowActions;
   onDone: (message: string) => void;
   heading: string; // where focus goes when a change takes this row's button away
 }) {
@@ -135,6 +169,11 @@ export function PersonRow({
           <Tag tone={login.tone}>{login.label}</Tag>
           {login.detail && <span>{login.detail}</span>}
         </p>
+        {person.pendingEmail && (
+          <p className="text-xs break-words text-muted-foreground">
+            Email noted for their invite: {person.pendingEmail}. Nobody has been emailed yet.
+          </p>
+        )}
         {person.loginGiven && <p className="text-xs text-muted-foreground">{person.loginGiven}</p>}
         {person.ownerResendsInvite && (
           <p className="text-xs text-muted-foreground">
@@ -160,6 +199,9 @@ export function PersonRow({
         <div className="flex flex-wrap gap-2 @3xl:justify-end">
           {person.canGiveLogin && (
             <GiveLoginDialog person={person} giveLogin={actions.giveLogin} onDone={onDone} focusAfter={heading} />
+          )}
+          {person.canSetEmail && (
+            <SetEmailDialog person={person} setPendingEmail={actions.setPendingEmail} onDone={onDone} />
           )}
           {person.canResendInvite && (
             <ConfirmButton

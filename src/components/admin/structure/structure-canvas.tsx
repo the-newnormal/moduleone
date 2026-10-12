@@ -23,6 +23,7 @@ import {
   type LeadRow,
   type LoginStates,
   type MemberRow,
+  type PendingEmails,
   removeDescription,
 } from "@/app/admin/teams/[id]/team-view";
 import { focusSoon } from "@/components/admin/focus";
@@ -60,6 +61,7 @@ type Props = {
   leads: LeadRow[];
   grants: GrantRow[];
   logins?: LoginStates; // whether each login has been used; null if it couldn't be read
+  pendingEmails?: PendingEmails; // the emails noted for people's first invites; null if unread
   adminMemberId: string;
   actions: StructureActions;
   teamActions: Omit<TeamActions, "updateNode">;
@@ -95,7 +97,7 @@ const HANDLES = {
   people: { sourceHandle: "right", targetHandle: "left" },
 } as const;
 
-function Canvas({ rows, members, leads, grants, logins = null, adminMemberId, actions, teamActions }: Props) {
+function Canvas({ rows, members, leads, grants, logins = null, pendingEmails = null, adminMemberId, actions, teamActions }: Props) {
   const flow = useReactFlow();
   const [view, addMove] = useOptimistic(rows, (current: StructureRow[], move: TeamMove) => applyMove(current, move));
   const [people, addPlace] = useOptimistic(members, (current: MemberRow[], place: { memberId: string; to: string | null }) =>
@@ -143,15 +145,15 @@ function Canvas({ rows, members, leads, grants, logins = null, adminMemberId, ac
     () =>
       panelId === null || panelId === NO_TEAM_ID
         ? null
-        : buildTeamView({ teamId: panelId, adminMemberId, teams: view, members: people, leads, grants, logins }),
-    [panelId, adminMemberId, view, people, leads, grants, logins],
+        : buildTeamView({ teamId: panelId, adminMemberId, teams: view, members: people, leads, grants, logins, pendingEmails }),
+    [panelId, adminMemberId, view, people, leads, grants, logins, pendingEmails],
   );
   const noTeam = useMemo(
     () =>
       panelId === NO_TEAM_ID
-        ? buildNoTeamPeople({ adminMemberId, teams: view, members: people, leads, grants, logins })
+        ? buildNoTeamPeople({ adminMemberId, teams: view, members: people, leads, grants, logins, pendingEmails })
         : null,
-    [panelId, adminMemberId, view, people, leads, grants, logins],
+    [panelId, adminMemberId, view, people, leads, grants, logins, pendingEmails],
   );
   const noTeamCount = useMemo(() => people.filter((m) => m.team_id === null && m.removed_at === null).length, [people]);
   const openPanel = useCallback((id: string) => {
