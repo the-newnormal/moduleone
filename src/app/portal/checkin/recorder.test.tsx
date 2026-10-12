@@ -121,6 +121,16 @@ function liveRegionLog() {
   new MutationObserver(() => said.push(region.textContent ?? "")).observe(region, { childList: true, subtree: true, characterData: true });
   return said;
 }
+// The text of every node put into the recorder's live region: a screen reader reads each as it is
+// put in, even with the same words as the one it replaces.
+function addedToLiveRegion() {
+  const region = document.querySelector('[aria-live="polite"]')!;
+  const added: string[] = [];
+  new MutationObserver((records) => {
+    for (const record of records) for (const node of record.addedNodes) added.push(node.textContent ?? "");
+  }).observe(region, { childList: true, subtree: true });
+  return added;
+}
 // The line under the live question saying what is coming (live-prompt.tsx), word for word ("No more
 // follow-ups" with its ending, under the opening question or a closing line, or after a follow-up).
 const FOLLOW_UP_LINES = ["Starting follow-ups…", "Listening…", "Checking for a follow-up…", "A follow-up will show when you pause.", "No more follow-ups"];
@@ -1227,6 +1237,7 @@ describe("a live check-in", () => {
     const { Recorder } = await load();
     await render(<Recorder opening={OPENING} live />);
     const said = liveRegionLog();
+    const added = addedToLiveRegion();
     await click(button("Turn on my camera"));
     await advance(0);
     await click(button("Start recording"));
@@ -1246,7 +1257,7 @@ describe("a live check-in", () => {
     }
     // A pause: the coach is asked, and its answer shown.
     await turn("This week I mostly worked on the vendor onboarding for the Jurong site and we got the first three suppliers through the checks.", 3000);
-    return { said, turn, stop: () => act(() => onFailure?.()) };
+    return { said, added, turn, stop: () => act(() => onFailure?.()) };
   }
 
   // Nothing the line under the question says is ever announced: a screen reader's voice could reach
@@ -1326,9 +1337,24 @@ describe("a live check-in", () => {
       expect(stage()?.querySelector("h3")?.textContent).toBe(swapped.text);
       expect(stage()?.querySelector("h3 + p")?.textContent).toBe(LAST);
       expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe(`Follow-up question: ${swapped.text} ${LAST}`);
-      // Still said only the once.
+      // Still said only the once: its node was put in the once, and stayed.
       expect(announced(take.said)).toHaveLength(1);
+      expect(take.added.filter((words) => words.includes(LAST))).toHaveLength(1);
       neverAnnounced(take.said);
+
+      // It goes with the recording: never beside "Saving your recording…", "Saved." or the next take's controls.
+      saving();
+      await click(button("Finish"));
+      const region = () => document.querySelector('[aria-live="polite"]')?.textContent ?? "";
+      expect(region()).toContain("Saving your recording…");
+      expect(region()).not.toContain("No more follow-ups");
+      await act(async () => {
+        FakeRecorder.last?.ondataavailable?.({ data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }) });
+        FakeRecorder.last?.onstop?.();
+      });
+      for (let i = 0; i < 5; i++) await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(region()).toContain("Saved.");
+      expect(region()).not.toContain("No more follow-ups");
     } finally {
       vi.useRealTimers();
     }

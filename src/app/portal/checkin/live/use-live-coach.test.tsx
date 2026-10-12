@@ -12,6 +12,7 @@ import {
   MAX_READS,
   MIN_BUSY_MS,
   NO_TEXT_WHILE_SPEAKING_MS,
+  RENEW_AFTER_MS,
   TEXT_WAIT_MS,
 } from "./pacing";
 import type { TranscriptEvent } from "./transcript";
@@ -662,6 +663,28 @@ describe("an offer they have said more since", () => {
     expect(live.offersShown()).not.toContain(TEAM_QUESTION.id);
   });
 
+  // What they said before it showed was said to the question before: a read of only that would bring
+  // a question that, once they have clearly stopped, replaces this one while they think about it.
+  it("isn't replaced, while they think about it, by a read of what they said before it showed", async () => {
+    const second = deferred<CoachResponse>();
+    const confirming = deferred<CoachResponse>();
+    const live = setup();
+    await secondRead(live, second.promise);
+    live.deps.ask.mockReturnValueOnce(confirming.promise).mockResolvedValue(ok(TEAM_QUESTION));
+    await live.speak(1500);
+    live.say(TEAM_OK);
+    second.resolve(ok(QUESTION_1));
+    await live.pause(1500); // the read to confirm it goes
+    expect(live.deps.ask).toHaveBeenCalledTimes(3);
+    await live.speak(1500);
+    confirming.resolve(ok(QUESTION_2));
+    await live.speak(4500);
+    live.say(MORE); // 21 words since that read
+    await live.pause(10_000);
+    expect(live.view()).toMatchObject({ mode: "live", offer: QUESTION_2 });
+    expect(live.deps.ask).toHaveBeenCalledTimes(3);
+  });
+
   it("gets at most one read to confirm it while they go on in short phrases", async () => {
     const second = deferred<CoachResponse>();
     const live = setup();
@@ -747,6 +770,41 @@ describe("an offer they have said more since", () => {
     expect(live.offersShown()).not.toContain(TEAM_QUESTION.id);
   });
 
+  // Someone who talks 7 s at a time with 3.5 s pauses, and coach calls that take 2.5 s (Claude's read,
+  // the route's database calls, the network), with coach.md's pacing: every answer comes once they
+  // talk again, so every offer is held for what they said meanwhile. The one a read that heard them
+  // brings shows at their next pause: no newer read holds it back and replaces it with one held again.
+  it("still shows when every read answers after they talk again, and is only said to be coming once it will", async () => {
+    const coachMd: Pacing = { showAfterSilenceMs: 2500, stoppedSilenceMs: 6000, minQuestionMs: 20_000, minWordsPerQuestion: 20, firstFollowUpAfterMs: 25_000 };
+    const live = setup({ start: vi.fn(async () => ({ ...READY, pacing: coachMd })) });
+    let next = 10;
+    live.deps.ask.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          const offer: ShownOffer = { id: next++, kind: "question", text: "How did the team take it?" };
+          setTimeout(() => resolve(ok(offer)), 2500);
+        }),
+    );
+    const startedAt = Date.now();
+    await live.record();
+    await live.pause(500); // quiet: the meter learns the room
+    while (Date.now() - startedAt < 210_000) {
+      await live.speak(7000);
+      live.say(MORE);
+      await live.pause(3500);
+    }
+    expect(new Set(live.offersShown().filter((id) => id !== 0)).size).toBeGreaterThanOrEqual(3);
+    // "A follow-up will show when you pause." only ever gives way to that follow-up.
+    expect(live.statuses()).toContain("ready");
+    const views = live.views();
+    views.forEach((view, i) => {
+      const after = views[i + 1];
+      if (view.mode === "live" && view.status === "ready" && after && !(after.mode === "live" && after.status === "ready")) {
+        expect(after.offer.id).not.toBe(view.offer.id);
+      }
+    });
+  });
+
   it("is shown at the pause when no read is left to confirm it", async () => {
     const last = deferred<CoachResponse>();
     const live = setup();
@@ -773,6 +831,108 @@ describe("an offer they have said more since", () => {
 
 // The line under the question (followUpStatus in pacing.ts): starting, listening, checking for a
 // follow-up, one ready for their next pause, or no more. Only "ready" says one is coming.
+// Someone who talks on with pauses long enough for a read but too short for a question to show
+// (2.5 s here, as in coach.md): a question a read that heard them brought waits, as it is, for their
+// next pause, however long they talk.
+describe("a question lined up to show while they talk on", () => {
+  const start = vi.fn(async () => ({ ...READY, pacing: { ...PACING, showAfterSilenceMs: 2500 } }));
+
+  // QUESTION_2 lined up by a read that heard them; returns when that read was asked for.
+  async function lineUp(live: ReturnType<typeof setup>) {
+    live.deps.ask.mockResolvedValueOnce(ok(QUESTION_1)).mockResolvedValueOnce(ok(QUESTION_2));
+    const startedAt = Date.now();
+    await firstRead(live); // QUESTION_1 waits: too early for a follow-up
+    await live.speak(8000);
+    live.say(MORE);
+    await live.speak(8000); // past 20 s: QUESTION_1 is held for what they said
+    await live.pause(1800); // a read that heard them goes, and answers at once
+    expect(live.deps.ask).toHaveBeenCalledTimes(2);
+    expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 }, status: "ready" });
+    return startedAt + live.deps.ask.mock.calls[1][0].elapsedMs;
+  }
+
+  // Talks on until the read behind the waiting question is RENEW_AFTER_MS old, with no read meanwhile.
+  async function talkPast(live: ReturnType<typeof setup>, readAt: number) {
+    while (Date.now() + 7800 < readAt + RENEW_AFTER_MS) {
+      await live.speak(6000);
+      live.say(MORE);
+      await live.pause(1800);
+    }
+    expect(live.deps.ask).toHaveBeenCalledTimes(2);
+    expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 }, status: "ready" });
+    await live.speak(readAt + RENEW_AFTER_MS - Date.now() + 500);
+    live.say(MORE);
+  }
+
+  it("is renewed once its read is 30 s old, and the question that renews it is the one that shows", async () => {
+    const live = setup({ start });
+    const readAt = await lineUp(live);
+    await talkPast(live, readAt);
+    live.deps.ask.mockResolvedValueOnce(ok(TEAM_QUESTION));
+    await live.pause(1800); // a read goes, and answers at once: too short a pause for it to show
+    expect(live.deps.ask).toHaveBeenCalledTimes(3);
+    expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 }, status: "ready" });
+    // It isn't held for what they say next: a read that heard them brought it.
+    await live.speak(6000);
+    live.say(MORE);
+    expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 }, status: "ready" });
+    await live.pause(3000);
+    expect(live.view()).toMatchObject({ mode: "live", offer: TEAM_QUESTION, status: "listening" });
+    expect(live.offersShown()).not.toContain(QUESTION_2.id);
+    expect(live.deps.ask).toHaveBeenCalledTimes(3);
+  });
+
+  it("still shows at their next pause while the read renewing it is out, and that read's answer then changes nothing", async () => {
+    const renewing = deferred<CoachResponse>();
+    const live = setup({ start });
+    const readAt = await lineUp(live);
+    await talkPast(live, readAt);
+    live.deps.ask.mockReturnValueOnce(renewing.promise);
+    await live.pause(1800);
+    expect(live.deps.ask).toHaveBeenCalledTimes(3);
+    await live.speak(4000);
+    expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 }, status: "ready" });
+    await live.pause(3000);
+    expect(live.view()).toMatchObject({ mode: "live", offer: QUESTION_2, status: "listening" });
+    expect(live.statuses()).not.toContain("checking"); // that read is about the question before
+    renewing.resolve(lastOne(null)); // nothing to ask, and none after: of the question before
+    await live.pause(10_000);
+    expect(live.view()).toMatchObject({ mode: "live", offer: QUESTION_2, status: "listening" });
+    expect(live.statuses()).not.toContain("no_more");
+  });
+
+  it("goes when the read renewing it finds nothing to ask now", async () => {
+    const live = setup({ start });
+    const readAt = await lineUp(live);
+    await talkPast(live, readAt);
+    live.deps.ask.mockResolvedValue(ok(null));
+    await live.pause(1800);
+    expect(live.deps.ask).toHaveBeenCalledTimes(3);
+    expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 }, status: "listening" });
+    await live.pause(10_000);
+    expect(live.offersShown()).not.toContain(QUESTION_2.id);
+  });
+
+  it.each([
+    ["fails", (live: ReturnType<typeof setup>) => live.deps.ask.mockRejectedValueOnce(new Error("network")), 4000],
+    ["is turned away", (live: ReturnType<typeof setup>) => live.deps.ask.mockResolvedValueOnce({ status: "error", code: "unavailable" }), 4000],
+    ["comes back degraded", (live: ReturnType<typeof setup>) => live.deps.ask.mockResolvedValueOnce(ok(TEAM_QUESTION, true)), 4000],
+    ["never answers", (live: ReturnType<typeof setup>) => live.deps.ask.mockReturnValueOnce(new Promise(() => {})), COACH_TIMEOUT_MS + 1000],
+  ])("stays as it was when the read renewing it %s", async (_name, answer, talkMs) => {
+    const live = setup({ start });
+    const readAt = await lineUp(live);
+    await talkPast(live, readAt);
+    answer(live);
+    await live.pause(1800);
+    expect(live.deps.ask).toHaveBeenCalledTimes(3);
+    await live.speak(talkMs);
+    expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 }, status: "ready" });
+    await live.pause(3000);
+    expect(live.view()).toMatchObject({ mode: "live", offer: QUESTION_2 });
+    expect(live.offersShown()).not.toContain(TEAM_QUESTION.id);
+  });
+});
+
 describe("what they're told is coming", () => {
   // The first view with this offer on screen.
   const firstWith = (live: ReturnType<typeof setup>, id: number) => live.views().find((v) => v.offer.id === id);
@@ -872,20 +1032,30 @@ describe("what they're told is coming", () => {
     expect(since(live, from).map(([, status]) => status)).not.toContain("ready");
   });
 
-  it("says one is ready, while they still talk, once the question on screen has had its time", async () => {
+  it("says one is ready, while they still talk, once a read that heard them has lined it up and the question on screen has had its time", async () => {
+    const confirming = deferred<CoachResponse>();
     const live = setup();
-    live.deps.ask.mockResolvedValueOnce(ok(QUESTION_1)).mockResolvedValueOnce(ok(QUESTION_2));
+    live.deps.ask.mockResolvedValueOnce(ok(QUESTION_1)).mockReturnValueOnce(confirming.promise);
     await firstRead(live);
     await live.speak(5000);
     live.say(MORE);
-    await live.speak(4000); // about 14 s in: the opening question hasn't had its time
+    await live.speak(11_000); // past 20 s, still talking
+    // QUESTION_1 waits, but its read never heard what they have said since: a read of that decides.
     expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 }, status: "listening" });
-    await live.speak(7000); // past 20 s, still talking
+    await live.pause(1500); // the read to confirm it goes
+    expect(live.deps.ask).toHaveBeenCalledTimes(2);
+    await live.speak(500);
+    confirming.resolve(ok(QUESTION_2));
+    await live.speak(TICK_MS);
     expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 }, status: "ready" });
-    // At the pause, a read that has heard them confirms a question, which shows with "Listening…".
+    // It shows, as it is, at their next pause, whatever they say meanwhile; no read holds it back.
+    await live.speak(6000);
+    live.say(MORE);
+    expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 }, status: "ready" });
     await live.pause(2000);
     expect(live.view()).toMatchObject({ mode: "live", offer: QUESTION_2, status: "listening" });
     expect(firstWith(live, QUESTION_2.id)).toMatchObject({ status: "listening" });
+    expect(live.deps.ask).toHaveBeenCalledTimes(2);
     // The new question has its own time: a question waiting while they talk on isn't ready yet.
     live.deps.ask.mockResolvedValueOnce(ok(TEAM_QUESTION));
     await live.speak(4000);
@@ -896,32 +1066,66 @@ describe("what they're told is coming", () => {
     expect(live.view()).toMatchObject({ mode: "live", offer: QUESTION_2, status: "listening" });
   });
 
+  // A question held for what they said after its read isn't lined up: the read of what they said may
+  // find it answered ("team ok lah"), and bring a closing line or nothing instead.
+  it("never says a question held for what they said since its read will show, as that read may bring a closing line", async () => {
+    const second = deferred<CoachResponse>();
+    const confirming = deferred<CoachResponse>();
+    const live = setup();
+    await slowSecondRead(live, second.promise);
+    live.deps.ask.mockReturnValueOnce(confirming.promise);
+    await live.speak(1500);
+    live.say(TEAM_OK);
+    const from = live.views().length;
+    second.resolve(ok(TEAM_QUESTION)); // held: they said TEAM_OK after its read was asked for
+    await live.speak(2000);
+    expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 }, status: "listening" });
+    await live.pause(1500); // the read to confirm it goes, and takes a while
+    expect(live.deps.ask).toHaveBeenCalledTimes(3);
+    expect(live.deps.ask.mock.calls[2][0]).toMatchObject({ reread: true });
+    await live.pause(1500);
+    expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 }, status: "checking" });
+    confirming.resolve(lastOne(COVERED)); // TEAM_OK was the last area worth asking about
+    await live.pause(TICK_MS);
+    expect(live.view()).toMatchObject({ mode: "live", offer: COVERED, status: "no_more" });
+    expect(since(live, from).map(([, status]) => status)).not.toContain("ready");
+    expect(live.offersShown()).not.toContain(TEAM_QUESTION.id);
+  });
+
   // Someone who talks on, with pauses long enough for a read but too short for a question to show
-  // (2.5 s, as in coach.md): the line says, without moving, that one will show when they pause, all
-  // the while.
+  // (2.5 s, as in coach.md): once a read that heard them lines one up, the line says, without moving,
+  // that it will show when they pause, all the while, and it does once they do.
   it("keeps saying, still, that a follow-up will show when they pause, while they talk on", async () => {
     const live = setup({ start: vi.fn(async () => ({ ...READY, pacing: { ...PACING, showAfterSilenceMs: 2500 } })) });
     let next = 10;
     live.deps.ask.mockImplementation(async () => ok({ id: next++, kind: "question", text: "What came of the vendor onboarding?" }));
-    await firstRead(live);
+    await firstRead(live); // offer 10 waits: too early for a follow-up
     await live.speak(8000);
     live.say(MORE);
-    await live.speak(8000); // past 20 s: the opening question has had its time
-    const from = live.views().length;
+    await live.speak(8000); // past 20 s: the opening question has had its time; offer 10 is held for what they said
+    expect(live.view()).toMatchObject({ offer: { id: 0 }, status: "listening" });
+    await live.pause(1800); // a read that heard them goes out, and answers at once: offer 11
+    expect(live.deps.ask).toHaveBeenCalledTimes(2);
     expect(live.view()).toMatchObject({ offer: { id: 0 }, status: "ready" });
+    const from = live.views().length;
     for (let i = 0; i < 8; i++) {
-      await live.pause(1800); // a read goes out, and answers at once
       await live.speak(6000);
       live.say(MORE);
+      await live.pause(1800);
     }
-    expect(live.deps.ask.mock.calls.length).toBeGreaterThan(4);
+    // Over this minute, no read holds it back; only one every RENEW_AFTER_MS renews it (so it isn't
+    // about what they said long ago); and nothing changed on screen.
+    expect(live.deps.ask).toHaveBeenCalledTimes(2 + Math.floor((8 * 7800) / RENEW_AFTER_MS));
     expect(live.view()).toMatchObject({ offer: { id: 0 }, status: "ready" });
-    expect(live.views().length).toBe(from); // nothing changed on screen meanwhile
+    expect(live.views().length).toBe(from);
+    await live.pause(1000); // a pause long enough: the latest renewal shows
+    expect(live.view()).toMatchObject({ offer: { id: next - 1 }, status: "listening" });
   });
 
   it("keeps saying one is ready when a turn's final text has fewer words than its draft", async () => {
+    const confirming = deferred<CoachResponse>();
     const live = setup();
-    live.deps.ask.mockResolvedValueOnce(ok(QUESTION_1));
+    live.deps.ask.mockResolvedValueOnce(ok(QUESTION_1)).mockReturnValueOnce(confirming.promise);
     await live.record();
     await live.pause(500);
     await live.speak(3000);
@@ -929,6 +1133,12 @@ describe("what they're told is coming", () => {
     await live.pause(2500); // the read waits for the turn's final text a while, then goes without it
     expect(live.deps.ask).toHaveBeenCalledOnce();
     await live.speak(16_000); // past 20 s, still talking
+    live.say("Ya.");
+    await live.pause(2400); // a read that heard them goes, once the turn's text has had its while
+    expect(live.deps.ask).toHaveBeenCalledTimes(2);
+    await live.speak(500);
+    confirming.resolve(ok(QUESTION_2));
+    await live.speak(TICK_MS);
     expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 }, status: "ready" });
     live.finish(turn, "Busy week lah."); // now too few words for the question to have had its time
     await live.speak(1000);
@@ -1000,7 +1210,8 @@ describe("what they're told is coming", () => {
   it("keeps listening while a closing line waits, even with a slow read out", async () => {
     const confirming = deferred<CoachResponse>();
     const live = setup();
-    live.deps.ask.mockResolvedValueOnce(ok(COVERED)).mockReturnValueOnce(confirming.promise);
+    // As the server sends it: no question can follow a closing line. That holds once it shows.
+    live.deps.ask.mockResolvedValueOnce(lastOne(COVERED)).mockReturnValueOnce(confirming.promise);
     await firstRead(live); // COVERED waits: too early for it
     await live.speak(8000);
     live.say(MORE);
@@ -1066,6 +1277,24 @@ describe("what they're told is coming", () => {
       expect(live.view()).toMatchObject({ offer: { id: 0 }, status: "listening" });
     });
 
+    // What may still come is said for an offer only once it shows: one dropped before then says nothing.
+    it("keeps listening once a last question that waited is dropped before it shows", async () => {
+      const second = deferred<CoachResponse>();
+      const live = setup();
+      live.deps.ask.mockResolvedValueOnce(ok(null)).mockReturnValueOnce(second.promise);
+      await firstRead(live);
+      await live.speak(16_000);
+      live.say(MORE);
+      await live.pause(1600);
+      expect(live.deps.ask).toHaveBeenCalledTimes(2);
+      await live.speak(1500);
+      second.resolve(lastOne(TEAM_QUESTION));
+      await live.pause(10_000); // what they said after its read never comes back as text: it goes
+      expect(live.offersShown()).not.toContain(TEAM_QUESTION.id);
+      expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 }, status: "listening" });
+      expect(live.statuses()).not.toContain("no_more");
+    });
+
     it("takes a server that doesn't say as more may come", async () => {
       const live = setup();
       live.deps.ask.mockResolvedValueOnce({ ...lastOne(QUESTION_1), more: undefined });
@@ -1117,7 +1346,7 @@ describe("what they're told is coming", () => {
       expect(since(live, from)).toEqual([[LATE.id, "no_more"]]);
     });
 
-    it("stops saying a held question is ready once the time may be over, as its read again can only bring the closing line", async () => {
+    it("says none can come once the time is surely over, with a held question waiting, as its read again can only bring the closing line", async () => {
       const confirming = deferred<CoachResponse>();
       const live = timed();
       live.deps.ask.mockResolvedValueOnce(ok(QUESTION_1)).mockReturnValueOnce(confirming.promise);
@@ -1125,8 +1354,9 @@ describe("what they're told is coming", () => {
       await firstRead(live); // QUESTION_1 waits
       await live.speak(8000); // they talk on: it waits for a read that has heard them
       live.say(MORE);
+      const from = live.views().length;
       await talkOn(live, startedAt + LIMIT_MS - 100); // past the opening question's time, still talking
-      expect(live.view()).toMatchObject({ offer: { id: 0 }, status: "ready" });
+      expect(live.view()).toMatchObject({ offer: { id: 0 }, status: "listening" });
       await live.speak(TICK_MS);
       expect(live.view()).toMatchObject({ offer: { id: 0 }, status: "listening" });
       await live.speak(LIMIT_SLACK_MS);
@@ -1140,6 +1370,28 @@ describe("what they're told is coming", () => {
       expect(live.view()).toMatchObject({ offer: LATE, status: "no_more" });
       expect(live.offersShown()).not.toContain(QUESTION_1.id);
       expect(live.statuses()).not.toContain("checking");
+      expect(since(live, from).map(([, status]) => status)).not.toContain("ready");
+    });
+
+    // The server measures the time from when it started the session, which it did before the start
+    // answered: a slow start (a cold server) moves it later, so the recorder measures from its answer.
+    it("measures it from when the start answered, not from when the recording started", async () => {
+      const start = deferred<LiveReady>();
+      const live = setup({ start: vi.fn(() => start.promise) });
+      const startedAt = Date.now();
+      await live.record();
+      await live.pause(500);
+      await live.speak(2500);
+      start.resolve({ ...READY, pacing: { ...PACING, noNewQuestionsAfterMs: LIMIT_MS } });
+      await advance(0);
+      const answeredAt = Date.now();
+      expect(answeredAt - startedAt).toBe(3000);
+      await talkOn(live, startedAt + LIMIT_MS + LIMIT_SLACK_MS + TICK_MS);
+      expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 }, status: "listening" });
+      await talkOn(live, answeredAt + LIMIT_MS + LIMIT_SLACK_MS - TICK_MS);
+      expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 }, status: "listening" });
+      await talkOn(live, answeredAt + LIMIT_MS + LIMIT_SLACK_MS + TICK_MS);
+      expect(live.view()).toMatchObject({ mode: "live", offer: { id: 0 }, status: "no_more" });
     });
 
     // A question already on its way waits for nothing they said since: it still shows past the time.

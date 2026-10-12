@@ -200,6 +200,56 @@ describe("POST /portal/checkin/live/coach", () => {
       const body = await (await POST(post())).json();
       expect(body).toMatchObject({ offer: null, more: true });
     });
+
+    // A save that fails (a database error, or its timeout) keeps nothing of the call: the next one
+    // goes on from the state this one found, so that is what `more` is said for.
+    describe("when the call's state isn't saved", () => {
+      // activity_work was skipped; activity_outcome, which replaced it, is on screen.
+      const afterOneSkip: CoachState = {
+        ...initialState(),
+        offers: [...initialState().offers, question(1, "activity_work"), question(2, "activity_outcome")],
+        asked: ["activity_outcome"],
+        skipped: ["activity_work"],
+        followUps: 1,
+        perArea: { activity: 1 },
+        skipsInARow: 1,
+        current: 2,
+        nextOfferId: 3,
+      };
+
+      it("says more can follow after a second skip in a row that wasn't kept", async () => {
+        vi.mocked(claimCoachCall).mockResolvedValue(claim({ state: afterOneSkip }));
+        // Kept, the second skip in a row ends the questions.
+        expect(await (await POST(post({ shown: 2, skip: 2 }))).json()).toMatchObject({ offer: { kind: "covered" }, more: false });
+        vi.mocked(saveCoachState).mockResolvedValue(false);
+        expect(await (await POST(post({ shown: 2, skip: 2 }))).json()).toMatchObject({ offer: null, more: true });
+      });
+
+      it("says more can follow after a read of distress that wasn't kept", async () => {
+        vi.mocked(readTranscript).mockResolvedValue(result({ ...READ, tone: "distress" }));
+        expect(await (await POST(post())).json()).toMatchObject({ offer: { kind: "closing" }, more: false });
+        vi.mocked(saveCoachState).mockResolvedValue(false);
+        expect(await (await POST(post())).json()).toMatchObject({ offer: null, more: true });
+      });
+
+      it("says none can at the most follow-ups, though the skip that wasn't kept would have made room", async () => {
+        const max = RUBRIC.settings.maxFollowUps;
+        const asked = RUBRIC.topics.filter((t) => t.area !== "excellence").slice(0, max).map((t) => t.id);
+        const state: CoachState = {
+          ...initialState(),
+          offers: [...initialState().offers, ...asked.map((topic, i) => question(i + 1, topic))],
+          coverage: Object.fromEntries(asked.map((id) => [id, "brief"])),
+          asked,
+          followUps: max,
+          perArea: { activity: 2, morale: 2 },
+          current: max,
+          nextOfferId: max + 1,
+        };
+        vi.mocked(claimCoachCall).mockResolvedValue(claim({ state }));
+        vi.mocked(saveCoachState).mockResolvedValue(false);
+        expect(await (await POST(post({ shown: max, skip: max }))).json()).toMatchObject({ offer: null, more: false });
+      });
+    });
   });
 
   it("carries on from what was known when Claude's read fails, and says so", async () => {

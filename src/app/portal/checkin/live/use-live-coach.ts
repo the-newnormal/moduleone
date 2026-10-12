@@ -33,6 +33,7 @@ import {
   NO_TEXT_WHILE_SPEAKING_MS,
   questionHadItsTime,
   questionTime,
+  RENEW_AFTER_MS,
   rereadDue,
   shouldCommit,
   shouldRead,
@@ -129,18 +130,20 @@ export type LiveCoachController = {
 type Timer = ReturnType<typeof setTimeout>;
 
 // When a read was asked for, and how much they had said by then: words of text, time spoken (some
-// of it may not have come back as text yet), and turns whose transcription had failed; and whether
-// it was a held offer's one read to confirm it (its own offer is then never held).
-type ReadAsked = { requestedAt: number; words: number; spokenAt: number; lost: number; confirms: boolean };
+// of it may not have come back as text yet), and turns whose transcription had failed; whether it
+// was a held offer's one read to confirm it (its own offer is then never held); and whether it
+// renews a question lined up to show (RENEW_AFTER_MS).
+type ReadAsked = { requestedAt: number; words: number; spokenAt: number; lost: number; confirms: boolean; renews: boolean };
 
 // The coach's latest offer, waiting for a pause, with the read behind it, and whether a follow-up
 // question can still come once it is on screen (the coach call's more).
 type Pending = { offer: ShownOffer; more: boolean } & ReadAsked;
 
 // A read's options: reread asks the server to read any new words with Claude, however few (they
-// may answer what an offer asks); confirms marks a held offer's one read to confirm it.
-type ReadOptions = { reread: boolean; confirms: boolean };
-const PLAIN_READ: ReadOptions = { reread: false, confirms: false };
+// may answer what an offer asks); confirms marks a held offer's one read to confirm it, and renews
+// a read that renews a question lined up to show (its offer is never held either).
+type ReadOptions = { reread: boolean; confirms: boolean; renews: boolean };
+const PLAIN_READ: ReadOptions = { reread: false, confirms: false, renews: false };
 
 // One take's live coaching, from Start to stop.
 type Run = {
@@ -181,8 +184,9 @@ type Run = {
   wordsAtLastRead: number;
   lastAskAt: number | null;
   // The coach call in flight (one at a time), numbered so a late answer is recognised; skip: the
-  // offer a "Different question" replaces, null for a read.
-  call: { seq: number; controller: AbortController; timer: Timer; skip: number | null } | null;
+  // offer a "Different question" replaces, null for a read; renews: a read that renews a
+  // question lined up to show, which never holds it back.
+  call: { seq: number; controller: AbortController; timer: Timer; skip: number | null; renews: boolean } | null;
   seq: number;
   failures: number;
   // The offer they asked to replace with "Different question", until that call is sent, and when
@@ -296,22 +300,33 @@ export function createLiveCoach({
     }
     const time = (when: number) =>
       questionTime({ now: when, startedAt: r.startedAt, startAnsweredAt: r.startAnsweredAt, limitMs: r.pacing?.noNewQuestionsAfterMs });
-    // Only from a read asked for since the question on screen appeared, as shouldShow. A question
-    // held for what they have said since is read again before it shows: once the time for new
-    // questions may be over, that read may only bring "Time is nearly up".
+    // Only from a read asked for since the question on screen appeared, as shouldShow. A question is
+    // lined up only once nothing can stop it showing as it is: one held for what they have said since
+    // is read again first, and a newer read out replaces it or drops it (shouldShow), so either may
+    // bring another question, a closing line or nothing; and one they are talking over may be held a
+    // moment later. A read that renews it holds nothing back: the question shows at their next
+    // pause unless that read has answered first. Once the time for new questions may be over, a read
+    // again may only bring "Time is nearly up".
     const pending = r.pending && r.pending.requestedAt >= r.shownAt ? r.pending : null;
+    const newerRead = r.call !== null && r.call.skip === null && !r.call.renews;
+    const lined = (p: Pending) =>
+      !holding(r, p, at).held && !newerRead && !(mayHold(r, p) && r.voice.speaking && spokenMs(r.voice, at) > p.spokenAt);
     const waiting =
       pending === null
         ? null
         : pending.offer.kind !== "question"
           ? "closing"
-          : !holding(r, pending, at).held || time(at) === "open"
+          : lined(pending)
             ? "question"
-            : null;
+            : time(at) === "open"
+              ? "held"
+              : null;
     // A "Different question" for the question on screen (a repeat press, or one left over from the
-    // question before, doesn't count), or a read that could still bring a question back.
+    // question before, doesn't count), or a read that could still bring a question back: not one
+    // asked for before the question on screen appeared (a read renewing it, which then brings nothing).
     const skipping = r.skipWanted === r.shown.id || r.call?.skip === r.shown.id;
-    const readAt = r.call?.skip === null && r.more && r.lastAskAt !== null && time(r.lastAskAt) !== "over" ? r.lastAskAt : null;
+    const readAt =
+      r.call?.skip === null && r.more && r.lastAskAt !== null && r.lastAskAt >= r.shownAt && time(r.lastAskAt) !== "over" ? r.lastAskAt : null;
     return followUpStatus({
       connected: r.connection !== null,
       closingShown: r.shown.kind !== "question",
@@ -328,7 +343,13 @@ export function createLiveCoach({
   // a read that has heard them (held): see tick.
   function holding(r: Run, pending: Pending, at: number): { heard: boolean; held: boolean } {
     const heard = heardSinceRead({ words: r.words, wordsAtRead: pending.words, spokenMs: spokenMs(r.voice, at), spokenAtRead: pending.spokenAt });
-    return { heard, held: heard && !pending.confirms && r.reads < MAX_READS };
+    return { heard, held: heard && mayHold(r, pending) };
+  }
+
+  // Whether what they say after its read can hold the waiting offer: not one a read that heard them
+  // brought, nor once no read is left to confirm it.
+  function mayHold(r: Run, pending: Pending): boolean {
+    return !pending.confirms && r.reads < MAX_READS;
   }
 
   // Each tick: the recorder re-renders only when the line under the question changes.
@@ -473,11 +494,11 @@ export function createLiveCoach({
     publish(r);
   }
 
-  async function ask(r: Run, skip: number | null, { reread, confirms }: ReadOptions = PLAIN_READ) {
+  async function ask(r: Run, skip: number | null, { reread, confirms, renews }: ReadOptions = PLAIN_READ) {
     const sessionId = r.sessionId;
     if (sessionId === null) return;
     const at = deps.now();
-    const asked: ReadAsked = { requestedAt: at, words: r.words, spokenAt: spokenMs(r.voice, at), lost: r.turnsLost, confirms };
+    const asked: ReadAsked = { requestedAt: at, words: r.words, spokenAt: spokenMs(r.voice, at), lost: r.turnsLost, confirms, renews };
     // A reread that never reaches Claude (timed out, failed, turned away, or degraded) still owes
     // one: without it, the next few words go unread and a dropped question can come straight back.
     const stillOwed = () => {
@@ -489,11 +510,11 @@ export function createLiveCoach({
       if (r.call?.seq !== seq) return;
       r.call = null;
       controller.abort();
-      if (skip === null) r.pending = null; // see answer()
+      if (skip === null && !renews) r.pending = null; // see answer()
       stillOwed();
       if (active(r)) failed(r);
     }, COACH_TIMEOUT_MS);
-    r.call = { seq, controller, timer, skip };
+    r.call = { seq, controller, timer, skip, renews };
     r.lastAskAt = at;
     if (skip === null) {
       r.reads += 1;
@@ -532,8 +553,9 @@ export function createLiveCoach({
 
   function answer(r: Run, response: CoachResponse | null, asked: ReadAsked, skip: number | null) {
     // A read that heard more came back with nothing to weigh (failed, or turned away): the offer
-    // waiting from an earlier read may be about what they have just covered, so it goes too.
-    if (skip === null && (response === null || response.status === "error")) r.pending = null;
+    // waiting from an earlier read may be about what they have just covered, so it goes too. Not
+    // for a read that renews a question lined up to show: that one stays as it was.
+    if (skip === null && !asked.renews && (response === null || response.status === "error")) r.pending = null;
     if (response === null) return failed(r);
     if (response.status === "error") {
       // Too soon after the last call: a "Different question" waits a moment and goes again.
@@ -554,6 +576,11 @@ export function createLiveCoach({
     } else {
       r.failures = 0;
     }
+    // A read that renewed a question which has shown since: its answer is about the question before.
+    if (skip === null && asked.requestedAt < r.shownAt) {
+      if (touchedNow) publish(r, r.status);
+      return;
+    }
     const offer = response.offer && response.offer.id !== r.shown.id ? response.offer : null;
     // A server from before it doesn't say: then more may always come.
     const more = response.more !== false;
@@ -564,8 +591,11 @@ export function createLiveCoach({
     if (offer === null) r.more = more;
     // A "Different question" waiting to be sent answers instead of this. A degraded read never heard
     // the newest speech: its offer, like the one held back for it, may be about what they have just
-    // covered, so neither waits to be shown.
-    if (skip === null) r.pending = offer && !response.degraded && r.skipWanted === null ? { offer, more, ...asked } : null;
+    // covered, so neither waits to be shown; but a degraded read that renews a question lined up
+    // to show leaves it as it was.
+    if (skip === null && !(asked.renews && response.degraded)) {
+      r.pending = offer && !response.degraded && r.skipWanted === null ? { offer, more, ...asked } : null;
+    }
     // The line moves on at the next tick, once a question that may show at once has: it never says
     // one will show just before it does.
     if (touchedNow) publish(r, r.status);
@@ -636,12 +666,24 @@ export function createLiveCoach({
           onOpening,
         });
         const reread = rereadDue({ held, hadItsTime, silenceMs: silence, pacing });
+        // An offer waits that will show as it is at the next pause it may (one a read has confirmed,
+        // even if they have said more since): no read until it has. A newer read would hold it back
+        // (shouldShow), and should its answer come once they talk again, that offer would be held in
+        // turn, again and again, and nothing would show. Only once the read behind it is
+        // RENEW_AFTER_MS old, so it isn't about what they said long ago, a read that renews it:
+        // that one holds nothing back, and its offer, should it answer first, replaces it as it is.
+        const showsAsItIs = pending !== null && pending.requestedAt >= r.shownAt && !held;
+        const renew = showsAsItIs && at - pending.requestedAt >= RENEW_AFTER_MS;
         if (
+          (!showsAsItIs || renew) &&
           shouldRead({
             now: at,
             silenceMs: silence,
             words: r.words,
-            wordsAtLastRead: r.wordsAtLastRead,
+            // New words since the question on screen appeared, too: a read of only what they said to
+            // the one before would bring an offer that, once they have clearly stopped, shows straight
+            // after this one, while they think about it.
+            wordsAtLastRead: Math.max(r.wordsAtLastRead, r.wordsAtShown),
             lastReadAt: r.lastReadAt,
             inFlight: false,
             reads: r.reads,
@@ -650,7 +692,7 @@ export function createLiveCoach({
             textOwed: r.commits > r.turnsBack && at - r.lastCommitAt < TEXT_WAIT_MS,
           })
         ) {
-          void ask(r, null, { reread: heard || r.rereadOwed, confirms: reread });
+          void ask(r, null, { reread: heard || r.rereadOwed, confirms: reread || renew, renews: renew });
         }
       }
     }
@@ -676,8 +718,9 @@ export function createLiveCoach({
         elapsedMs: at - r.startedAt,
         onOpening,
         offerRequestedAt: pending.requestedAt,
-        // Any read still out was asked for after the pending offer's, which has answered.
-        newerReadOut: r.call !== null,
+        // Any read still out was asked for after the pending offer's, which has answered. One that
+        // renews it holds it back no longer than it takes to answer first.
+        newerReadOut: r.call !== null && !r.call.renews,
         heardSinceOffer: held,
       })
     ) {
