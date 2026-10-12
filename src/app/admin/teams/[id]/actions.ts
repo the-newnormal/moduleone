@@ -511,6 +511,11 @@ async function discardLogin(service: ServiceClient, authUserId: string, createdH
   if (error) logError(`${context} cleanup`, error);
 }
 
+// Linking a login whose address is noted for someone else's invite: 0014's
+// members_login_not_noted_elsewhere refuses it in these words.
+const isNotedElsewhere = (error: { code?: string; message?: string }) =>
+  error.code === "23514" && error.message === NOTED_FOR_SOMEONE_ELSE;
+
 type LinkOutcome = { outcome: "linked" | "note_changed" | "changed"; error: { code?: string; message?: string } | null };
 
 // giveLogin's link: the new login on the member row, only if it still has none, wasn't removed and
@@ -653,6 +658,12 @@ export async function giveLogin(memberId: string, email: string, asNoted = false
     // The address belongs to another member's login that hasn't been used yet.
     if (linkError.code === "23505" && (linkError.message ?? "").includes("auth_user_id")) {
       return fail(EMAIL_TAKEN);
+    }
+    // The address was noted for someone else's invite after step 3 looked (0014's
+    // members_login_not_noted_elsewhere refuses the link): the login made here goes again.
+    if (isNotedElsewhere(linkError)) {
+      await discardLogin(service, authUserId, createdHere);
+      return fail(NOTED_FOR_SOMEONE_ELSE);
     }
     logError("giveLogin link", linkError);
     await discardLogin(service, authUserId, createdHere);
@@ -1177,6 +1188,8 @@ async function replaceUnusedLogin(
     await discardLogin(service, newLogin, createdHere, "changeEmail");
     // The address belongs to another member's login that hasn't been used yet.
     if (linkError.code === "23505" && (linkError.message ?? "").includes("auth_user_id")) return fail(EMAIL_IN_USE);
+    // The new address is noted for someone else's invite (0014's members_login_not_noted_elsewhere).
+    if (isNotedElsewhere(linkError)) return fail(NOTED_FOR_SOMEONE_ELSE);
     logError("changeEmail link", linkError);
     return fail(GENERIC_ERROR);
   }

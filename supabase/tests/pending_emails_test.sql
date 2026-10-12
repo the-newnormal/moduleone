@@ -20,7 +20,7 @@
 --   (made a Master Admin), stays (renamed, moved, made a leader, taken out of the team) and deleted
 --   (deleted by the project owner).
 begin;
-select plan(151);
+select plan(166);
 
 -- 'SQLSTATE: message' for a statement that fails, so a test can check both; 'no error' otherwise.
 create function pg_temp.error_of(sql text) returns text language plpgsql as $$
@@ -723,11 +723,7 @@ select results_eq(
 
 -- ---------- link_noted_login: Send invites links a login only while the address is still noted ----------
 reset role;
-insert into auth.users (id, email) values
-  ('ae000000-0000-4000-8000-000000000010', 'link@pending.test'),
-  ('ae000000-0000-4000-8000-000000000011', 'stale@pending.test'),
-  ('ae000000-0000-4000-8000-000000000012', 'nonote@pending.test'),
-  ('ae000000-0000-4000-8000-000000000013', 'late@pending.test');
+-- As it happens: the address is noted first, then the invite makes the login, then it's linked.
 insert into members (id, name, team_id, role) values
   ('ce000000-0000-4000-8000-000000000030', 'PE link', 'be000000-0000-4000-8000-000000000003', 'member'),
   ('ce000000-0000-4000-8000-000000000031', 'PE stale', 'be000000-0000-4000-8000-000000000003', 'member'),
@@ -737,6 +733,11 @@ insert into pending_login_emails (member_id, email) values
   ('ce000000-0000-4000-8000-000000000030', 'link@pending.test'),
   ('ce000000-0000-4000-8000-000000000031', 'corrected@pending.test'),
   ('ce000000-0000-4000-8000-000000000033', 'taken@pending.test');
+insert into auth.users (id, email) values
+  ('ae000000-0000-4000-8000-000000000010', 'link@pending.test'),
+  ('ae000000-0000-4000-8000-000000000011', 'stale@pending.test'),
+  ('ae000000-0000-4000-8000-000000000012', 'nonote@pending.test'),
+  ('ae000000-0000-4000-8000-000000000013', 'late@pending.test');
 
 select function_privs_are('public', 'link_noted_login', array['uuid', 'uuid', 'text', 'uuid'], 'service_role', array['EXECUTE'],
   'the server can call link_noted_login');
@@ -793,6 +794,93 @@ select results_eq(
            ('PE stale', null, null, false, 'corrected@pending.test'),
            ('PE taken', null, null, false, 'taken@pending.test')$$,
   'the linked person has the login and who gave it, and their note is forgotten; nobody else changed'
+);
+
+-- ---------- an address is noted for someone, or is someone's login, never both ----------
+-- Noting an address that already has a login is refused, naming it; linking a login whose address
+-- is noted for someone else is refused. Both lock the address first, so the second of two at once
+-- sees the first (a second session can't be driven from here, so the locks are checked below).
+reset role;
+insert into members (id, name, team_id, role) values
+  ('ce000000-0000-4000-8000-000000000040', 'PE fresh', 'be000000-0000-4000-8000-000000000003', 'member'),
+  ('ce000000-0000-4000-8000-000000000041', 'PE rival', 'be000000-0000-4000-8000-000000000003', 'member');
+insert into pending_login_emails (member_id, email) values
+  ('ce000000-0000-4000-8000-000000000041', 'rival@pending.test');
+
+set local role authenticated;
+set local request.jwt.claims to '{"sub": "ae000000-0000-4000-8000-000000000001", "role": "authenticated"}';
+select is(
+  pg_temp.error_of($$insert into public.pending_login_emails (member_id, email)
+    values ('ce000000-0000-4000-8000-000000000040', 'signed.in@pending.test')$$),
+  '23514: signed.in@pending.test already has a login. Use another address.',
+  'an admin can''t note an address that already has a login (someone else''s), and is told which'
+);
+select is(
+  pg_temp.error_of($$update public.pending_login_emails set email = 'invited@pending.test'
+    where member_id = 'ce000000-0000-4000-8000-000000000041'$$),
+  '23514: invited@pending.test already has a login. Use another address.',
+  'nor change a note to one, even a login nobody has used yet'
+);
+select is(
+  pg_temp.error_of($$select public.admin_add_members('be000000-0000-4000-8000-000000000003',
+    '[{"name": "PE late list", "role": "member", "email": "admin@pending.test"}]'::jsonb)$$),
+  '23514: admin@pending.test already has a login. Use another address.',
+  'nor add a list with one, which then adds nobody'
+);
+select is(pg_temp.n($$select 1 from public.members where name = 'PE late list'$$), 0, 'nobody from that list was added');
+
+reset role;
+insert into auth.users (id, email) values ('ae000000-0000-4000-8000-000000000020', 'rival@pending.test');
+set local role service_role;
+set local request.jwt.claims to '{"role": "service_role"}';
+select is(
+  pg_temp.error_of($$update public.members set auth_user_id = 'ae000000-0000-4000-8000-000000000020'
+    where id = 'ce000000-0000-4000-8000-000000000040'$$),
+  '23514: That email is noted for someone else''s invite. Use another address, or change theirs first.',
+  'a login whose address is noted for someone else isn''t linked to anyone else (giveLogin, Change email, the dashboard)'
+);
+select is(
+  pg_temp.error_of($$insert into public.members (name, auth_user_id) values ('PE dashboard', 'ae000000-0000-4000-8000-000000000020')$$),
+  '23514: That email is noted for someone else''s invite. Use another address, or change theirs first.',
+  'nor given to a new row'
+);
+select is(
+  pg_temp.error_of($$update public.members set auth_user_id = 'ae000000-0000-4000-8000-000000000020'
+    where id = 'ce000000-0000-4000-8000-000000000041'$$),
+  'no error', 'it is linked to the person it was noted for'
+);
+reset role;
+select results_eq(
+  $$select m.name, m.auth_user_id, p.email from members m left join pending_login_emails p on p.member_id = m.id
+    where m.id in ('ce000000-0000-4000-8000-000000000040', 'ce000000-0000-4000-8000-000000000041') order by m.name$$,
+  $$values ('PE fresh'::text, null::uuid, null::text),
+           ('PE rival', 'ae000000-0000-4000-8000-000000000020'::uuid, null)$$,
+  'the refused link changed nothing; the right one forgot the note'
+);
+
+select function_privs_are('public', 'members_login_not_noted_elsewhere', array[]::text[], r, array[]::text[],
+  format('%s cannot call members_login_not_noted_elsewhere', r))
+  from unnest(array['anon', 'authenticated', 'service_role']) r;
+select is(
+  (select (prosecdef, proconfig = array['search_path=""']) from pg_proc
+   where oid = 'public.members_login_not_noted_elsewhere()'::regprocedure)::text,
+  '(t,t)', 'members_login_not_noted_elsewhere runs as the owner (it reads auth.users), with an empty search_path'
+);
+select is(
+  (select pg_get_triggerdef(oid) from pg_trigger where tgname = 'members_login_not_noted_elsewhere' and not tgisinternal),
+  'CREATE TRIGGER members_login_not_noted_elsewhere BEFORE INSERT OR UPDATE OF auth_user_id ON public.members '
+    || 'FOR EACH ROW WHEN ((new.auth_user_id IS NOT NULL)) EXECUTE FUNCTION members_login_not_noted_elsewhere()',
+  'it runs before every login is linked'
+);
+select ok(
+  pg_get_functiondef('public.members_login_not_noted_elsewhere()'::regprocedure)
+    ~* 'pg_advisory_xact_lock\(hashtextextended\(''moduleone:login_email:'' \|\| login_email, 0\)\);\s+if exists \(select 1 from public\.pending_login_emails',
+  'linking locks the address before looking for a note'
+);
+select ok(
+  pg_get_functiondef('public.pending_login_emails_check()'::regprocedure)
+    ~* 'for share;.*pg_advisory_xact_lock\(hashtextextended\(''moduleone:login_email:'' \|\| lower\(btrim\(new\.email\)\), 0\)\);\s+if exists \(select 1 from auth\.users',
+  'noting locks the person''s row, then the address, before looking for a login (the order linking takes them in)'
 );
 
 -- A grant given while an address is being noted: the grant's clean-up locks the person's row first,

@@ -13,7 +13,9 @@
 --     trigger checks that, in sentences the page shows as they are, and records which admin noted
 --     it and when. Others forget the address once the person gets a login, is removed, is made a
 --     Master Admin or is given a grant: from then on any address of theirs lives only in Supabase
---     Auth, which admins can't read. No two people have the same address noted.
+--     Auth, which admins can't read. No two people have the same address noted, and no address is
+--     noted that already has a login: noting an address and linking a login to it take the same
+--     lock on the address, so whichever comes second is refused (members_login_not_noted_elsewhere).
 --   * admin_add_members: adds a whole list, with their addresses, in one transaction, as the
 --     signed-in admin (SECURITY INVOKER, so RLS and the members triggers decide each row as they
 --     do a single insert: archived nodes, the organisation, who leads where they sit). Either
@@ -75,6 +77,11 @@ create policy pending_login_emails_admin_delete on pending_login_emails for dele
 -- forgets addresses locks the person's row first and the pending row second, so locking the
 -- person's row here could deadlock with it. None is needed: such a path waits for this change to
 -- commit, then forgets the changed address; and once it has, there's no row left to change.
+--
+-- Last, the address itself is locked (a transaction-level advisory lock on it, which linking a login
+-- with that address takes too, after the person's row, as here) and refused if it already has a
+-- login: its invite would only re-send that login, or fail. A login linked meanwhile was invited
+-- first (Supabase Auth made it before the link), so once the lock is ours it shows up here.
 create function pending_login_emails_check() returns trigger
   language plpgsql security definer set search_path = '' as $$
 declare
@@ -110,6 +117,11 @@ begin
     raise exception using errcode = 'check_violation',
       message = 'This person holds grants (such as admin), so only the project owner can give them a login.';
   end if;
+  perform pg_advisory_xact_lock(hashtextextended('moduleone:login_email:' || lower(btrim(new.email)), 0));
+  if exists (select 1 from auth.users u where lower(u.email) = lower(btrim(new.email))) then
+    raise exception using errcode = 'check_violation',
+      message = format('%s already has a login. Use another address.', lower(btrim(new.email)));
+  end if;
   -- Null for the server and the dashboard, where nobody is signed in.
   new.set_by := public.app_current_member_id();
   new.set_at := now();
@@ -134,6 +146,36 @@ revoke execute on function members_forget_pending_email() from public, anon, aut
 create trigger members_forget_pending_email after update of auth_user_id, removed_at, role on members
   for each row when (new.auth_user_id is not null or new.removed_at is not null or new.role = 'hq')
   execute function members_forget_pending_email();
+
+-- Before a login is linked to someone (giveLogin, Change email's new invite, link_noted_login, or
+-- the project owner in the dashboard): its address mustn't be noted for anyone else's invite, or
+-- that person's invite would only re-send this login. The address is locked first, as
+-- pending_login_emails_check locks it (the person's row is locked already by this update, as there),
+-- so an address noted meanwhile is seen here, or refused there.
+create function members_login_not_noted_elsewhere() returns trigger
+  language plpgsql security definer set search_path = '' as $$
+declare
+  login_email text;
+begin
+  if tg_op = 'UPDATE' and new.auth_user_id is not distinct from old.auth_user_id then
+    return new;
+  end if;
+  select lower(btrim(u.email)) into login_email from auth.users u where u.id = new.auth_user_id;
+  if login_email is null or login_email = '' then
+    return new;
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended('moduleone:login_email:' || login_email, 0));
+  if exists (select 1 from public.pending_login_emails p where p.email = login_email and p.member_id <> new.id) then
+    raise exception using errcode = 'check_violation',
+      message = 'That email is noted for someone else''s invite. Use another address, or change theirs first.';
+  end if;
+  return new;
+end $$;
+revoke execute on function members_login_not_noted_elsewhere() from public, anon, authenticated;
+
+create trigger members_login_not_noted_elsewhere before insert or update of auth_user_id on members
+  for each row when (new.auth_user_id is not null)
+  execute function members_login_not_noted_elsewhere();
 
 -- Likewise once the project owner gives them a grant: the owner gives grant holders their login,
 -- and the pages offer admins nothing on their row, so an address left noted would stay out of

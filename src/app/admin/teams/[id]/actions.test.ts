@@ -647,6 +647,8 @@ describe("createMembers", () => {
     ["an archived domain", "23514", "That domain is archived. Restore it first, or pick another."],
     ["the organisation, refused by the database", "42501", "Only the project owner can place people in the organisation itself."],
     ["the function's own permission check", "42501", "Only admins can add people."],
+    // 0014's trigger, naming the address the admin typed, so they know which line to change.
+    ["an address that already has a login", "23514", "person1@example.com already has a login. Use another address."],
   ])("shows the database's sentence as it is for %s, and refreshes nothing", async (_label, code, message) => {
     userQueue.pending_login_emails = [notedAs()];
     added = dbError(code, message);
@@ -1310,6 +1312,23 @@ describe("giveLogin", () => {
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
+  // 0014's members_login_not_noted_elsewhere: the address was noted for someone else after the
+  // check before the invite, so the link is refused in those words.
+  const NOTED_AT_LINK = dbError("23514", NOTED_FOR_SOMEONE_ELSE);
+
+  it("deletes the new login and says the address is noted for someone else when the database refuses the link for it", async () => {
+    loginAllowed(NOTED_AT_LINK, rows());
+    await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: NOTED_FOR_SOMEONE_ELSE });
+    expect(deleteUser).toHaveBeenCalledExactlyOnceWith(NEW_LOGIN);
+    expect(console.error).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("refuses the link in the same words as migration 0014's trigger", () => {
+    const migration = readFileSync(new URL("../../../../../supabase/migrations/0014_pending_emails.sql", import.meta.url), "utf8");
+    expect(migration).toContain(`'${NOTED_FOR_SOMEONE_ELSE.replaceAll("'", "''")}'`);
+  });
+
   it("cleans up and says 'something went wrong' when linking fails otherwise", async () => {
     loginAllowed(dbError("23514", "new row violates check constraint"), rows());
     await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
@@ -1470,6 +1489,15 @@ describe("giveLogin", () => {
     expect(deleteUser).toHaveBeenCalledExactlyOnceWith(NEW_LOGIN);
     expect(console.error).toHaveBeenCalledExactlyOnceWith("giveLogin link failed", { code: "08006", status: undefined });
     expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("example.com");
+  });
+
+  it("deletes the new login and says the address is noted for someone else when the link is refused for it", async () => {
+    loginAllowed(rows());
+    linkAnswers(dbError("23514", NOTED_FOR_SOMEONE_ELSE));
+    userQueue.pending_login_emails = [rows(), ownNote(EMAIL)];
+    await expect(giveLogin(PERSON, EMAIL, true)).resolves.toEqual({ ok: false, error: NOTED_FOR_SOMEONE_ELSE });
+    expect(deleteUser).toHaveBeenCalledExactlyOnceWith(NEW_LOGIN);
+    expect(console.error).not.toHaveBeenCalled();
   });
 
   it("treats an answer it doesn't know as the person having changed, and logs it", async () => {
@@ -1748,6 +1776,17 @@ describe("setPendingEmail", () => {
   it("refuses in the same words as migration 0014's trigger", () => {
     const migration = readFileSync(new URL("../../../../../supabase/migrations/0014_pending_emails.sql", import.meta.url), "utf8");
     for (const [, message] of TRIGGER_REFUSALS) expect(migration).toContain(`'${message.replaceAll("'", "''")}'`);
+  });
+
+  it.each([
+    ["noting one", null],
+    ["changing theirs", LATER],
+  ])("shows, as it is, the trigger's refusal of an address that already has a login (%s)", async (_label, current) => {
+    const message = `${EMAIL} already has a login. Use another address.`;
+    emailAllowed(dbError("23514", message));
+    await expect(setPendingEmail(PERSON, EMAIL, current)).resolves.toEqual({ ok: false, error: message });
+    expect(console.error).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 
   it("says what the table's format check means rather than Postgres's words", async () => {
@@ -3081,6 +3120,17 @@ describe("changeEmail", () => {
     await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_IN_USE });
     expect(serviceQueries).toEqual([link(), usedBy(NEW_LOGIN)]);
     expect(deleteUser).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("deletes the new login and says the new address is noted for someone else when the database refuses the link for it", async () => {
+    changeAllowed();
+    getUserById.mockResolvedValue(authUser(UNUSED));
+    serviceSees([dbError("23514", NOTED_FOR_SOMEONE_ELSE), rows()]);
+    await expect(changeEmail(PERSON, NEW_EMAIL)).resolves.toEqual({ ok: false, error: NOTED_FOR_SOMEONE_ELSE });
+    expect(serviceQueries).toEqual([link(), usedBy(NEW_LOGIN)]);
+    expect(deleteUser).toHaveBeenCalledExactlyOnceWith(NEW_LOGIN);
+    expect(console.error).not.toHaveBeenCalled();
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
