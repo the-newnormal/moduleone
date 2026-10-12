@@ -4,14 +4,17 @@ import {
   addMember,
   changeEmail,
   createMember,
+  createMembers,
   giveLogin,
   removeFromTeam,
   removeLead,
   removePerson,
   resendInvite,
+  setPendingEmail,
   setRole,
 } from "@/app/admin/teams/[id]/actions";
 import { readLoginStates } from "@/app/admin/teams/[id]/login-states";
+import { readPendingEmails } from "@/app/admin/teams/[id]/pending-emails";
 import { type GrantRow, type LeadRow, MEMBER_COLUMNS, type MemberRow } from "@/app/admin/teams/[id]/team-view";
 import { withCounts } from "@/components/admin/structure/counts";
 import { StructureCanvas } from "@/components/admin/structure/structure-canvas";
@@ -30,8 +33,9 @@ export default async function StructurePage() {
   const { supabase, memberId } = await requireAdminPage("/admin/structure");
 
   // Read in full, past PostgREST's per-request row limit (readAll). Whether each login has been used
-  // is null if it couldn't be read: the rows then just say they have a login.
-  const [teams, members, leads, grants, logins] = await Promise.all([
+  // is null if it couldn't be read: the rows then just say they have a login. So are the emails
+  // noted for people's first invites: the rows then offer no Set email.
+  const [teams, members, leads, grants, logins, pendingEmails] = await Promise.all([
     readAll((from, to) => supabase.from("teams").select(TEAM_COLUMNS).order("id").range(from, to)),
     readAll((from, to) => supabase.from("members").select(MEMBER_COLUMNS).order("id").range(from, to)),
     readAll((from, to) =>
@@ -41,6 +45,7 @@ export default async function StructurePage() {
       supabase.from("member_grants").select("member_id").order("member_id").order("grant_name").range(from, to),
     ),
     readLoginStates(supabase),
+    readPendingEmails(supabase),
   ]);
   const failed = teams.error ?? members.error ?? leads.error ?? grants.error;
   if (failed || !teams.data || !members.data || !leads.data || !grants.data) {
@@ -68,13 +73,16 @@ export default async function StructurePage() {
         leads={leadRows}
         grants={grants.data as unknown as GrantRow[]}
         logins={logins}
+        pendingEmails={pendingEmails}
         adminMemberId={memberId}
         actions={{ moveNode, createNode, updateNode, archiveNode, restoreNode }}
         teamActions={{
           addMember,
           createMember,
+          createMembers,
           giveLogin,
           resendInvite,
+          setPendingEmail,
           removeFromTeam,
           setRole,
           addLead,

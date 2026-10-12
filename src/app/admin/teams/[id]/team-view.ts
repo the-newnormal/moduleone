@@ -1,7 +1,8 @@
 // What the team page shows, worked out from the rows it loads (as the signed-in admin, who sees
 // every team, member and lead). Pure, so it's unit-tested; the page and its client components only
 // render the result. Nothing here leaves the server that the page doesn't need: in particular a
-// member's auth_user_id becomes a yes/no.
+// member's auth_user_id becomes a yes/no, and the only email address is the one an admin noted for
+// someone's first invite (pending_login_emails, 0014), never the one a login signs in with.
 
 import { formatDate, formatDateTime } from "@/lib/admin/format";
 import { asRole, isEditableMember, type Role, roleLabel } from "@/lib/admin/roles";
@@ -42,6 +43,12 @@ export type LoginRow = {
 // Those rows, and when the server read them (so an invite's age doesn't depend on whose clock
 // renders the page). Null when they couldn't be read.
 export type LoginStates = { rows: readonly LoginRow[]; readAt: string } | null;
+
+// pending_login_emails rows (0014; admins read them all): the address noted for someone's first
+// invite. Null when they couldn't be read (before 0014 is applied, say): the page then offers no
+// Set email, and Give login asks for the address as before.
+export type PendingEmailRow = { member_id: string; email: string };
+export type PendingEmails = readonly PendingEmailRow[] | null;
 
 // How long an invite link works: Supabase's email OTP expiry (Authentication → Emails), an hour by
 // default, as the README and the login page say.
@@ -98,6 +105,11 @@ export type Person = {
   // on the organisation's page: admins give whoever the owner placed there a login (owner's call).
   canGiveLogin: boolean;
   ownerGivesLogin: boolean; // as canGiveLogin, but holds grants
+  // The address noted for their first invite (Set email, or a list added with emails), which Give
+  // login offers. Only while canGiveLogin.
+  pendingEmail: string | null;
+  // Set email is offered: as canGiveLogin, once the noted addresses could be read.
+  canSetEmail: boolean;
   // Not a Master Admin or the admin, with a login given in Module One that hasn't been used (or
   // whose state couldn't be read: the server checks again either way).
   canResendInvite: boolean;
@@ -313,6 +325,7 @@ export function buildTeamView({
   leads,
   grants = [],
   logins = null,
+  pendingEmails = null,
 }: {
   teamId: string;
   adminMemberId: string;
@@ -321,6 +334,7 @@ export function buildTeamView({
   leads: readonly LeadRow[];
   grants?: readonly GrantRow[];
   logins?: LoginStates; // admin_login_states; null when it couldn't be read
+  pendingEmails?: PendingEmails; // pending_login_emails; null when they couldn't be read
 }): TeamView | null {
   const row = teams.find((t) => t.id === teamId);
   if (!row) return null;
@@ -352,7 +366,7 @@ export function buildTeamView({
     crumbs.unshift({ key: "unplaced", label: "Unplaced", href: null });
   }
 
-  const everyone = peopleContext({ adminMemberId, teams, members, leads, grants, logins });
+  const everyone = peopleContext({ adminMemberId, teams, members, leads, grants, logins, pendingEmails });
   const leadIds = new Set(leads.filter((l) => l.team_id === teamId).map((l) => l.member_id));
 
   // A node is also led by whoever leads a node above it (its domain, its division): leaders placed
@@ -462,6 +476,7 @@ type PeopleContext = {
   organisationId: string | undefined;
   leadsOrganisation: Set<string>; // lead rows on the organisation node
   logins: LoginsRead; // each linked login's state by member; null if unread
+  pendingEmails: Map<string, string> | null; // the address noted for each person's invite; null if unread
 };
 
 function peopleContext({
@@ -471,6 +486,7 @@ function peopleContext({
   leads,
   grants,
   logins,
+  pendingEmails,
 }: {
   adminMemberId: string;
   teams: readonly TeamRow[];
@@ -478,6 +494,7 @@ function peopleContext({
   leads: readonly LeadRow[];
   grants: readonly GrantRow[];
   logins: LoginStates;
+  pendingEmails: PendingEmails;
 }): PeopleContext {
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
   const leadsOf = new Map<string, string[]>();
@@ -499,6 +516,7 @@ function peopleContext({
       logins === null
         ? null
         : { byMember: new Map(logins.rows.map((l) => [l.member_id, l])), readAt: Date.parse(logins.readAt) },
+    pendingEmails: pendingEmails === null ? null : new Map(pendingEmails.map((p) => [p.member_id, p.email])),
   };
 }
 
@@ -508,7 +526,8 @@ function personOf(
   context: PeopleContext,
   here: { ownerOnly: boolean; leaderTitle: string | null; leadsHere: boolean; leadsDomain: string | null },
 ): Person {
-  const { adminMemberId, memberById, holdsGrants, leadsOf, organisationId, leadsOrganisation, logins } = context;
+  const { adminMemberId, memberById, holdsGrants, leadsOf, organisationId, leadsOrganisation, logins, pendingEmails } =
+    context;
   const role = asRole(m.role);
   const loginsHere = isEditableMember({ id: m.id, role }, adminMemberId);
   const hasLogin = m.auth_user_id !== null;
@@ -522,6 +541,7 @@ function personOf(
         ? "organisation"
         : null;
   const canRemove = loginsHere && !here.ownerOnly && ownerKeeps === null;
+  const canGiveLogin = loginsHere && !hasLogin && !holdsGrants.has(m.id);
   return {
     id: m.id,
     name: m.name,
@@ -534,8 +554,10 @@ function personOf(
     login,
     // A login deleted in the Supabase dashboard leaves login_given_* behind; don't show it.
     loginGiven: hasLogin ? loginGivenText(nameOf(m.login_given_by), m.login_given_at) : null,
-    canGiveLogin: loginsHere && !hasLogin && !holdsGrants.has(m.id),
+    canGiveLogin,
     ownerGivesLogin: loginsHere && !hasLogin && holdsGrants.has(m.id),
+    pendingEmail: canGiveLogin ? (pendingEmails?.get(m.id) ?? null) : null,
+    canSetEmail: canGiveLogin && pendingEmails !== null,
     // Once a login is used, resendInvite refuses it (it signs in at the login page instead).
     canResendInvite:
       loginsHere && hasLogin && m.login_given_at !== null && (login.state === "invited" || login.state === "unknown"),
@@ -573,6 +595,7 @@ export function buildNoTeamPeople({
   leads,
   grants = [],
   logins = null,
+  pendingEmails = null,
 }: {
   adminMemberId: string;
   teams: readonly TeamRow[];
@@ -580,8 +603,9 @@ export function buildNoTeamPeople({
   leads: readonly LeadRow[];
   grants?: readonly GrantRow[];
   logins?: LoginStates;
+  pendingEmails?: PendingEmails;
 }): Person[] {
-  const context = peopleContext({ adminMemberId, teams, members, leads, grants, logins });
+  const context = peopleContext({ adminMemberId, teams, members, leads, grants, logins, pendingEmails });
   return context.current
     .filter((m) => m.team_id === null)
     .map((m) => ({

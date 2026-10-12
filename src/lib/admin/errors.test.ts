@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CODE_TAKEN, fail, GENERIC_ERROR, logError, NO_PERMISSION, settle, toUserMessage } from "./errors";
+import { CODE_TAKEN, EMAIL_NOTED, fail, GENERIC_ERROR, logError, NO_PERMISSION, settle, toUserMessage } from "./errors";
 
 beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -24,6 +24,11 @@ describe("toUserMessage", () => {
     "A team can only sit under a domain.",
     "These scoring settings leave a colour that no check-in can reach (of 125 possible check-ins: 0 green, 50 yellow, 75 red).",
     "Only members with the leader role can lead a team. Make them a leader first.",
+    // 0014's pending_login_emails_check, refusing an address for someone who can't be given a login.
+    "This person was removed from Module One. Reload the page.",
+    "Master Admins get their login from the project owner.",
+    "This person already has a login. To change the address they sign in with, use Change email.",
+    "This person holds grants (such as admin), so only the project owner can give them a login.",
   ])("shows the database's own 23514 sentence: %s", (message) => {
     expect(toUserMessage(pg("23514", message))).toBe(message);
     expect(console.error).not.toHaveBeenCalled();
@@ -31,6 +36,12 @@ describe("toUserMessage", () => {
 
   it("shows 0003's P0002 sentence", () => {
     expect(toUserMessage(pg("P0002", "That team doesn't exist."))).toBe("That team doesn't exist.");
+  });
+
+  it("shows 0014's P0002 sentence for an address noted for someone who's gone", () => {
+    const message = "This person doesn't exist any more. Reload the page.";
+    expect(toUserMessage(pg("P0002", message))).toBe(message);
+    expect(console.error).not.toHaveBeenCalled();
   });
 
   it("words a table check constraint instead of naming it", () => {
@@ -44,6 +55,18 @@ describe("toUserMessage", () => {
     ).toBe("The yellow threshold must be below the green one.");
   });
 
+  it("asks for an address like name@example.com when 0014's format check refuses one, never repeating it", () => {
+    const error = pg(
+      "23514",
+      'new row for relation "pending_login_emails" violates check constraint "pending_login_emails_email_format"',
+      "Failing row contains (a0000000-0000-4000-8000-000000000001, Mei@Example.com , null, 2026-10-12 01:03:00+00).",
+    );
+    const message = toUserMessage(error, "setPendingEmail note");
+    expect(message).toBe("Enter an email address like name@example.com.");
+    expect(message).not.toMatch(/Mei|a0000000|pending_login_emails/);
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
   it("falls back to the generic sentence for a constraint it doesn't know", () => {
     const error = pg("23514", 'new row for relation "teams" violates check constraint "teams_new_rule"');
     expect(toUserMessage(error, "addTeam")).toBe(GENERIC_ERROR);
@@ -55,12 +78,23 @@ describe("toUserMessage", () => {
     "You lead where this is going, so another admin has to move it there.",
     "Only the project owner can place people in the organisation itself.",
     "Only the project owner can make someone a lead of the organisation itself.",
+    // 0009's admin_remove_member and 0014's admin_add_members.
+    "Only admins can remove people.",
+    "Only admins can add people.",
   ])(
-    "shows 0003's own 42501 sentence: %s",
+    "shows a migration's own 42501 sentence: %s",
     (message) => {
       expect(toUserMessage(pg("42501", message))).toBe(message);
+      expect(console.error).not.toHaveBeenCalled();
     },
   );
+
+  it("shows 0014's own 42501 sentence only when it's exactly that sentence", () => {
+    expect(toUserMessage(pg("42501", "Only admins can add people. Ask Mei."))).toBe(NO_PERMISSION);
+    expect(toUserMessage(pg("42501", "only admins can add people."))).toBe(NO_PERMISSION);
+    // Spaces and line breaks around it are trimmed, as for the others.
+    expect(toUserMessage(pg("42501", " Only admins can add people.\n"))).toBe("Only admins can add people.");
+  });
 
   it.each([
     'new row violates row-level security policy for table "team_leads"',
@@ -76,8 +110,29 @@ describe("toUserMessage", () => {
     ).toBe(CODE_TAKEN);
   });
 
+  it("says the address is noted for someone else for a duplicate noted email, never repeating it", () => {
+    const error = pg(
+      "23505",
+      'duplicate key value violates unique constraint "pending_login_emails_email_key"',
+      "Key (email)=(mei@example.com) already exists.",
+    );
+    const message = toUserMessage(error, "setPendingEmail note");
+    expect(message).toBe(EMAIL_NOTED);
+    expect(message).not.toMatch(/mei@|pending_login_emails/);
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["another unique violation", pg("23505", 'duplicate key value violates unique constraint "team_leads_pkey"')],
+    // Someone already has an address noted (setPendingEmail handles this one itself).
+    [
+      "a second noted address for one person",
+      pg("23505", 'duplicate key value violates unique constraint "pending_login_emails_pkey"'),
+    ],
+    // The constraint's name without the quotes Postgres puts round it isn't its refusal.
+    ["a mention of the noted-email key that isn't the refusal", pg("23505", "pending_login_emails_email_key, mei@example.com")],
+    // admin_add_members's own checks, which createMembers makes first.
+    ["a list of the wrong size", pg("22023", "Add from 1 to 200 people at a time.")],
     ["a READ COMMITTED refusal", pg("25000", "Change the team tree in a READ COMMITTED transaction.")],
     ["a position out of range", pg("22023", "The position must be between 0 and 10000.")],
     ["a 23514 without a message", { code: "23514", message: "" }],
@@ -90,7 +145,7 @@ describe("toUserMessage", () => {
     const [context, logged] = vi.mocked(console.error).mock.calls[0];
     expect(context).toBe("moveTeam failed");
     expect(Object.keys(logged as object).sort()).toEqual(["code", "status"]);
-    expect(JSON.stringify(logged)).not.toMatch(/Mei|example\.com|fetch failed|READ COMMITTED/);
+    expect(JSON.stringify(logged)).not.toMatch(/Mei|mei@|example\.com|fetch failed|READ COMMITTED|200 people/);
   });
 
   it("never shows details or hints", () => {
