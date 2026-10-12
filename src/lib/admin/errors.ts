@@ -15,6 +15,8 @@ export const fail = (error: string): { ok: false; error: string } => ({ ok: fals
 export const GENERIC_ERROR = "Something went wrong. Try again.";
 export const NO_PERMISSION = "You don't have permission to do that.";
 export const CODE_TAKEN = "That code is already used.";
+// Migration 0014: no two people have the same address noted for their first invite.
+export const EMAIL_NOTED = "That email is already noted for someone else. Use another address, or change theirs first.";
 
 // The fields we read from a PostgrestError (or an AuthError, which has `status` too).
 export type DbError = {
@@ -32,6 +34,8 @@ const OWN_PERMISSION_MESSAGES = new Set([
   "Only the project owner can make someone a lead of the organisation itself.",
   // Migration 0009's admin_remove_member.
   "Only admins can remove people.",
+  // Migration 0014's admin_add_members.
+  "Only admins can add people.",
 ]);
 
 // Table check constraints (as opposed to the triggers' sentences) fail with Postgres's wording,
@@ -51,6 +55,8 @@ const CONSTRAINT_MESSAGES: Record<string, string> = {
   members_role_chk: "That role doesn't exist.",
   // Migration 0009: a removed person never signs in, sits anywhere or leads anything.
   members_removed_cleared: "This person was removed from Module One. Reload the page.",
+  // Migration 0014: an invite email as parseEmail stores it.
+  pending_login_emails_email_format: "Enter an email address like name@example.com.",
   scoring_activity_order: "A better activity score can't count for less than a worse one.",
   scoring_excellence_order: "A better excellence score can't count for less than a worse one.",
   scoring_morale_order: "A better morale score can't count for less than a worse one.",
@@ -74,7 +80,8 @@ export function logError(context: string, error: unknown): void {
 // - 23514 (check_violation) and P0002 (0003's "That team doesn't exist."): the database's own
 //   message, or for a table check constraint, the sentence above;
 // - 42501: the migrations' own sentences as they are, anything else "You don't have permission to do that.";
-// - 23505 on teams_code_key: "That code is already used.";
+// - 23505 on teams_code_key: "That code is already used."; on pending_login_emails_email_key: the
+//   address is noted for someone else;
 // - anything else (25000, network errors, …): "Something went wrong. Try again.", logged with
 //   code and status under `context`.
 export function toUserMessage(error: DbError | null | undefined, context = "admin action"): string {
@@ -95,6 +102,7 @@ export function toUserMessage(error: DbError | null | undefined, context = "admi
     return OWN_PERMISSION_MESSAGES.has(message) ? message : NO_PERMISSION;
   }
   if (code === "23505" && message.includes('"teams_code_key"')) return CODE_TAKEN;
+  if (code === "23505" && message.includes('"pending_login_emails_email_key"')) return EMAIL_NOTED;
 
   logError(context, error);
   return GENERIC_ERROR;

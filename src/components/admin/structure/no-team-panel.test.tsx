@@ -22,6 +22,8 @@ const person = (id: string, name: string, changes: Partial<Person> = {}): Person
   loginGiven: null,
   canGiveLogin: false,
   ownerGivesLogin: false,
+  pendingEmail: null,
+  canSetEmail: false,
   canResendInvite: false,
   ownerResendsInvite: false,
   emailChanged: null,
@@ -40,6 +42,7 @@ const ok = async (): Promise<ActionResult> => ({ ok: true, value: null });
 const panelActions = () => ({
   giveLogin: vi.fn(ok),
   resendInvite: vi.fn(ok),
+  setPendingEmail: vi.fn(ok),
   removeFromTeam: vi.fn(ok),
   setRole: vi.fn(ok),
   changeEmail: vi.fn(async () => ({ ok: true as const, value: { invited: false } })),

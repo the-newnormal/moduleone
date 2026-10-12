@@ -21,14 +21,15 @@ import { parseEmail } from "@/lib/admin/validate";
 import type { TeamActions } from "./types";
 
 type Props = {
-  person: { id: string; name: string };
+  // pendingEmail: the address noted for their invite (0014), which the form starts with.
+  person: { id: string; name: string; pendingEmail?: string | null };
   giveLogin: TeamActions["giveLogin"];
   onDone: (message: string) => void;
 };
 
-// "Give login" on a person without one: an email address, then the giveLogin server action
-// (which invites that address and links the login to this person). Once it's given, this button
-// goes away, so focus goes to `focusAfter` (a selector).
+// "Give login" on a person without one: an email address (the one noted for them, if there is
+// one), then the giveLogin server action (which invites that address and links the login to this
+// person). Once it's given, this button goes away, so focus goes to `focusAfter` (a selector).
 export function GiveLoginDialog({ person, giveLogin, onDone, focusAfter }: Props & { focusAfter: string }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -73,7 +74,7 @@ export function GiveLoginForm({
   onDone,
 }: Props & { onBusy?: (busy: boolean) => void }) {
   const id = useId();
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(person.pendingEmail ?? "");
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startSending] = useTransition();

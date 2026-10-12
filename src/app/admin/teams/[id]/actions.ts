@@ -1,6 +1,7 @@
 "use server";
 
 import { type ActionResult, fail, GENERIC_ERROR, logError, toUserMessage } from "@/lib/admin/errors";
+import { MAX_PEOPLE } from "@/lib/admin/people-list";
 import { revalidateTeamTree } from "@/lib/admin/revalidate";
 import { requireAdmin } from "@/lib/admin/session";
 import { asRecord, isAssignableRole, isParentId, isUuid, parseEmail, parseName } from "@/lib/admin/validate";
@@ -24,28 +25,38 @@ import {
   HOLDS_GRANTS,
   INVITE_RACE,
   INVITE_USED,
+  listedTwice,
   MASTER_ADMIN_LOGIN,
   MISSING_SITE_URL,
   NO_EMAIL_SENDER,
   NO_LOGIN_YET,
+  NO_PEOPLE,
   NOT_GIVEN_HERE,
   NOT_IN_TEAM,
   NOT_YOURSELF,
+  NOTE_CHANGED,
+  NOTED_FOR_SOMEONE_ELSE,
+  notedForOthers,
   ORGANISATION_OWNER_ONLY,
+  PENDING_HAS_LOGIN,
   PERSON_CHANGED,
   PERSON_GONE,
   PERSON_REMOVED,
+  personProblem,
   PICK_ROLE,
   REMOVE_NEEDS_SERVICE_KEY,
   TOO_MANY_EMAILS,
+  TOO_MANY_PEOPLE,
 } from "./messages";
 
-// The team page's writes about people: who is in the team, their role, who else leads it, their
-// login, and removing them from Module One. (Its Edit uses updateNode from the Structure page's
-// actions.) Each one checks the admin grant first (requireAdmin), then its input, and writes with
-// the signed-in admin's own client, so RLS decides (0002/0003/0009: admins edit members other than
-// hq rows, themselves and removed people, and team_leads for anyone but themselves); removePerson
-// calls admin_remove_member (0009), which checks everything itself. giveLogin, resendInvite,
+// The team page's writes about people: who is in the team, their role, who else leads it, the
+// email noted for their first invite, their login, and removing them from Module One. (Its Edit
+// uses updateNode from the Structure page's actions.) Each one checks the admin grant first
+// (requireAdmin), then its input, and writes with the signed-in admin's own client, so RLS decides
+// (0002/0003/0009: admins edit members other than hq rows, themselves and removed people, and
+// team_leads for anyone but themselves; 0014: admins note invite emails); createMembers calls
+// admin_add_members (0014), which inserts as the admin too; removePerson calls admin_remove_member
+// (0009), which checks everything itself. giveLogin, resendInvite,
 // changeEmail and removePerson's last step are the only code here that uses the service-role
 // client (see below), each after checking as the admin first. Messages: the database's own
 // sentences as they are, everything else through toUserMessage. Every change revalidates the pages
@@ -125,6 +136,80 @@ export async function createMember(teamId: string, person: NewPerson): Promise<A
 
   revalidateTeamTree();
   return OK;
+}
+
+export type ListedNewPerson = { name: string; role: string; email: string | null };
+export type PeopleAdded = { added: number };
+
+// How many noted addresses createMembers asks about at once: they go in the request's URL.
+const EMAILS_PER_READ = 50;
+
+// Add a list of new people to this node at once (Add a list), each with the email their first
+// invite will go to if there is one (noted in pending_login_emails, migration 0014; nobody is
+// emailed until an admin gives them a login). They have no login until then.
+//   1. the caller is a signed-in admin;
+//   2. the list: a uuid for the node, 1 to MAX_PEOPLE people, each with a name, a role an admin
+//      can give, and an email address or none, and no address twice;
+//   3. as the admin: not the organisation (only the project owner places people there), and no
+//      address on the list is noted for someone else already;
+//   4. admin_add_members (0014) adds everyone in one transaction as the admin, so RLS and the
+//      members triggers decide as for createMember: either the whole list is added, or nobody;
+//   5. refresh the pages.
+// Logs carry codes and statuses only, never a name or an address.
+export async function createMembers(teamId: string, people: ListedNewPerson[]): Promise<ActionResult<PeopleAdded>> {
+  // 1.
+  const admin = await requireAdmin();
+  if (!admin.ok) return admin;
+  const { supabase } = admin.value;
+
+  // 2.
+  if (!isUuid(teamId) || !Array.isArray(people)) return fail(BAD_REQUEST);
+  if (people.length === 0) return fail(NO_PEOPLE);
+  if (people.length > MAX_PEOPLE) return fail(TOO_MANY_PEOPLE);
+  const list: { name: string; role: string; email: string | null }[] = [];
+  const emails = new Set<string>();
+  for (const [index, entry] of people.entries()) {
+    const input = asRecord(entry);
+    const name = parseName(input.name);
+    if (!name.ok) return fail(personProblem(index + 1, name.error));
+    if (!isAssignableRole(input.role)) return fail(personProblem(index + 1, PICK_ROLE));
+    let email: string | null = null;
+    if (input.email !== null && input.email !== undefined && input.email !== "") {
+      const address = parseEmail(input.email);
+      if (!address.ok) return fail(personProblem(index + 1, address.error));
+      if (emails.has(address.value)) return fail(listedTwice(address.value));
+      emails.add(address.value);
+      email = address.value;
+    }
+    list.push({ name: name.value, role: input.role, email });
+  }
+
+  // 3.
+  const org = await organisation(supabase, "createMembers");
+  if (!org.ok) return org;
+  if (org.value.is(teamId)) return fail(ORGANISATION_OWNER_ONLY);
+  const wanted = [...emails];
+  const noted: string[] = [];
+  for (let at = 0; at < wanted.length; at += EMAILS_PER_READ) {
+    const { data, error } = await supabase
+      .from("pending_login_emails")
+      .select("email")
+      .in("email", wanted.slice(at, at + EMAILS_PER_READ));
+    if (error) return fail(toUserMessage(error, "createMembers emails"));
+    noted.push(...((data ?? []) as { email: string }[]).map((row) => row.email));
+  }
+  if (noted.length > 0) return fail(notedForOthers(wanted.filter((email) => noted.includes(email))));
+
+  // 4.
+  const { data, error } = await supabase.rpc("admin_add_members", { p_team_id: teamId, p_people: list });
+  if (error) return fail(toUserMessage(error, "createMembers"));
+  // No error means the transaction committed: everyone was added, whatever the answer looks like
+  // (saying otherwise would have them added twice on a retry).
+  if (!Array.isArray(data) || data.length !== list.length) logError("createMembers", { code: "bad_result" });
+
+  // 5.
+  revalidateTeamTree();
+  return { ok: true, value: { added: list.length } };
 }
 
 // Take someone out of this team (team_id = null). They stay in Module One (removePerson takes them
@@ -222,6 +307,96 @@ export async function removeLead(teamId: string, memberId: string): Promise<Acti
 
   revalidateTeamTree();
   return OK;
+}
+
+// ---------- the email noted for someone's first invite ----------
+
+// Note the address someone's first invite will go to, before giving them a login, or forget it
+// (email null). Nobody is emailed: Give login offers the address later. Only for people Give login
+// is for. Written with the signed-in admin's client: RLS lets only admins write
+// pending_login_emails, and its trigger (0014) refuses anyone who can't be given a login, in the
+// same words as below. Forgetting needs no checks: any admin may forget any noted address.
+//   1. the caller is a signed-in admin; 2. a uuid and an email address, or null;
+//   3. as the admin (RLS): the person exists and wasn't removed, isn't the caller or a Master
+//      Admin, has no login and holds no grants;
+//   4. change their noted address, or note one (another admin may note one meanwhile: then the
+//      person changed);
+//   5. refresh the pages.
+// An address noted for someone else already is refused by the database (pending_login_emails_email_key).
+export async function setPendingEmail(memberId: string, email: string | null): Promise<ActionResult> {
+  // 1.
+  const admin = await requireAdmin();
+  if (!admin.ok) return admin;
+  const { supabase, memberId: adminMemberId } = admin.value;
+
+  // 2.
+  if (!isUuid(memberId)) return fail(BAD_REQUEST);
+  const id = memberId.toLowerCase();
+  if (email === null) {
+    const { error } = await supabase.from("pending_login_emails").delete().eq("member_id", id);
+    if (error) return fail(toUserMessage(error, "setPendingEmail forget"));
+    revalidateTeamTree();
+    return OK;
+  }
+  const address = parseEmail(email);
+  if (!address.ok) return address;
+
+  // 3.
+  const { data: member, error: loadError } = await supabase
+    .from("members")
+    .select("id, role, auth_user_id, removed_at")
+    .eq("id", id)
+    .maybeSingle();
+  if (loadError) return fail(toUserMessage(loadError, "setPendingEmail load"));
+  const row = member as { id: string; role: string; auth_user_id: string | null; removed_at: string | null } | null;
+  if (!row) return fail(PERSON_GONE);
+  if (row.removed_at !== null) return fail(PERSON_REMOVED);
+  if (row.id === adminMemberId) return fail(EMAIL_NOT_YOURSELF);
+  if (row.role === "hq") return fail(MASTER_ADMIN_LOGIN);
+  if (row.auth_user_id !== null) return fail(PENDING_HAS_LOGIN);
+  const grants = await supabase.from("member_grants").select("grant_name").eq("member_id", id).limit(1);
+  if (grants.error) return fail(toUserMessage(grants.error, "setPendingEmail grants"));
+  if ((grants.data ?? []).length > 0) return fail(HOLDS_GRANTS);
+
+  // 4.
+  const changed = await supabase
+    .from("pending_login_emails")
+    .update({ email: address.value })
+    .eq("member_id", id)
+    .select("member_id");
+  if (changed.error) return fail(toUserMessage(changed.error, "setPendingEmail change"));
+  if ((changed.data ?? []).length === 0) {
+    const { error } = await supabase.from("pending_login_emails").insert({ member_id: id, email: address.value });
+    // Another admin noted one between the two writes: theirs stands until this one is tried again.
+    if (error?.code === "23505" && (error.message ?? "").includes('"pending_login_emails_pkey"')) {
+      return fail(PERSON_CHANGED);
+    }
+    if (error) return fail(toUserMessage(error, "setPendingEmail note"));
+  }
+
+  // 5.
+  revalidateTeamTree();
+  return OK;
+}
+
+// A table that isn't there yet (before 0014 is applied) notes nothing.
+const NO_TABLE = new Set(["PGRST205", "42P01"]);
+
+// Whether an address is noted for someone else's first invite (0014), as the signed-in admin.
+async function notedElsewhere(supabase: Supabase, email: string, memberId: string): Promise<ActionResult<boolean>> {
+  const { data, error } = await supabase.from("pending_login_emails").select("member_id").eq("email", email).limit(1);
+  if (error && NO_TABLE.has(error.code)) return { ok: true, value: false };
+  if (error) return fail(toUserMessage(error, "giveLogin noted"));
+  const rows = (data ?? []) as { member_id: string }[];
+  return { ok: true, value: rows.some((r) => r.member_id.toLowerCase() !== memberId.toLowerCase()) };
+}
+
+// The address noted for this person's first invite now, or null, as the signed-in admin.
+async function notedFor(supabase: Supabase, memberId: string): Promise<ActionResult<string | null>> {
+  const { data, error } = await supabase.from("pending_login_emails").select("email").eq("member_id", memberId).maybeSingle();
+  if (error && NO_TABLE.has(error.code)) return { ok: true, value: null };
+  if (error) return fail(toUserMessage(error, "giveLogin own note"));
+  return { ok: true, value: (data as { email: string } | null)?.email ?? null };
 }
 
 // This site's URL, for the invite's redirectTo (<site>/auth/callback; Supabase accepts it only if
@@ -326,16 +501,20 @@ async function discardLogin(service: ServiceClient, authUserId: string, createdH
 //   2. the input is a uuid and an email address;
 //   3. as the admin (RLS): the member exists and wasn't removed, isn't a Master Admin, has no login,
 //      isn't the caller, and holds no grants (a new login would get them; grants are the project
-//      owner's);
+//      owner's), and the address isn't noted for someone else's invite (0014). With `asNoted`
+//      (Send invites, which sends each person the address the page showed as noted for them), it
+//      must still be the one noted for this person: another admin may have corrected or forgotten
+//      it since the page loaded;
 //   4. service role: nothing is left on the row from an earlier login (check-ins, a Big Five
 //      profile, recordings), then invite the email (its link goes to Supabase Auth's Site URL +
 //      /auth/callback, which NEXT_PUBLIC_SITE_URL must match; see siteUrl);
 //   5. service role: link the new login, only if the member still has none and still isn't a
 //      Master Admin; if that reaches no row, delete the new login again; then check again that
 //      no grant or Big Five profile arrived meanwhile, and undo the link if one did;
-//   6. refresh the team pages.
+//   6. refresh the team pages. (Linking the login forgets any address noted for them: 0014's
+//      members_forget_pending_email.)
 // Logs carry codes and statuses only, never the email.
-export async function giveLogin(memberId: string, email: string): Promise<ActionResult> {
+export async function giveLogin(memberId: string, email: string, asNoted = false): Promise<ActionResult> {
   // 1.
   const admin = await requireAdmin();
   if (!admin.ok) return admin;
@@ -364,6 +543,14 @@ export async function giveLogin(memberId: string, email: string): Promise<Action
   const grants = await supabase.from("member_grants").select("grant_name").eq("member_id", memberId).limit(1);
   if (grants.error) return fail(toUserMessage(grants.error, "giveLogin grants"));
   if ((grants.data ?? []).length > 0) return fail(HOLDS_GRANTS);
+  const noted = await notedElsewhere(supabase, address.value, row.id);
+  if (!noted.ok) return noted;
+  if (noted.value) return fail(NOTED_FOR_SOMEONE_ELSE);
+  if (asNoted === true) {
+    const own = await notedFor(supabase, row.id);
+    if (!own.ok) return own;
+    if (own.value !== address.value) return fail(NOTE_CHANGED);
+  }
 
   // 4.
   const site = siteUrl();

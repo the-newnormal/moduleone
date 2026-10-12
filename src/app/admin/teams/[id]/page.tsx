@@ -14,15 +14,18 @@ import {
   addMember,
   changeEmail,
   createMember,
+  createMembers,
   giveLogin,
   removeFromTeam,
   removeLead,
   removePerson,
   resendInvite,
+  setPendingEmail,
   setRole,
 } from "./actions";
 import { buildTeamView, type GrantRow, type LeadRow, MEMBER_COLUMNS, type MemberRow } from "./team-view";
 import { readLoginStates } from "./login-states";
+import { readPendingEmails } from "./pending-emails";
 
 const title = (name: string) => `${name} · Admin · Module One`;
 
@@ -51,10 +54,10 @@ export default async function TeamPage({ params }: PageProps<"/admin/teams/[id]"
   // Every team (for the breadcrumb and the team names shown next to people), every member (people
   // to add and leaders to pick come from anywhere), every lead (a demotion removes all of a
   // leader's leads, and the warning lists them), and who holds a grant (they get their login from
-  // the project owner), and whether each login has been used (null if that couldn't be read: the
-  // rows then just say they have a login). Read in full, past PostgREST's per-request row limit
-  // (readAll).
-  const [teams, members, leads, grants, logins] = await Promise.all([
+  // the project owner), whether each login has been used (null if that couldn't be read: the
+  // rows then just say they have a login), and the emails noted for people's first invites (null
+  // if unread: no Set email then). Read in full, past PostgREST's per-request row limit (readAll).
+  const [teams, members, leads, grants, logins, pendingEmails] = await Promise.all([
     readAll((from, to) => supabase.from("teams").select(TEAM_COLUMNS).order("id").range(from, to)),
     readAll((from, to) => supabase.from("members").select(MEMBER_COLUMNS).order("id").range(from, to)),
     readAll((from, to) =>
@@ -64,6 +67,7 @@ export default async function TeamPage({ params }: PageProps<"/admin/teams/[id]"
       supabase.from("member_grants").select("member_id").order("member_id").order("grant_name").range(from, to),
     ),
     readLoginStates(supabase),
+    readPendingEmails(supabase),
   ]);
   const failed = teams.error ?? members.error ?? leads.error ?? grants.error;
   if (failed) {
@@ -79,6 +83,7 @@ export default async function TeamPage({ params }: PageProps<"/admin/teams/[id]"
     leads: (leads.data ?? []) as unknown as LeadRow[],
     grants: (grants.data ?? []) as unknown as GrantRow[],
     logins,
+    pendingEmails,
   });
   if (!view) notFound();
 
@@ -89,7 +94,18 @@ export default async function TeamPage({ params }: PageProps<"/admin/teams/[id]"
         team={view.team}
         people={view.people}
         candidates={view.candidates}
-        actions={{ addMember, createMember, giveLogin, resendInvite, removeFromTeam, setRole, changeEmail, removePerson }}
+        actions={{
+          addMember,
+          createMember,
+          createMembers,
+          giveLogin,
+          resendInvite,
+          setPendingEmail,
+          removeFromTeam,
+          setRole,
+          changeEmail,
+          removePerson,
+        }}
       />
       <LeadsSection
         team={view.team}

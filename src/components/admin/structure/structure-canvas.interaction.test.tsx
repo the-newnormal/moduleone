@@ -84,8 +84,10 @@ function actions(changes: Partial<StructureActions> = {}): StructureActions {
 const TEAM_ACTIONS = {
   addMember: vi.fn(ok),
   createMember: vi.fn(ok),
+  createMembers: vi.fn(async () => ({ ok: true as const, value: { added: 1 } })),
   giveLogin: vi.fn(ok),
   resendInvite: vi.fn(ok),
+  setPendingEmail: vi.fn(ok),
   removeFromTeam: vi.fn(ok),
   setRole: vi.fn(ok),
   addLead: vi.fn(ok),

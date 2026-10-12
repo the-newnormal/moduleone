@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import { revalidatePath } from "next/cache";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GENERIC_ERROR, NO_PERMISSION } from "@/lib/admin/errors";
+import { EMAIL_NOTED, GENERIC_ERROR, NO_PERMISSION } from "@/lib/admin/errors";
+import { MAX_PEOPLE } from "@/lib/admin/people-list";
 import { createServiceRoleClient, MISSING_SERVICE_KEY_MESSAGE, MissingServiceKeyError } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -8,11 +10,13 @@ import {
   addMember,
   changeEmail,
   createMember,
+  createMembers,
   giveLogin,
   removeFromTeam,
   removeLead,
   removePerson,
   resendInvite,
+  setPendingEmail,
   setRole,
 } from "./actions";
 import {
@@ -38,15 +42,21 @@ import {
   MISSING_SITE_URL,
   NO_EMAIL_SENDER,
   NO_LOGIN_YET,
+  NO_PEOPLE,
   NOT_GIVEN_HERE,
   NOT_IN_TEAM,
   NOT_YOURSELF,
+  NOTE_CHANGED,
+  NOTED_FOR_SOMEONE_ELSE,
+  ORGANISATION_OWNER_ONLY,
+  PENDING_HAS_LOGIN,
   PERSON_CHANGED,
   PERSON_GONE,
   PERSON_REMOVED,
   PICK_ROLE,
   REMOVE_NEEDS_SERVICE_KEY,
   TOO_MANY_EMAILS,
+  TOO_MANY_PEOPLE,
 } from "./messages";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -101,10 +111,12 @@ function fakeFrom(queued: Record<string, Result[]>, log: Query[]) {
   });
 }
 
-// The signed-in user's client. admin_remove_member answers `removal` (removePerson's tests set it).
+// The signed-in user's client. admin_remove_member answers `removal` (removePerson's tests set it);
+// admin_add_members answers `added`, or when that's null, a new id for each person on the list.
 const getClaims = vi.fn();
 const rpc = vi.fn();
 let removal: Result;
+let added: Result | null;
 let userQueue: Record<string, Result[]>;
 let userQueries: Query[];
 let from: ReturnType<typeof fakeFrom>;
@@ -123,14 +135,19 @@ let serviceFrom: ReturnType<typeof fakeFrom>;
 
 function signedIn({ admin }: { admin: boolean }) {
   getClaims.mockResolvedValue({ data: { claims: { sub: ADMIN_AUTH } }, error: null });
-  rpc.mockImplementation(async (fn: string) =>
+  rpc.mockImplementation(async (fn: string, args?: { p_people?: unknown[] }) =>
     fn === "app_has_grant"
       ? { data: admin, error: null }
       : fn === "admin_remove_member"
         ? removal
-        : { data: ADMIN, error: null },
+        : fn === "admin_add_members"
+          ? (added ?? { data: (args?.p_people ?? []).map((_, i) => newMemberId(i)), error: null })
+          : { data: ADMIN, error: null },
   );
 }
+
+// The id admin_add_members gives the i-th person on a list (from 0).
+const newMemberId = (i: number) => `d0000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`;
 
 function signedOut() {
   getClaims.mockResolvedValue({ data: null, error: null });
@@ -151,8 +168,12 @@ const organisationIs = (id: string) => ({ data: [{ id }], error: null });
 // What an action wrote, leaving out that lookup.
 const writes = () => userQueries.filter((q) => q.table !== "teams");
 
+// giveLogin asks whether the address is noted for someone else's invite (migration 0014): nobody's,
+// unless a test says otherwise.
+const notNoted = () => ({ data: [], error: null });
+
 beforeEach(() => {
-  userQueue = { teams: Array.from({ length: 4 }, noOrganisation) };
+  userQueue = { teams: Array.from({ length: 4 }, noOrganisation), pending_login_emails: Array.from({ length: 4 }, notNoted) };
   userQueries = [];
   serviceQueue = {};
   serviceQueries = [];
@@ -180,6 +201,7 @@ beforeEach(() => {
   listRecordings.mockResolvedValue({ data: [], error: null });
   deleteUser.mockResolvedValue({ data: {}, error: null });
   removal = { data: { outcome: "deleted", login_id: null }, error: null };
+  added = null;
   vi.stubEnv("NEXT_PUBLIC_SITE_URL", SITE);
   signedIn({ admin: true });
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -203,6 +225,7 @@ function expectRevalidated() {
 function expectNothingWritten() {
   expect(from).not.toHaveBeenCalled();
   expect(rpc).not.toHaveBeenCalledWith("admin_remove_member", expect.anything());
+  expect(rpc).not.toHaveBeenCalledWith("admin_add_members", expect.anything());
   expect(revalidatePath).not.toHaveBeenCalled();
 }
 
@@ -210,6 +233,8 @@ function expectNothingWritten() {
 const ACTIONS = {
   addMember: () => addMember(TEAM, PERSON, null),
   createMember: () => createMember(TEAM, { name: "Ana Lee", role: "member" }),
+  createMembers: () => createMembers(TEAM, [{ name: "Ana Lee", role: "member", email: EMAIL }]),
+  setPendingEmail: () => setPendingEmail(PERSON, EMAIL),
   removeFromTeam: () => removeFromTeam(TEAM, PERSON),
   setRole: () => setRole(PERSON, "leader"),
   addLead: () => addLead(TEAM, PERSON),
@@ -336,6 +361,355 @@ describe("createMember", () => {
     userQueue.members = [dbError("23514", message)];
     await expect(createMember(TEAM, { name: "Ana", role: "member" })).resolves.toEqual({ ok: false, error: message });
     expect(revalidatePath).not.toHaveBeenCalled();
+  });
+});
+
+// ---------- createMembers ----------
+
+describe("createMembers", () => {
+  // n people for a list, each with an address of their own unless `emails` is false.
+  const listOf = (n: number, emails = true) =>
+    Array.from({ length: n }, (_, i) => ({
+      name: `Person ${i + 1}`,
+      role: "member",
+      email: emails ? `person${i + 1}@example.com` : null,
+    }));
+  const addressesOf = (list: { email: string | null }[]) => list.map((p) => p.email as string);
+  // Is any of these addresses noted for someone's invite already? (Asked as the admin: RLS applies.)
+  const lookup = (emails: string[]): Query => ({
+    table: "pending_login_emails",
+    calls: [["select", "email"], ["in", "email", emails]],
+  });
+  const notedAs = (...emails: string[]) => ({ data: emails.map((email) => ({ email })), error: null });
+  const adds = () => rpc.mock.calls.filter(([fn]) => fn === "admin_add_members");
+  const expectNobodyAdded = () => {
+    expect(adds()).toEqual([]);
+    expect(revalidatePath).not.toHaveBeenCalled();
+  };
+  // A database error whose message and details name the people on the list, as Postgres's can.
+  const leaky = (code: string) => ({
+    data: null,
+    error: {
+      code,
+      message: `Key (email)=(ana.lee@example.com) for Ana Lee: ${code}`,
+      details: "Failing row contains (Ana Lee, ana.lee@example.com)",
+      hint: null,
+    },
+  });
+  const expectNothingPersonalLogged = () =>
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toMatch(/@|example|Ana|Lee/);
+
+  it("adds the whole list in one call to admin_add_members as the admin, cleaned, and says how many", async () => {
+    userQueue.pending_login_emails = [notedAs()];
+    const result = await createMembers(TEAM, [
+      { name: "  Ana Lee ", role: "leader", email: " Ana.Lee@Example.COM " },
+      { name: "Ben Tan", role: "member", email: null },
+      { name: "Chen Wei", role: "member", email: "" },
+      { name: "Dev Raj", role: "member" } as never,
+    ]);
+    expect(result).toEqual({ ok: true, value: { added: 4 } });
+    // Only the one address is asked about, as it's stored (trimmed, lower case).
+    expect(userQueries).toEqual([ORG_LOOKUP, lookup(["ana.lee@example.com"])]);
+    expect(adds()).toEqual([
+      [
+        "admin_add_members",
+        {
+          p_team_id: TEAM,
+          p_people: [
+            { name: "Ana Lee", role: "leader", email: "ana.lee@example.com" },
+            { name: "Ben Tan", role: "member", email: null },
+            { name: "Chen Wei", role: "member", email: null },
+            { name: "Dev Raj", role: "member", email: null },
+          ],
+        },
+      ],
+    ]);
+    // Nothing is written straight to members or pending_login_emails: the function does both.
+    expect(userQueries.flatMap((q) => q.calls.map(([method]) => method))).not.toContain("insert");
+    expect(createServiceRoleClient).not.toHaveBeenCalled();
+    expect(inviteUserByEmail).not.toHaveBeenCalled();
+    expect(console.error).not.toHaveBeenCalled();
+    expectRevalidated();
+  });
+
+  it("checks the admin grant, then the organisation, then the noted addresses, before adding anyone", async () => {
+    userQueue.pending_login_emails = [notedAs()];
+    await createMembers(TEAM, listOf(2));
+    const grantCheck = rpc.mock.invocationCallOrder[0];
+    const add = rpc.mock.invocationCallOrder[rpc.mock.calls.findIndex(([fn]) => fn === "admin_add_members")];
+    expect(from.mock.calls.map(([table]) => table)).toEqual(["teams", "pending_login_emails"]);
+    expect(grantCheck).toBeLessThan(from.mock.invocationCallOrder[0]);
+    expect(from.mock.invocationCallOrder[0]).toBeLessThan(from.mock.invocationCallOrder[1]);
+    expect(from.mock.invocationCallOrder[1]).toBeLessThan(add);
+    expect(add).toBeLessThan(vi.mocked(revalidatePath).mock.invocationCallOrder[0]);
+  });
+
+  it("asks about no addresses when nobody on the list has one", async () => {
+    await expect(createMembers(TEAM, listOf(3, false))).resolves.toEqual({ ok: true, value: { added: 3 } });
+    expect(userQueries).toEqual([ORG_LOOKUP]);
+    expect(adds()[0][1]).toEqual({ p_team_id: TEAM, p_people: listOf(3, false) });
+    expectRevalidated();
+  });
+
+  it("never sends anything but each person's name, role and address", async () => {
+    const extra = { auth_user_id: NEW_LOGIN, team_id: OTHER_TEAM, login_given_by: ADMIN, removed_at: null, id: PERSON };
+    await createMembers(TEAM, [{ name: "Ana", role: "member", email: null, ...extra } as never]);
+    expect(adds()).toEqual([["admin_add_members", { p_team_id: TEAM, p_people: [{ name: "Ana", role: "member", email: null }] }]]);
+  });
+
+  // Two people can share a name (the dialog points it out); only addresses must differ.
+  it("adds two people with the same name", async () => {
+    await expect(
+      createMembers(TEAM, [
+        { name: "Ana Lee", role: "member", email: null },
+        { name: "Ana Lee", role: "member", email: null },
+      ]),
+    ).resolves.toEqual({ ok: true, value: { added: 2 } });
+  });
+
+  it(`adds a list of exactly ${MAX_PEOPLE}, asking about their addresses 50 at a time`, async () => {
+    const list = listOf(MAX_PEOPLE);
+    const emails = addressesOf(list);
+    userQueue.pending_login_emails = [notedAs(), notedAs(), notedAs(), notedAs()];
+    await expect(createMembers(TEAM, list)).resolves.toEqual({ ok: true, value: { added: MAX_PEOPLE } });
+    expect(writes()).toEqual([
+      lookup(emails.slice(0, 50)),
+      lookup(emails.slice(50, 100)),
+      lookup(emails.slice(100, 150)),
+      lookup(emails.slice(150, 200)),
+    ]);
+    expect((adds()[0][1] as { p_people: unknown[] }).p_people).toHaveLength(MAX_PEOPLE);
+    expectRevalidated();
+  });
+
+  it.each([
+    ["a bad team id", () => createMembers("x", listOf(1)), BAD_REQUEST],
+    ["a team id with SQL in it", () => createMembers(`${TEAM}' or '1'='1`, listOf(1)), BAD_REQUEST],
+    ["a team id that isn't a string", () => createMembers(42 as never, listOf(1)), BAD_REQUEST],
+    ["no list", () => createMembers(TEAM, null as never), BAD_REQUEST],
+    ["a list that isn't an array", () => createMembers(TEAM, "Ana Lee, ana.lee@example.com" as never), BAD_REQUEST],
+    ["an object that looks like a list", () => createMembers(TEAM, { length: 1, 0: listOf(1)[0] } as never), BAD_REQUEST],
+    ["an empty list", () => createMembers(TEAM, []), NO_PEOPLE],
+    [`more than ${MAX_PEOPLE} people`, () => createMembers(TEAM, listOf(MAX_PEOPLE + 1)), TOO_MANY_PEOPLE],
+  ])("refuses %s without reading or adding anything", async (_label, run, error) => {
+    await expect(run()).resolves.toEqual({ ok: false, error });
+    expectNothingWritten();
+  });
+
+  const ana = { name: "Ana Lee", role: "member", email: "ana.lee@example.com" };
+  it.each([
+    ["someone with no name", [ana, { name: "  ", role: "member", email: null }], "Person 2 on the list: Enter a name."],
+    ["someone whose name isn't text", [{ name: 42, role: "member", email: null }], "Person 1 on the list: Enter a name."],
+    [
+      "a name with a line break",
+      [{ name: "Ana\nLee", role: "member", email: null }],
+      "Person 1 on the list: Names can't contain line breaks or hidden characters.",
+    ],
+    [
+      "a name that's too long",
+      [ana, { name: "Ben", role: "member", email: null }, { name: "A".repeat(121), role: "member", email: null }],
+      "Person 3 on the list: Names can be at most 120 characters.",
+    ],
+    ["an entry that isn't a person", [ana, null], "Person 2 on the list: Enter a name."],
+    ["an entry that's only a name", ["Ana Lee"], "Person 1 on the list: Enter a name."],
+    ["a Master Admin", [{ ...ana, role: "hq" }], `Person 1 on the list: ${PICK_ROLE}`],
+    ["someone with no role", [{ name: "Ana Lee", email: null }], `Person 1 on the list: ${PICK_ROLE}`],
+    ["a role in the wrong letter case", [{ ...ana, role: "Leader" }], `Person 1 on the list: ${PICK_ROLE}`],
+    [
+      "an address without a dot in its domain",
+      [{ ...ana, email: "ana@localhost" }],
+      "Person 1 on the list: Enter an email address like name@example.com.",
+    ],
+    [
+      "an address with two @s",
+      [{ name: "Ben", role: "member", email: null }, { ...ana, email: "ana@lee@example.com" }],
+      "Person 2 on the list: Enter an email address like name@example.com.",
+    ],
+    ["an address with a space", [{ ...ana, email: "ana lee@example.com" }], "Person 1 on the list: Email addresses can't contain spaces."],
+    ["an address that isn't text", [{ ...ana, email: 42 }], "Person 1 on the list: Enter an email address."],
+    [
+      "an address that's too long",
+      [{ ...ana, email: `${"a".repeat(250)}@example.com` }],
+      "Person 1 on the list: Email addresses can be at most 254 characters.",
+    ],
+    [
+      "the same address twice, in any letter case",
+      [ana, { name: "Ben", role: "member", email: null }, { name: "Ana L", role: "leader", email: " Ana.Lee@Example.com " }],
+      "ana.lee@example.com is on the list twice. Give each person their own address.",
+    ],
+    [
+      "several problems (only the first is shown)",
+      [ana, { name: "", role: "member", email: null }, { ...ana, role: "hq" }],
+      "Person 2 on the list: Enter a name.",
+    ],
+  ])("refuses a list with %s, saying which person, without reading or adding anything", async (_label, people, error) => {
+    await expect(createMembers(TEAM, people as never)).resolves.toEqual({ ok: false, error });
+    expectNothingWritten();
+  });
+
+  it.each([
+    ["is the organisation", TEAM, TEAM],
+    ["is the organisation, its id in capitals", TEAM.toUpperCase(), TEAM],
+    ["is the organisation, read back in capitals", TEAM, TEAM.toUpperCase()],
+  ])("refuses a node that %s, asking about no addresses and adding nobody", async (_label, teamId, orgId) => {
+    userQueue.teams = [organisationIs(orgId)];
+    await expect(createMembers(teamId, listOf(2))).resolves.toEqual({ ok: false, error: ORGANISATION_OWNER_ONLY });
+    expect(userQueries).toEqual([ORG_LOOKUP]);
+    expectNobodyAdded();
+  });
+
+  it("still adds to any other node once there is an organisation", async () => {
+    userQueue.teams = [organisationIs(OTHER_TEAM)];
+    userQueue.pending_login_emails = [notedAs()];
+    await expect(createMembers(TEAM, listOf(1))).resolves.toEqual({ ok: true, value: { added: 1 } });
+    expect(adds()).toHaveLength(1);
+  });
+
+  it("says 'something went wrong' when it can't look for the organisation, and adds nobody", async () => {
+    userQueue.teams = [dbError("08006", "down")];
+    await expect(createMembers(TEAM, listOf(1))).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
+    expect(userQueries).toEqual([ORG_LOOKUP]);
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("createMembers failed", { code: "08006", status: undefined });
+    expectNobodyAdded();
+  });
+
+  it("refuses an address already noted for someone else, adding nobody", async () => {
+    userQueue.pending_login_emails = [notedAs("person2@example.com")];
+    await expect(createMembers(TEAM, listOf(3))).resolves.toEqual({
+      ok: false,
+      error: "person2@example.com is already noted for someone else. Use another address, or change theirs first.",
+    });
+    expect(writes()).toEqual([lookup(addressesOf(listOf(3)))]);
+    expectNobodyAdded();
+  });
+
+  it("names every address noted already, in the list's order, whatever order they come back in", async () => {
+    userQueue.pending_login_emails = [notedAs("person3@example.com", "person1@example.com")];
+    await expect(createMembers(TEAM, listOf(3))).resolves.toEqual({
+      ok: false,
+      error:
+        "These emails are already noted for someone else: person1@example.com, person3@example.com. Use other addresses, or change theirs first.",
+    });
+    expectNobodyAdded();
+  });
+
+  it("asks about more than 50 addresses in reads of 50, and refuses one noted in a later read", async () => {
+    const list = listOf(60);
+    const emails = addressesOf(list);
+    userQueue.pending_login_emails = [notedAs(), notedAs("person57@example.com")];
+    await expect(createMembers(TEAM, list)).resolves.toEqual({
+      ok: false,
+      error: "person57@example.com is already noted for someone else. Use another address, or change theirs first.",
+    });
+    expect(writes()).toEqual([lookup(emails.slice(0, 50)), lookup(emails.slice(50))]);
+    expectNobodyAdded();
+  });
+
+  it("reads every batch before refusing, so it names the noted addresses from each", async () => {
+    const list = listOf(60);
+    userQueue.pending_login_emails = [notedAs("person2@example.com"), notedAs("person55@example.com")];
+    await expect(createMembers(TEAM, list)).resolves.toEqual({
+      ok: false,
+      error:
+        "These emails are already noted for someone else: person2@example.com, person55@example.com. Use other addresses, or change theirs first.",
+    });
+    expect(writes()).toHaveLength(2);
+    expectNobodyAdded();
+  });
+
+  it("asks only about the addresses on the list, in reads of 50, when some people have none", async () => {
+    const list = [...listOf(55), ...listOf(5, false)];
+    userQueue.pending_login_emails = [notedAs(), notedAs()];
+    await expect(createMembers(TEAM, list)).resolves.toEqual({ ok: true, value: { added: 60 } });
+    const emails = addressesOf(listOf(55));
+    expect(writes()).toEqual([lookup(emails.slice(0, 50)), lookup(emails.slice(50))]);
+  });
+
+  it.each([
+    ["the first read", [leaky("08006")]],
+    ["a later read", [notedAs(), leaky("08006")]],
+  ])("says 'something went wrong' when %s of the noted addresses fails, logging only code and status", async (_label, reads) => {
+    userQueue.pending_login_emails = reads;
+    await expect(createMembers(TEAM, listOf(60))).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("createMembers emails failed", { code: "08006", status: undefined });
+    expectNothingPersonalLogged();
+    expectNobodyAdded();
+  });
+
+  it("says 'no permission' when RLS refuses the read of noted addresses", async () => {
+    userQueue.pending_login_emails = [dbError("42501", "permission denied for table pending_login_emails")];
+    await expect(createMembers(TEAM, listOf(1))).resolves.toEqual({ ok: false, error: NO_PERMISSION });
+    expectNobodyAdded();
+  });
+
+  it.each([
+    ["an archived node", "23514", "That team is archived. Restore it first, or pick another."],
+    ["an archived domain", "23514", "That domain is archived. Restore it first, or pick another."],
+    ["the organisation, refused by the database", "42501", "Only the project owner can place people in the organisation itself."],
+    ["the function's own permission check", "42501", "Only admins can add people."],
+  ])("shows the database's sentence as it is for %s, and refreshes nothing", async (_label, code, message) => {
+    userQueue.pending_login_emails = [notedAs()];
+    added = dbError(code, message);
+    await expect(createMembers(TEAM, listOf(2))).resolves.toEqual({ ok: false, error: message });
+    expect(console.error).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "an address another admin noted meanwhile",
+      dbError("23505", 'duplicate key value violates unique constraint "pending_login_emails_email_key"'),
+      EMAIL_NOTED,
+    ],
+    [
+      "an address the table's format check refuses",
+      dbError("23514", 'new row for relation "pending_login_emails" violates check constraint "pending_login_emails_email_format"'),
+      "Enter an email address like name@example.com.",
+    ],
+    ["RLS", dbError("42501", 'new row violates row-level security policy for table "members"'), NO_PERMISSION],
+    ["a missing grant", dbError("42501", "permission denied for function admin_add_members"), NO_PERMISSION],
+  ])("maps %s to its sentence, and refreshes nothing", async (_label, error, message) => {
+    userQueue.pending_login_emails = [notedAs()];
+    added = error;
+    await expect(createMembers(TEAM, listOf(2))).resolves.toEqual({ ok: false, error: message });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a dropped connection", "08006"],
+    ["a node that doesn't exist", "23503"],
+    ["a list the server should have refused", "22023"],
+    ["the wrong isolation level", "25000"],
+    ["a duplicate on another key", "23505"],
+  ])("hides %s behind the generic sentence, logging only code and status, never a name or an address", async (_label, code) => {
+    userQueue.pending_login_emails = [notedAs()];
+    added = leaky(code);
+    await expect(createMembers(TEAM, [ana])).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("createMembers failed", { code, status: undefined });
+    expectNothingPersonalLogged();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  // No error means the transaction committed: saying it failed would have the list added twice on
+  // a retry.
+  it.each([
+    ["nothing", null],
+    ["a bare string", "ok"],
+    ["too few ids", [newMemberId(0)]],
+    ["too many ids", [newMemberId(0), newMemberId(1), newMemberId(2)]],
+    ["an object", { ids: [newMemberId(0), newMemberId(1)] }],
+  ])("counts an odd answer (%s) as everyone added, logs it, and refreshes the pages", async (_label, data) => {
+    userQueue.pending_login_emails = [notedAs()];
+    added = { data, error: null };
+    await expect(createMembers(TEAM, listOf(2))).resolves.toEqual({ ok: true, value: { added: 2 } });
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("createMembers failed", { code: "bad_result", status: undefined });
+    expectRevalidated();
+  });
+
+  it("adds by the node id the request gave, which Postgres reads in any letter case", async () => {
+    userQueue.pending_login_emails = [notedAs()];
+    await expect(createMembers(TEAM.toUpperCase(), listOf(1))).resolves.toEqual({ ok: true, value: { added: 1 } });
+    expect((adds()[0][1] as { p_team_id: string }).p_team_id.toLowerCase()).toBe(TEAM);
   });
 });
 
@@ -504,6 +878,7 @@ describe("the organisation node", () => {
     ["putting someone in it", () => addMember(ORG, PERSON, null)],
     ["moving someone out of it", () => addMember(OTHER, PERSON, ORG)],
     ["adding someone new to it", () => createMember(ORG, { name: "Ana", role: "member" })],
+    ["adding a list of new people to it", () => createMembers(ORG, [{ name: "Ana", role: "member", email: EMAIL }])],
     ["taking someone out of it", () => removeFromTeam(ORG, PERSON)],
     ["adding a lead of it", () => addLead(ORG, PERSON)],
     ["removing a lead of it", () => removeLead(ORG, PERSON)],
@@ -583,10 +958,12 @@ describe("giveLogin", () => {
 
     await expect(giveLogin(PERSON, "  Mei.Wong@Example.com ")).resolves.toEqual({ ok: true, value: null });
 
-    // 3. the member and their grants, read as the admin (RLS applies)
+    // 3. the member and their grants, and whether the address (as stored: trimmed, lower case) is
+    // noted for someone else's invite (0014), read as the admin (RLS applies)
     expect(userQueries).toEqual([
       { table: "members", calls: [["select", "id, role, auth_user_id, removed_at"], ["eq", "id", PERSON], ["maybeSingle"]] },
       { table: "member_grants", calls: [["select", "grant_name"], ["eq", "member_id", PERSON], ["limit", 1]] },
+      { table: "pending_login_emails", calls: [["select", "member_id"], ["eq", "email", EMAIL], ["limit", 1]] },
     ]);
     // 4. nothing from an earlier login, then the invite, coming back to the site's callback
     expect(storageFrom).toHaveBeenCalledExactlyOnceWith("checkin-audio");
@@ -951,6 +1328,378 @@ describe("giveLogin", () => {
       status: 500,
     });
     expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("example.com");
+  });
+
+  // Migration 0014: an address noted for someone's first invite is kept for them.
+  const notedFor = (memberId: string) => ({ data: [{ member_id: memberId }], error: null });
+  const NOTED_LOOKUP: Query = {
+    table: "pending_login_emails",
+    calls: [["select", "member_id"], ["eq", "email", EMAIL], ["limit", 1]],
+  };
+
+  it("refuses an address noted for someone else's invite, before any service-role call", async () => {
+    loginAllowed(rows(PERSON));
+    userQueue.pending_login_emails = [notedFor("a0000000-0000-4000-8000-000000000003")];
+    await expect(giveLogin(PERSON, "  Mei.Wong@Example.com ")).resolves.toEqual({ ok: false, error: NOTED_FOR_SOMEONE_ELSE });
+    // Asked about as it's stored: trimmed, lower case.
+    expect(userQueries.map((q) => q.table)).toEqual(["members", "member_grants", "pending_login_emails"]);
+    expect(userQueries[2]).toEqual(NOTED_LOOKUP);
+    expectNoServiceRole();
+    expect(listRecordings).not.toHaveBeenCalled();
+    expect(serviceQueries).toEqual([]);
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("asks about the address after the member and their grants, and before any service-role call", async () => {
+    loginAllowed(rows(PERSON));
+    await giveLogin(PERSON, EMAIL);
+    expect(from.mock.calls.map(([table]) => table)).toEqual(["members", "member_grants", "pending_login_emails"]);
+    const [, grantsLoad, notedLoad] = from.mock.invocationCallOrder;
+    expect(grantsLoad).toBeLessThan(notedLoad);
+    expect(notedLoad).toBeLessThan(vi.mocked(createServiceRoleClient).mock.invocationCallOrder[0]);
+  });
+
+  it("doesn't ask about the address for someone it refuses anyway", async () => {
+    userQueue.members = [memberRow()];
+    userQueue.member_grants = [{ data: [{ grant_name: "admin" }], error: null }];
+    await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: HOLDS_GRANTS });
+    expect(userQueries.map((q) => q.table)).toEqual(["members", "member_grants"]);
+  });
+
+  it.each([
+    ["as the request spells it", PERSON, PERSON],
+    ["when the request spells the id in capitals", PERSON.toUpperCase(), PERSON],
+    ["when the noted row spells the id in capitals", PERSON, PERSON.toUpperCase()],
+  ])("goes ahead with an address noted for this same person (%s)", async (_label, requestId, notedId) => {
+    loginAllowed(rows(PERSON));
+    userQueue.pending_login_emails = [notedFor(notedId)];
+    await expect(giveLogin(requestId, EMAIL)).resolves.toEqual({ ok: true, value: null });
+    expect(userQueries[2]).toEqual(NOTED_LOOKUP);
+    expect(inviteUserByEmail).toHaveBeenCalledExactlyOnceWith(EMAIL, { redirectTo: `${SITE}/auth/callback?next=/portal` });
+    expectRevalidated();
+  });
+
+  it.each([
+    ["PGRST205", "Could not find the table 'public.pending_login_emails' in the schema cache"],
+    ["42P01", 'relation "public.pending_login_emails" does not exist'],
+  ])("goes ahead when the table isn't there yet (%s, before migration 0014), logging nothing", async (code, message) => {
+    loginAllowed(rows(PERSON));
+    userQueue.pending_login_emails = [{ data: null, error: { code, message } }];
+    await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: true, value: null });
+    expect(inviteUserByEmail).toHaveBeenCalledOnce();
+    expect(console.error).not.toHaveBeenCalled();
+    expectRevalidated();
+  });
+
+  it("says 'something went wrong' when it can't tell whether the address is noted, without using the service role", async () => {
+    loginAllowed(rows(PERSON));
+    userQueue.pending_login_emails = [dbError("08006", `down for ${EMAIL}`)];
+    await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
+    expectNoServiceRole();
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("giveLogin noted failed", { code: "08006", status: undefined });
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("example.com");
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("says 'no permission' when RLS refuses that read, without using the service role", async () => {
+    loginAllowed(rows(PERSON));
+    userQueue.pending_login_emails = [dbError("42501", "permission denied for table pending_login_emails")];
+    await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: NO_PERMISSION });
+    expectNoServiceRole();
+  });
+
+  // Send invites (asNoted): the address must still be the one noted for this person, since the page
+  // that sent it may be older than another admin's correction.
+  const OWN_NOTE: Query = {
+    table: "pending_login_emails",
+    calls: [["select", "email"], ["eq", "member_id", PERSON], ["maybeSingle"]],
+  };
+  const ownNote = (email: string | null) => ({ data: email === null ? null : { email }, error: null });
+
+  it("sends an invite as noted when the address is still the one noted for them", async () => {
+    loginAllowed(rows(PERSON));
+    userQueue.pending_login_emails = [notedFor(PERSON), ownNote(EMAIL)];
+    await expect(giveLogin(PERSON, "  Mei.Wong@Example.com ", true)).resolves.toEqual({ ok: true, value: null });
+    expect(userQueries.map((q) => q.table)).toEqual(["members", "member_grants", "pending_login_emails", "pending_login_emails"]);
+    expect(userQueries[3]).toEqual(OWN_NOTE);
+    expect(inviteUserByEmail).toHaveBeenCalledExactlyOnceWith(EMAIL, { redirectTo: `${SITE}/auth/callback?next=/portal` });
+    expectRevalidated();
+  });
+
+  it.each([
+    ["another address is noted for them now", ownNote("mei@example.org")],
+    ["their address was forgotten", ownNote(null)],
+    ["the table isn't there yet (nothing is noted)", { data: null, error: { code: "PGRST205", message: "no table" } }],
+  ])("refuses an invite as noted when %s, before any service-role call", async (_label, own) => {
+    loginAllowed(rows(PERSON));
+    userQueue.pending_login_emails = [rows(), own];
+    await expect(giveLogin(PERSON, EMAIL, true)).resolves.toEqual({ ok: false, error: NOTE_CHANGED });
+    expectNoServiceRole();
+    expect(inviteUserByEmail).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("says 'something went wrong' when it can't read their note, logging only code and status", async () => {
+    loginAllowed(rows(PERSON));
+    userQueue.pending_login_emails = [rows(), dbError("08006", `down for ${EMAIL}`)];
+    await expect(giveLogin(PERSON, EMAIL, true)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
+    expectNoServiceRole();
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("giveLogin own note failed", { code: "08006", status: undefined });
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("example.com");
+  });
+
+  it.each([["yes"], [1], [{}]])("reads only true as 'as noted', not %j, so a forged flag changes nothing", async (flag) => {
+    loginAllowed(rows(PERSON));
+    await expect(giveLogin(PERSON, EMAIL, flag as never)).resolves.toEqual({ ok: true, value: null });
+    expect(userQueries.map((q) => q.table)).toEqual(["members", "member_grants", "pending_login_emails"]);
+  });
+
+  it("checks someone else's note first: an address noted for another person is refused as such", async () => {
+    loginAllowed(rows(PERSON));
+    userQueue.pending_login_emails = [notedFor("a0000000-0000-4000-8000-000000000003")];
+    await expect(giveLogin(PERSON, EMAIL, true)).resolves.toEqual({ ok: false, error: NOTED_FOR_SOMEONE_ELSE });
+    expect(userQueries.map((q) => q.table)).toEqual(["members", "member_grants", "pending_login_emails"]);
+  });
+});
+
+// ---------- setPendingEmail ----------
+
+describe("setPendingEmail", () => {
+  const LOAD: Query = {
+    table: "members",
+    calls: [["select", "id, role, auth_user_id, removed_at"], ["eq", "id", PERSON], ["maybeSingle"]],
+  };
+  const GRANTS: Query = { table: "member_grants", calls: [["select", "grant_name"], ["eq", "member_id", PERSON], ["limit", 1]] };
+  // Change the address noted for them, if there is one; else note one. Only the person and the
+  // address are written: who noted it, and when, are the trigger's (0014).
+  const CHANGE = (email: string): Query => ({
+    table: "pending_login_emails",
+    calls: [["update", { email }], ["eq", "member_id", PERSON], ["select", "member_id"]],
+  });
+  const NOTE = (email: string): Query => ({ table: "pending_login_emails", calls: [["insert", { member_id: PERSON, email }]] });
+  const FORGET: Query = { table: "pending_login_emails", calls: [["delete"], ["eq", "member_id", PERSON]] };
+  const changed = (...ids: string[]) => ({ data: ids.map((member_id) => ({ member_id })), error: null });
+  const LATER = "mei.w@example.net";
+
+  // Someone an address may be noted for (no login, no grants), then what the writes answer.
+  function emailAllowed(...answers: Result[]) {
+    userQueue.members = [memberRow()];
+    userQueue.member_grants = [rows()];
+    userQueue.pending_login_emails = answers;
+  }
+  const pendingWrites = () => userQueries.filter((q) => q.table === "pending_login_emails");
+  const expectNothingNoted = () => {
+    expect(pendingWrites()).toEqual([]);
+    expect(revalidatePath).not.toHaveBeenCalled();
+  };
+
+  it("notes an address for someone who has none yet, as it's stored, and refreshes the pages", async () => {
+    emailAllowed(changed(), done());
+    await expect(setPendingEmail(PERSON, "  Mei.Wong@Example.com ")).resolves.toEqual({ ok: true, value: null });
+    // Checked as the admin (RLS applies), then the update reaches no row, so it's noted.
+    expect(userQueries).toEqual([LOAD, GRANTS, CHANGE(EMAIL), NOTE(EMAIL)]);
+    expect(createServiceRoleClient).not.toHaveBeenCalled();
+    expect(inviteUserByEmail).not.toHaveBeenCalled();
+    expectRevalidated();
+  });
+
+  it("changes the address already noted for them, with no second write", async () => {
+    emailAllowed(changed(PERSON));
+    await expect(setPendingEmail(PERSON, LATER)).resolves.toEqual({ ok: true, value: null });
+    expect(userQueries).toEqual([LOAD, GRANTS, CHANGE(LATER)]);
+    expectRevalidated();
+  });
+
+  it("reads and writes by the id in lower case, whatever case the request used", async () => {
+    emailAllowed(changed(), done());
+    await expect(setPendingEmail(PERSON.toUpperCase(), EMAIL)).resolves.toEqual({ ok: true, value: null });
+    expect(userQueries).toEqual([LOAD, GRANTS, CHANGE(EMAIL), NOTE(EMAIL)]);
+  });
+
+  it("forgets the noted address when given null, without checking the person, and refreshes the pages", async () => {
+    userQueue.pending_login_emails = [done()];
+    await expect(setPendingEmail(PERSON, null)).resolves.toEqual({ ok: true, value: null });
+    expect(userQueries).toEqual([FORGET]);
+    expect(createServiceRoleClient).not.toHaveBeenCalled();
+    expectRevalidated();
+  });
+
+  it("forgets by the id in lower case", async () => {
+    userQueue.pending_login_emails = [done()];
+    await expect(setPendingEmail(PERSON.toUpperCase(), null)).resolves.toEqual({ ok: true, value: null });
+    expect(userQueries).toEqual([FORGET]);
+  });
+
+  it.each([
+    ["RLS", dbError("42501", "permission denied for table pending_login_emails"), NO_PERMISSION],
+    ["a dropped connection", dbError("08006", `down for ${EMAIL}`), GENERIC_ERROR],
+  ])("says so when forgetting fails (%s), refreshing nothing", async (_label, error, message) => {
+    userQueue.pending_login_emails = [error];
+    await expect(setPendingEmail(PERSON, null)).resolves.toEqual({ ok: false, error: message });
+    expect(revalidatePath).not.toHaveBeenCalled();
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("example.com");
+  });
+
+  it("logs a failed forget with its code and status only", async () => {
+    userQueue.pending_login_emails = [dbError("08006", `down for ${EMAIL}`)];
+    await setPendingEmail(PERSON, null);
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("setPendingEmail forget failed", { code: "08006", status: undefined });
+  });
+
+  it.each([
+    ["a bad id", () => setPendingEmail("x", EMAIL)],
+    ["a bad id, forgetting", () => setPendingEmail("x", null)],
+    ["an id that isn't a string", () => setPendingEmail(42 as never, EMAIL)],
+    ["no id, forgetting", () => setPendingEmail(null as never, null)],
+    ["an id with SQL in it", () => setPendingEmail(`${PERSON}' or '1'='1`, null)],
+  ])("refuses %s without reading or writing anything", async (_label, run) => {
+    await expect(run()).resolves.toEqual({ ok: false, error: BAD_REQUEST });
+    expectNothingWritten();
+  });
+
+  // Only null forgets: a client that sends nothing, or an empty field, is told to enter an address.
+  it.each([
+    ["an empty address", () => setPendingEmail(PERSON, ""), "Enter an email address."],
+    ["only spaces", () => setPendingEmail(PERSON, "   "), "Enter an email address."],
+    ["no address at all", () => setPendingEmail(PERSON, undefined as never), "Enter an email address."],
+    ["an address that isn't text", () => setPendingEmail(PERSON, { toString: () => EMAIL } as never), "Enter an email address."],
+    ["two @s", () => setPendingEmail(PERSON, "a@b@example.com"), "Enter an email address like name@example.com."],
+    ["no dot in the domain", () => setPendingEmail(PERSON, "mei@localhost"), "Enter an email address like name@example.com."],
+    ["a space", () => setPendingEmail(PERSON, "mei wong@example.com"), "Email addresses can't contain spaces."],
+    ["a control character", () => setPendingEmail(PERSON, "mei\u0000@example.com"), "Email addresses can't contain spaces."],
+    ["a long address", () => setPendingEmail(PERSON, `${"m".repeat(250)}@example.com`), "Email addresses can be at most 254 characters."],
+  ])("refuses %s without reading or writing anything", async (_label, run, error) => {
+    await expect(run()).resolves.toEqual({ ok: false, error });
+    expectNothingWritten();
+  });
+
+  it.each([
+    ["isn't there (or RLS hides them)", { data: null, error: null }, PERSON_GONE],
+    ["was removed from Module One", memberRow({ removed_at: "2026-10-08T09:00:00Z" }), PERSON_REMOVED],
+    ["is the admin themselves", memberRow({ id: ADMIN, auth_user_id: ADMIN_AUTH }), EMAIL_NOT_YOURSELF],
+    ["is the admin themselves, a Master Admin", memberRow({ id: ADMIN, role: "hq", auth_user_id: ADMIN_AUTH }), EMAIL_NOT_YOURSELF],
+    ["is a Master Admin", memberRow({ role: "hq" }), MASTER_ADMIN_LOGIN],
+    ["is a Master Admin with a login", memberRow({ role: "hq", auth_user_id: LOGIN }), MASTER_ADMIN_LOGIN],
+    ["has a login", memberRow({ auth_user_id: LOGIN }), PENDING_HAS_LOGIN],
+  ])("refuses someone who %s before reading their grants, noting nothing", async (_label, row, error) => {
+    userQueue.members = [row];
+    await expect(setPendingEmail(PERSON, EMAIL)).resolves.toEqual({ ok: false, error });
+    expect(userQueries).toEqual([LOAD]);
+    expectNothingNoted();
+    expect(createServiceRoleClient).not.toHaveBeenCalled();
+  });
+
+  it("refuses the admin's own row whatever case the request used", async () => {
+    userQueue.members = [memberRow({ id: ADMIN, auth_user_id: ADMIN_AUTH })];
+    await expect(setPendingEmail(ADMIN.toUpperCase(), EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_NOT_YOURSELF });
+    expect(userQueries[0].calls).toContainEqual(["eq", "id", ADMIN]);
+    expectNothingNoted();
+  });
+
+  it("refuses someone who holds a grant, noting nothing", async () => {
+    userQueue.members = [memberRow()];
+    userQueue.member_grants = [{ data: [{ grant_name: "big_five" }], error: null }];
+    await expect(setPendingEmail(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: HOLDS_GRANTS });
+    expect(userQueries).toEqual([LOAD, GRANTS]);
+    expectNothingNoted();
+  });
+
+  it.each([
+    ["the person", () => (userQueue.members = [dbError("08006", `down for ${EMAIL}`)]), "setPendingEmail load failed"],
+    [
+      "their grants",
+      () => {
+        userQueue.members = [memberRow()];
+        userQueue.member_grants = [dbError("08006", `down for ${EMAIL}`)];
+      },
+      "setPendingEmail grants failed",
+    ],
+  ])("says 'something went wrong' when %s can't be read, noting nothing and logging only code and status", async (_label, arrange, context) => {
+    arrange();
+    await expect(setPendingEmail(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
+    expect(console.error).toHaveBeenCalledExactlyOnceWith(context, { code: "08006", status: undefined });
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain("example.com");
+    expectNothingNoted();
+  });
+
+  it("says the person changed when another admin noted an address between its two writes, keeping theirs", async () => {
+    emailAllowed(changed(), dbError("23505", 'duplicate key value violates unique constraint "pending_login_emails_pkey"'));
+    await expect(setPendingEmail(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: PERSON_CHANGED });
+    expect(pendingWrites()).toEqual([CHANGE(EMAIL), NOTE(EMAIL)]);
+    expect(console.error).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  const EMAIL_KEY = dbError("23505", 'duplicate key value violates unique constraint "pending_login_emails_email_key"');
+  it.each([
+    ["changing theirs", [EMAIL_KEY], [CHANGE(EMAIL)]],
+    ["noting one", [changed(), EMAIL_KEY], [CHANGE(EMAIL), NOTE(EMAIL)]],
+  ])("says the address is noted for someone else already (%s)", async (_label, answers, queries) => {
+    emailAllowed(...answers);
+    await expect(setPendingEmail(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: EMAIL_NOTED });
+    expect(pendingWrites()).toEqual(queries);
+    expect(console.error).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  // The trigger re-checks the person on every write (they may have changed since the read).
+  const TRIGGER_REFUSALS: [string, string][] = [
+    ["P0002", PERSON_GONE],
+    ["23514", PERSON_REMOVED],
+    ["23514", MASTER_ADMIN_LOGIN],
+    ["23514", PENDING_HAS_LOGIN],
+    ["23514", HOLDS_GRANTS],
+  ];
+  it.each(
+    TRIGGER_REFUSALS.flatMap(([code, message]): [string, string, Result[]][] => [
+      [`changing theirs (${code})`, message, [dbError(code, message)]],
+      [`noting one (${code})`, message, [changed(), dbError(code, message)]],
+    ]),
+  )("shows the trigger's sentence as it is when %s: %s", async (_label, message, answers) => {
+    emailAllowed(...answers);
+    await expect(setPendingEmail(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: message });
+    expect(console.error).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("refuses in the same words as migration 0014's trigger", () => {
+    const migration = readFileSync(new URL("../../../../../supabase/migrations/0014_pending_emails.sql", import.meta.url), "utf8");
+    for (const [, message] of TRIGGER_REFUSALS) expect(migration).toContain(`'${message.replaceAll("'", "''")}'`);
+  });
+
+  it("says what the table's format check means rather than Postgres's words", async () => {
+    emailAllowed(
+      changed(),
+      dbError("23514", 'new row for relation "pending_login_emails" violates check constraint "pending_login_emails_email_format"'),
+    );
+    await expect(setPendingEmail(PERSON, EMAIL)).resolves.toEqual({
+      ok: false,
+      error: "Enter an email address like name@example.com.",
+    });
+  });
+
+  it.each([
+    ["changing theirs", [dbError("08006", `down for ${EMAIL}`)], "setPendingEmail change failed"],
+    ["noting one", [changed(), dbError("08006", `down for ${EMAIL}`)], "setPendingEmail note failed"],
+  ])("hides any other failure %s behind the generic sentence, logging only code and status", async (_label, answers, context) => {
+    emailAllowed(...answers);
+    await expect(setPendingEmail(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: GENERIC_ERROR });
+    expect(console.error).toHaveBeenCalledExactlyOnceWith(context, { code: "08006", status: undefined });
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toMatch(/@|example/);
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("says 'no permission' when RLS refuses the write", async () => {
+    emailAllowed(changed(), dbError("42501", 'new row violates row-level security policy for table "pending_login_emails"'));
+    await expect(setPendingEmail(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: NO_PERMISSION });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("checks the admin grant before reading the person", async () => {
+    emailAllowed(changed(), done());
+    await setPendingEmail(PERSON, EMAIL);
+    expect(rpc.mock.invocationCallOrder[0]).toBeLessThan(from.mock.invocationCallOrder[0]);
+    expect(rpc).toHaveBeenCalledWith("app_has_grant", { requested: "admin" });
   });
 });
 

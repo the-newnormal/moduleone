@@ -40,8 +40,10 @@ const ACTIONS = { moveNode: fail, createNode: fail, updateNode: fail, archiveNod
 const TEAM_ACTIONS = {
   addMember: fail,
   createMember: fail,
+  createMembers: fail,
   giveLogin: fail,
   resendInvite: fail,
+  setPendingEmail: fail,
   removeFromTeam: fail,
   setRole: fail,
   addLead: fail,

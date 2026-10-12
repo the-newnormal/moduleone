@@ -1,6 +1,7 @@
 // What the team page's server actions say when they refuse before (or instead of) the database.
 // They live here because a "use server" file may only export async functions.
 
+import { MAX_PEOPLE } from "@/lib/admin/people-list";
 import { ROLE_LABELS } from "@/lib/admin/roles";
 
 export const BAD_REQUEST = "That request wasn't valid. Reload the page and try again.";
@@ -67,3 +68,23 @@ export const EMAIL_NOT_RESTORED =
 
 // Every change to who sits in or leads the organisation node (migration 0006)
 export const ORGANISATION_OWNER_ONLY = "Only the project owner decides who sits in the organisation and who leads it.";
+
+// createMembers (Add a list) and setPendingEmail (Set email), migration 0014
+export const NO_PEOPLE = "Add at least one person.";
+export const TOO_MANY_PEOPLE = `A list can add at most ${MAX_PEOPLE} people. Add the rest in another list.`;
+// The server's own check of each person on a list (the dialog checks them first, by line).
+export const personProblem = (position: number, problem: string) => `Person ${position} on the list: ${problem}`;
+export const listedTwice = (email: string) => `${email} is on the list twice. Give each person their own address.`;
+export const notedForOthers = (emails: readonly string[]) =>
+  emails.length === 1
+    ? `${emails[0]} is already noted for someone else. Use another address, or change theirs first.`
+    : `These emails are already noted for someone else: ${emails.join(", ")}. Use other addresses, or change theirs first.`;
+// The same sentence migration 0014's trigger uses.
+export const PENDING_HAS_LOGIN =
+  "This person already has a login. To change the address they sign in with, use Change email.";
+// giveLogin from Send invites: the address the page showed isn't the one noted for them any more.
+export const NOTE_CHANGED =
+  "The email noted for this person changed while you were working. Reload the page and check it.";
+// giveLogin: an address noted for someone else's invite.
+export const NOTED_FOR_SOMEONE_ELSE =
+  "That email is noted for someone else's invite. Use another address, or change theirs first.";
