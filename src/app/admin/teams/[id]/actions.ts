@@ -399,6 +399,21 @@ async function notedFor(supabase: Supabase, memberId: string): Promise<ActionRes
   return { ok: true, value: (data as { email: string } | null)?.email ?? null };
 }
 
+async function reserveNotedEmail(supabase: Supabase, memberId: string, email: string): Promise<ActionResult<string>> {
+  const { data, error } = await supabase.rpc("reserve_pending_login_email", {
+    p_member_id: memberId,
+    p_email: email,
+  });
+  if (error) return fail(toUserMessage(error, "giveLogin reserve note"));
+  if (typeof data !== "string") return fail(NOTE_CHANGED);
+  return { ok: true, value: data };
+}
+
+async function releaseNotedEmail(supabase: Supabase, memberId: string, token: string): Promise<void> {
+  const { error } = await supabase.rpc("release_pending_login_email", { p_member_id: memberId, p_token: token });
+  if (error) logError("giveLogin release note", error);
+}
+
 // This site's URL, for the invite's redirectTo (<site>/auth/callback; Supabase accepts it only if
 // it's in the project's redirect URLs). The link in the invite email itself is built from Supabase
 // Auth's Site URL ({{ .SiteURL }} in supabase/templates/invite.html), so NEXT_PUBLIC_SITE_URL must
@@ -546,31 +561,50 @@ export async function giveLogin(memberId: string, email: string, asNoted = false
   const noted = await notedElsewhere(supabase, address.value, row.id);
   if (!noted.ok) return noted;
   if (noted.value) return fail(NOTED_FOR_SOMEONE_ELSE);
+  let noteReservation: string | null = null;
   if (asNoted === true) {
     const own = await notedFor(supabase, row.id);
     if (!own.ok) return own;
     if (own.value !== address.value) return fail(NOTE_CHANGED);
+    const reserved = await reserveNotedEmail(supabase, row.id, address.value);
+    if (!reserved.ok) return reserved;
+    noteReservation = reserved.value;
   }
 
   // 4.
+  const releaseNote = () =>
+    noteReservation === null ? Promise.resolve() : releaseNotedEmail(supabase, row.id, noteReservation);
   const site = siteUrl();
-  if (!site) return fail(MISSING_SITE_URL);
+  if (!site) {
+    await releaseNote();
+    return fail(MISSING_SITE_URL);
+  }
   const client = serviceClient("giveLogin");
-  if (!client.ok) return client;
+  if (!client.ok) {
+    await releaseNote();
+    return client;
+  }
   const service = client.value;
 
   // The id as the database has it (lower case), not as the request spelled it: recordings live
   // under checkin-audio/<member id>/ and storage listings needn't ignore case.
   const history = await earlierLogin(service, row.id);
-  if (history !== "none") return fail(history === "found" ? EARLIER_LOGIN : GENERIC_ERROR);
+  if (history !== "none") {
+    await releaseNote();
+    return fail(history === "found" ? EARLIER_LOGIN : GENERIC_ERROR);
+  }
 
   const redirectTo = new URL("/auth/callback?next=/portal", site).toString();
   const invitedAt = Date.now();
   const invite = await service.auth.admin.inviteUserByEmail(address.value, { redirectTo });
-  if (invite.error) return fail(inviteFailure("giveLogin", invite.error, EMAIL_TAKEN));
+  if (invite.error) {
+    await releaseNote();
+    return fail(inviteFailure("giveLogin", invite.error, EMAIL_TAKEN));
+  }
   const authUserId = invite.data.user?.id;
   if (!authUserId) {
     logError("giveLogin invite", { code: "no_user" });
+    await releaseNote();
     return fail(GENERIC_ERROR);
   }
   // A login made before this invite was re-sent, not created, by it (see discardLogin). With an
@@ -583,9 +617,13 @@ export async function giveLogin(memberId: string, email: string, asNoted = false
     const pending = await service.from("members").select("id").eq("removed_login_id", authUserId).limit(1);
     if (pending.error) {
       logError("giveLogin pending check", pending.error);
+      await releaseNote();
       return fail(GENERIC_ERROR);
     }
-    if ((pending.data ?? []).length > 0) return fail(EMAIL_TAKEN);
+    if ((pending.data ?? []).length > 0) {
+      await releaseNote();
+      return fail(EMAIL_TAKEN);
+    }
   }
 
   // 5.
@@ -604,14 +642,17 @@ export async function giveLogin(memberId: string, email: string, asNoted = false
   if (linkError) {
     // The address belongs to another member's login that hasn't been used yet.
     if (linkError.code === "23505" && (linkError.message ?? "").includes("auth_user_id")) {
+      await releaseNote();
       return fail(EMAIL_TAKEN);
     }
     logError("giveLogin link", linkError);
     await discardLogin(service, authUserId, createdHere);
+    await releaseNote();
     return fail(GENERIC_ERROR);
   }
   if (!linked || linked.length === 0) {
     await discardLogin(service, authUserId, createdHere);
+    await releaseNote();
     return fail(INVITE_RACE);
   }
 
@@ -638,9 +679,11 @@ export async function giveLogin(memberId: string, email: string, asNoted = false
       logError("giveLogin unlink retry", unlinkError);
       const { error } = await service.auth.admin.deleteUser(authUserId);
       if (error) logError("giveLogin cleanup", error);
+      await releaseNote();
       return fail(GENERIC_ERROR);
     }
     await discardLogin(service, authUserId, createdHere);
+    await releaseNote();
     return fail(late === "grants" ? HOLDS_GRANTS : late === "profile" ? EARLIER_LOGIN : GENERIC_ERROR);
   }
 

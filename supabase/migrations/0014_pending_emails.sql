@@ -117,6 +117,67 @@ revoke execute on function pending_login_emails_check() from public, anon, authe
 create trigger pending_login_emails_check before insert or update on pending_login_emails
   for each row execute function pending_login_emails_check();
 
+-- A reservation closes the gap between checking the noted address and asking Auth to send it.
+-- Only the server can create or release one; while it exists, admins cannot change or forget the
+-- note. The service role (auth.uid() is null) may still remove it when the login is linked.
+create table pending_login_email_reservations (
+  member_id uuid primary key references pending_login_emails(member_id) on delete cascade,
+  email text not null,
+  token uuid not null unique
+);
+
+alter table pending_login_email_reservations enable row level security;
+revoke all on table pending_login_email_reservations from public, anon, authenticated;
+grant all on table pending_login_email_reservations to service_role;
+
+create function reserve_pending_login_email(p_member_id uuid, p_email text) returns uuid
+  language plpgsql security definer set search_path = '' as $$
+ declare
+   v_token uuid := gen_random_uuid();
+ begin
+   if not coalesce(public.app_has_grant('admin'), false) then
+     return null;
+   end if;
+   perform 1 from public.pending_login_emails
+     where member_id = p_member_id and email = p_email for update;
+   if not found then return null; end if;
+   insert into public.pending_login_email_reservations(member_id, email, token)
+     values (p_member_id, p_email, v_token);
+   return v_token;
+ exception when unique_violation then
+   return null;
+ end $$;
+
+create function release_pending_login_email(p_member_id uuid, p_token uuid) returns boolean
+  language plpgsql security definer set search_path = '' as $$
+ begin
+   if not coalesce(public.app_has_grant('admin'), false) then return false; end if;
+   delete from public.pending_login_email_reservations
+     where member_id = p_member_id and token = p_token;
+   return found;
+ end $$;
+revoke execute on function reserve_pending_login_email(uuid, text) from public, anon;
+grant execute on function reserve_pending_login_email(uuid, text) to authenticated;
+revoke execute on function release_pending_login_email(uuid, uuid) from public, anon;
+grant execute on function release_pending_login_email(uuid, uuid) to authenticated;
+
+create function pending_login_emails_reservation_check() returns trigger
+  language plpgsql security definer set search_path = '' as $$
+begin
+  if auth.uid() is not null and exists (
+    select 1 from public.pending_login_email_reservations
+    where member_id = old.member_id
+  ) then
+    raise exception using errcode = 'check_violation', message = 'This invite is being sent. Try again after it finishes.';
+  end if;
+  if tg_op = 'DELETE' then return old; end if;
+  return new;
+end $$;
+revoke execute on function pending_login_emails_reservation_check() from public, anon, authenticated;
+create trigger pending_login_emails_reservation_check
+  before update or delete on pending_login_emails for each row
+  execute function pending_login_emails_reservation_check();
+
 -- Once someone has a login (giveLogin, or the project owner in the dashboard), is removed from
 -- Module One (admin_remove_member) or is made a Master Admin, their noted address goes: it was
 -- only ever for their first invite.
