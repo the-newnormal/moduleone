@@ -34,9 +34,14 @@ export function viewLine(line: ViewLine, thisYear: string): string {
 }
 
 // What the summary says they did: "Opened by" only when each of them opened it, since a recording
-// can be played from its own address without opening the check-in.
+// can be played from its own address without opening the check-in. What someone did with this
+// week's check-in counts over what they did with an earlier one since reset; only when they saw
+// nothing but that earlier one does it decide.
 export function viewedByLabel(groups: readonly ViewGroup[]): string {
-  const opened = groups.filter((g) => g.lines.some((line) => line.kind === "opened")).length;
+  const opened = groups.filter((g) => {
+    const current = g.lines.filter((line) => !line.reset);
+    return (current.length > 0 ? current : g.lines).some((line) => line.kind === "opened");
+  }).length;
   if (opened === groups.length) return "Opened by";
   return opened === 0 ? "Recording played by" : "Opened or played by";
 }

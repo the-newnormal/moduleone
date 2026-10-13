@@ -51,6 +51,19 @@ describe("viewedByLabel", () => {
     );
     expect(viewedByLabel([person("Jane Tan", ["played"]), person("Ali Rahman")])).toBe("Opened or played by");
   });
+
+  it("goes by this week's check-in, not one since reset, unless that's all they saw", () => {
+    const earlier = (kind: ViewLine["kind"]) => line({ kind, at: "2026-10-06T06:15:00Z", reset: true });
+    // Opened the earlier check-in, then only played the one recorded again.
+    const replayed: ViewGroup = { name: "Jane Tan", lines: [line({ kind: "played" }), earlier("opened")] };
+    expect(viewedByLabel([replayed])).toBe("Recording played by");
+    expect(viewedByLabel([replayed, person("Ali Rahman")])).toBe("Opened or played by");
+    // Opened the new one after only playing the earlier one.
+    expect(viewedByLabel([{ name: "Jane Tan", lines: [line(), earlier("played")] }])).toBe("Opened by");
+    // Saw only the earlier one.
+    expect(viewedByLabel([{ name: "Jane Tan", lines: [earlier("opened")] }])).toBe("Opened by");
+    expect(viewedByLabel([{ name: "Jane Tan", lines: [earlier("played")] }])).toBe("Recording played by");
+  });
 });
 
 describe("ViewedBy and NoLongerInDiary", () => {
