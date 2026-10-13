@@ -3,6 +3,7 @@ import { after } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_AUDIO_BYTES } from "@/lib/checkin/audio";
 import { linkLiveCheckin, linkLiveTake } from "@/lib/checkin/live-sessions";
+import { noteOnboardingForm } from "@/lib/checkin/onboarding-note";
 import { processCheckin } from "@/lib/checkin/process";
 import { createServiceRoleClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -18,6 +19,7 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ createServiceRoleClient: vi.fn() }));
 vi.mock("@/lib/checkin/process", () => ({ processCheckin: vi.fn() }));
 vi.mock("@/lib/checkin/live-sessions", () => ({ linkLiveTake: vi.fn(), linkLiveCheckin: vi.fn() }));
+vi.mock("@/lib/checkin/onboarding-note", () => ({ noteOnboardingForm: vi.fn() }));
 
 // The real links, for the tests that check a failing one never fails the action: they write through
 // the fake service-role client below.
@@ -135,6 +137,7 @@ beforeEach(() => {
   vi.mocked(processCheckin).mockReset().mockResolvedValue("graded");
   vi.mocked(linkLiveTake).mockReset().mockResolvedValue(undefined);
   vi.mocked(linkLiveCheckin).mockReset().mockResolvedValue(undefined);
+  vi.mocked(noteOnboardingForm).mockReset().mockResolvedValue({ error: null });
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -179,13 +182,18 @@ describe("every check-in action", () => {
   });
 
   // No privacy notice in the app (the product owner's decision, 13 October 2026): nothing here checks
-  // an acceptance, and the only row written to recording_notices is the Diary's onboarding note
-  // (src/lib/checkin/onboarding-note.ts), never one of these actions.
-  it.each(ACTIONS)("%s neither reads nor writes recording_notices", async (_name, action) => {
+  // an acceptance, and the only row written to recording_notices is the onboarding note
+  // (src/lib/checkin/onboarding-note.ts), which only prepareRecording asks for.
+  it.each(ACTIONS)("%s neither reads nor writes recording_notices itself", async (_name, action) => {
     await action();
     expect(createServiceRoleClient).toHaveBeenCalled(); // it got as far as writing
     expect(queries.map((q) => q.table)).not.toContain("recording_notices");
     expect(adminQueries.map((q) => q.table)).not.toContain("recording_notices");
+  });
+
+  it.each(ACTIONS.filter(([name]) => name !== "prepareRecording"))("%s never notes the onboarding form", async (_name, action) => {
+    await action();
+    expect(noteOnboardingForm).not.toHaveBeenCalled();
   });
 });
 
@@ -213,9 +221,29 @@ describe("prepareRecording", () => {
     expect([...queries, ...adminQueries].filter((q) => q.table === "recording_notices")).toEqual([]);
   });
 
+  // The Diary notes the form before it shows the recorder; a call made without loading it still
+  // can't get an upload for a login without the note.
+  it("notes the onboarding form for the session's login before it signs the upload", async () => {
+    expect(await prepareRecording("audio/webm")).toMatchObject({ status: "ready" });
+    expect(noteOnboardingForm).toHaveBeenCalledExactlyOnceWith(MEMBER, USER);
+    expect(vi.mocked(noteOnboardingForm).mock.invocationCallOrder[0]).toBeLessThan(
+      createSignedUploadUrl.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("signs nothing, and says so without details, when the note can't be written", async () => {
+    vi.mocked(noteOnboardingForm).mockResolvedValue({ error: { code: "42501" } });
+    expect(await prepareRecording("audio/webm")).toMatchObject({ status: "error", code: "failed" });
+    expect(createSignedUploadUrl).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("prepareRecording: noting the onboarding form failed", {
+      code: "42501",
+    });
+  });
+
   it("refuses once this week's check-in is in", async () => {
     reads.checkins = { data: { id: "d1000000-0000-4000-8000-000000000001" }, error: null };
     expect(await prepareRecording("audio/webm")).toEqual({ status: "submitted" });
+    expect(noteOnboardingForm).not.toHaveBeenCalled();
     expect(queries.find((q) => q.table === "checkins")?.filters).toEqual([
       ["member_id", MEMBER],
       ["week_start", WEEK],

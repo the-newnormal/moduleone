@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { baseMimeType, draftPath, extensionFor, isOwnAudioPath, MAX_AUDIO_BYTES } from "@/lib/checkin/audio";
 import { linkLiveCheckin, linkLiveTake } from "@/lib/checkin/live-sessions";
+import { noteOnboardingForm } from "@/lib/checkin/onboarding-note";
 import { processCheckin } from "@/lib/checkin/process";
 import { currentWeekStart } from "@/lib/checkin/week";
 import { sessionMember as currentMember, type Session } from "@/lib/checkin/session";
@@ -121,6 +122,15 @@ export async function prepareRecording(mimeType: string): Promise<PrepareRecordi
 
   const ext = typeof mimeType === "string" && mimeType.length <= 100 ? extensionFor(mimeType) : null;
   if (!ext) return fail("unsupported_audio");
+
+  // The Diary notes the onboarding form before it shows the recorder; this makes sure of it here too,
+  // so no upload is signed for a login without the note (a call made without loading the Diary).
+  // It keeps the first note, so it changes nothing for a login the Diary already noted.
+  const note = await noteOnboardingForm(session.member.id, session.authUserId);
+  if (note.error) {
+    console.error("prepareRecording: noting the onboarding form failed", { code: note.error.code });
+    return fail("failed");
+  }
 
   const path = draftPath(session.member.id, weekStart, ext);
   const { data: signed, error: signError } = await createServiceRoleClient()

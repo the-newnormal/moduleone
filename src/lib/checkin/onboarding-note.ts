@@ -8,7 +8,9 @@ import { createServiceRoleClient } from "@/lib/supabase/admin";
 // if, when the take started, the speaker's login had a recording_notices row promising a year (and
 // nothing shorter since). So the Diary notes that assumption for the signed-in login every time it
 // loads, before it can show the recorder (src/app/portal/checkin/page.tsx): every take recorded there
-// starts after the note and is kept a year. Takes started before it keep what they were given.
+// starts after the note and is kept a year. prepareRecording notes it again before it signs an upload
+// (src/app/portal/checkin/actions.ts), so no take is saved for a login without one. Takes started
+// before it keep what they were given.
 // The row is Module One's note of an assumption, not consent and not evidence of it: its version says
 // "assumed:", and accepted_at is when Module One first relied on the form for this login, not when the
 // member filled it in. The first write is kept. Never backdate one, or write one for any login but the
