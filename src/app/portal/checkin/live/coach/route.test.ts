@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { claimCoachCall, recordCoachCost, saveCoachState, type Claim } from "@/lib/checkin/live-sessions";
-import { noticeAccepted, sessionMember, type Session } from "@/lib/checkin/session";
+import { sessionMember, type Session } from "@/lib/checkin/session";
 import { CoachError, readTranscript, type CoachRead, type CoachReadResult } from "@/lib/coach";
 import { initialState, type CoachState } from "@/lib/coach/policy";
 import { coachRubric } from "@/lib/coach/rubric";
@@ -10,7 +10,7 @@ import { POST } from "./route";
 
 // The coach's rubric, prompt, policy and turn are the real ones; only Claude's read is mocked. The
 // error classes are the real ones too, so the route tells a CoachError from a bug as it would live.
-vi.mock("@/lib/checkin/session", () => ({ sessionMember: vi.fn(), noticeAccepted: vi.fn() }));
+vi.mock("@/lib/checkin/session", () => ({ sessionMember: vi.fn() }));
 vi.mock("@/lib/checkin/live-sessions", () => ({
   claimCoachCall: vi.fn(),
   saveCoachState: vi.fn(),
@@ -69,7 +69,6 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"], now: NOW });
   vi.stubEnv("LIVE_CHECKIN", "on");
   vi.mocked(sessionMember).mockReset().mockResolvedValue(SESSION);
-  vi.mocked(noticeAccepted).mockReset().mockResolvedValue(true);
   vi.mocked(claimCoachCall).mockReset().mockResolvedValue(claim());
   vi.mocked(saveCoachState).mockReset().mockResolvedValue(true);
   vi.mocked(recordCoachCost).mockReset().mockResolvedValue(undefined);
@@ -114,10 +113,9 @@ describe("POST /portal/checkin/live/coach", () => {
     expect(recordCoachCost).toHaveBeenCalledExactlyOnceWith(SESSION_ID, "claude-haiku-5-5", USAGE);
   });
 
-  it("checks who is calling, not the notice again (checked when the session started)", async () => {
+  it("checks who is calling", async () => {
     await POST(post());
     expect(sessionMember).toHaveBeenCalledOnce();
-    expect(noticeAccepted).not.toHaveBeenCalled();
   });
 
   it("never keeps the member's words in the coach's state", async () => {

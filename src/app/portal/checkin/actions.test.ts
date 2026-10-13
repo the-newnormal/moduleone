@@ -3,11 +3,11 @@ import { after } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_AUDIO_BYTES } from "@/lib/checkin/audio";
 import { linkLiveCheckin, linkLiveTake } from "@/lib/checkin/live-sessions";
-import { noticeVersion, RECORDING_KEEP_DAYS } from "@/lib/checkin/notice";
+import { noteOnboardingForm } from "@/lib/checkin/onboarding-note";
 import { processCheckin } from "@/lib/checkin/process";
 import { createServiceRoleClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { acceptNotice, deleteDraft, prepareRecording, saveDraft, submitCheckin } from "./actions";
+import { deleteDraft, prepareRecording, saveDraft, submitCheckin } from "./actions";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("next/server", async (importOriginal) => ({
@@ -19,6 +19,7 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ createServiceRoleClient: vi.fn() }));
 vi.mock("@/lib/checkin/process", () => ({ processCheckin: vi.fn() }));
 vi.mock("@/lib/checkin/live-sessions", () => ({ linkLiveTake: vi.fn(), linkLiveCheckin: vi.fn() }));
+vi.mock("@/lib/checkin/onboarding-note", () => ({ noteOnboardingForm: vi.fn() }));
 
 // The real links, for the tests that check a failing one never fails the action: they write through
 // the fake service-role client below.
@@ -59,14 +60,13 @@ function rlsFrom(table: string) {
   return builder;
 }
 
-// The service-role client: rpc, an upsert, the check-ins lookup before a delete, an update (the live
-// session links) and Storage. The lookup only finds checkinsUsingPath when it filters on this member
+// The service-role client: rpc, the check-ins lookup before a delete, an update (the live session
+// links) and Storage. The lookup only finds checkinsUsingPath when it filters on this member
 // and this path; an update answers with updateResult.
 let checkinsUsingPath: { id: string; member_id: string; audio_path: string }[];
 let updateResult: Result | Error;
 let adminQueries: Query[];
 const rpc = vi.fn();
-const upsert = vi.fn();
 const createSignedUploadUrl = vi.fn();
 const info = vi.fn();
 const remove = vi.fn();
@@ -75,7 +75,6 @@ function adminFrom(table: string) {
   const query: Query = { table, columns: "", filters: [] };
   adminQueries.push(query);
   const builder = {
-    upsert,
     select(columns: string) {
       query.columns = columns;
       return builder;
@@ -116,7 +115,6 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"], now: NOW });
   reads = {
     members: { data: { id: MEMBER, team_id: "7ea30000-0000-4000-8000-000000000001" }, error: null },
-    recording_notices: { data: { member_id: MEMBER }, error: null },
     checkins: { data: null, error: null },
   };
   queries = [];
@@ -127,7 +125,6 @@ beforeEach(() => {
   vi.mocked(createServiceRoleClient).mockReset().mockReturnValue({ rpc, from: adminFrom, storage: { from: storageFrom } } as never);
   getClaims.mockReset().mockResolvedValue({ data: { claims: { sub: USER } }, error: null });
   rpc.mockReset().mockResolvedValue({ data: null, error: null });
-  upsert.mockReset().mockResolvedValue({ data: null, error: null });
   createSignedUploadUrl.mockReset().mockImplementation(async (path: string) => ({
     data: { path, token: "tok", signedUrl: `http://127.0.0.1:54321/storage/v1/object/upload/sign/checkin-audio/${path}?token=tok` },
     error: null,
@@ -140,6 +137,7 @@ beforeEach(() => {
   vi.mocked(processCheckin).mockReset().mockResolvedValue("graded");
   vi.mocked(linkLiveTake).mockReset().mockResolvedValue(undefined);
   vi.mocked(linkLiveCheckin).mockReset().mockResolvedValue(undefined);
+  vi.mocked(noteOnboardingForm).mockReset().mockResolvedValue({ error: null });
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -149,7 +147,6 @@ afterEach(() => {
 });
 
 const ACTIONS = [
-  ["acceptNotice", () => acceptNotice(noticeVersion())],
   ["prepareRecording", () => prepareRecording("audio/webm")],
   ["saveDraft", () => saveDraft({ path: PATH, durationMs: 1000 })],
   ["deleteDraft", () => deleteDraft(PATH)],
@@ -183,38 +180,20 @@ describe("every check-in action", () => {
     expect(await action()).toMatchObject({ status: "error", code: "failed" });
     expect(console.error).toHaveBeenCalledWith("checkin: reading the member failed", { code: "PGRST000" });
   });
-});
 
-describe("acceptNotice", () => {
-  it("records the current notice version for the session's member and login, once", async () => {
-    expect(await acceptNotice(noticeVersion())).toEqual({ status: "accepted" });
-    expect(upsert).toHaveBeenCalledExactlyOnceWith(
-      { member_id: MEMBER, auth_user_id: USER, notice_version: noticeVersion(), recording_keep_days: 365 },
-      { onConflict: "member_id,auth_user_id,notice_version", ignoreDuplicates: true },
-    );
-    expect(revalidatePath).toHaveBeenCalledExactlyOnceWith(PAGE);
+  // No privacy notice in the app (the product owner's decision, 13 October 2026): nothing here checks
+  // an acceptance, and the only row written to recording_notices is the onboarding note
+  // (src/lib/checkin/onboarding-note.ts), which only prepareRecording asks for.
+  it.each(ACTIONS)("%s neither reads nor writes recording_notices itself", async (_name, action) => {
+    await action();
+    expect(createServiceRoleClient).toHaveBeenCalled(); // it got as far as writing
+    expect(queries.map((q) => q.table)).not.toContain("recording_notices");
+    expect(adminQueries.map((q) => q.table)).not.toContain("recording_notices");
   });
 
-  // submit_checkin_draft keeps a recording a year only if its speaker's login had accepted a notice
-  // promising that (0013): the promise is the notice's own, and the login the session's.
-  it("stores how long the notice promised to keep recordings, with the login from the session", async () => {
-    await acceptNotice(noticeVersion());
-    const [row] = upsert.mock.calls[0];
-    expect(row.recording_keep_days).toBe(RECORDING_KEEP_DAYS);
-    expect(row.auth_user_id).toBe(USER);
-    expect(queries[0]).toEqual({ table: "members", columns: "id, team_id", filters: [["auth_user_id", USER]] });
-  });
-
-  it("reports a failed write", async () => {
-    upsert.mockResolvedValue({ data: null, error: { code: "42501", message: "denied" } });
-    expect(await acceptNotice(noticeVersion())).toMatchObject({ status: "error", code: "failed" });
-    expect(revalidatePath).not.toHaveBeenCalled();
-  });
-
-  it("records nothing for a notice that has changed since the member read it, and shows the new one", async () => {
-    expect(await acceptNotice("2026-10-01.local")).toMatchObject({ status: "error", code: "notice_required" });
-    expect(upsert).not.toHaveBeenCalled();
-    expect(revalidatePath).toHaveBeenCalledExactlyOnceWith(PAGE);
+  it.each(ACTIONS.filter(([name]) => name !== "prepareRecording"))("%s never notes the onboarding form", async (_name, action) => {
+    await action();
+    expect(noteOnboardingForm).not.toHaveBeenCalled();
   });
 });
 
@@ -234,29 +213,37 @@ describe("prepareRecording", () => {
     expect(result).toMatchObject({ status: "ready", contentType: "audio/mp4", path: expect.stringMatching(/\.m4a$/) });
   });
 
-  it("checks the current notice version, accepted with this login", async () => {
-    await prepareRecording("audio/webm");
-    expect(queries.find((q) => q.table === "recording_notices")?.filters).toEqual([
-      ["member_id", MEMBER],
-      ["auth_user_id", USER],
-      ["notice_version", noticeVersion()],
-    ]);
+  // There is no notice to accept: members agree on the onboarding form, outside Module One
+  // (src/lib/checkin/onboarding-note.ts).
+  it("prepares an upload for a member who never accepted any notice", async () => {
+    expect(await prepareRecording("audio/webm")).toMatchObject({ status: "ready" });
+    expect(createSignedUploadUrl).toHaveBeenCalledOnce();
+    expect([...queries, ...adminQueries].filter((q) => q.table === "recording_notices")).toEqual([]);
   });
 
-  it("asks for the privacy notice first", async () => {
-    reads.recording_notices = { data: null, error: null };
-    expect(await prepareRecording("audio/webm")).toEqual({
-      status: "error",
-      code: "notice_required",
-      message: "Read the privacy notice first.",
-    });
+  // The Diary notes the form before it shows the recorder; a call made without loading it still
+  // can't get an upload for a login without the note.
+  it("notes the onboarding form for the session's login before it signs the upload", async () => {
+    expect(await prepareRecording("audio/webm")).toMatchObject({ status: "ready" });
+    expect(noteOnboardingForm).toHaveBeenCalledExactlyOnceWith(MEMBER, USER);
+    expect(vi.mocked(noteOnboardingForm).mock.invocationCallOrder[0]).toBeLessThan(
+      createSignedUploadUrl.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("signs nothing, and says so without details, when the note can't be written", async () => {
+    vi.mocked(noteOnboardingForm).mockResolvedValue({ error: { code: "42501" } });
+    expect(await prepareRecording("audio/webm")).toMatchObject({ status: "error", code: "failed" });
     expect(createSignedUploadUrl).not.toHaveBeenCalled();
-    expect(revalidatePath).toHaveBeenCalledExactlyOnceWith(PAGE); // so the page shows the notice
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("prepareRecording: noting the onboarding form failed", {
+      code: "42501",
+    });
   });
 
   it("refuses once this week's check-in is in", async () => {
     reads.checkins = { data: { id: "d1000000-0000-4000-8000-000000000001" }, error: null };
     expect(await prepareRecording("audio/webm")).toEqual({ status: "submitted" });
+    expect(noteOnboardingForm).not.toHaveBeenCalled();
     expect(queries.find((q) => q.table === "checkins")?.filters).toEqual([
       ["member_id", MEMBER],
       ["week_start", WEEK],
@@ -618,11 +605,13 @@ describe("submitCheckin", () => {
     expect(after).not.toHaveBeenCalled();
   });
 
-  it("asks for the current privacy notice before sending the recording on", async () => {
-    reads.recording_notices = { data: null, error: null };
-    expect(await submitCheckin(PATH)).toMatchObject({ status: "error", code: "notice_required" });
-    expect(rpc).not.toHaveBeenCalled();
-    expect(revalidatePath).toHaveBeenCalledExactlyOnceWith(PAGE);
+  // How long the recording is kept is submit_checkin_draft's to decide (0013), from the Diary's
+  // onboarding note; the action checks no acceptance of its own.
+  it("submits for a member who never accepted any notice", async () => {
+    rpc.mockResolvedValue({ data: ID, error: null });
+    expect(await submitCheckin(PATH)).toEqual({ status: "submitted" });
+    expect(rpc).toHaveBeenCalledExactlyOnceWith("submit_checkin_draft", { p_member_id: MEMBER, p_audio_path: PATH });
+    expect([...queries, ...adminQueries].filter((q) => q.table === "recording_notices")).toEqual([]);
   });
 
   it("reports other errors and schedules nothing", async () => {

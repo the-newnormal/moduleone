@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { noticeAccepted, sessionMember, type Session } from "@/lib/checkin/session";
+import { sessionMember, type Session } from "@/lib/checkin/session";
 import type { LiveErrorCode } from "./contract";
 import { json, liveMember, readJson, refuse } from "./respond";
 
-vi.mock("@/lib/checkin/session", () => ({ sessionMember: vi.fn(), noticeAccepted: vi.fn() }));
+vi.mock("@/lib/checkin/session", () => ({ sessionMember: vi.fn() }));
 
 const URL_ = "https://moduleone.newnormal.sg/portal/checkin/live/coach";
 const HOST = "moduleone.newnormal.sg";
@@ -27,7 +27,6 @@ const SESSION = {
 
 beforeEach(() => {
   vi.mocked(sessionMember).mockReset().mockResolvedValue(SESSION);
-  vi.mocked(noticeAccepted).mockReset().mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -133,7 +132,6 @@ describe("refuse", () => {
     ["bad_request", 400],
     ["signed_out", 401],
     ["no_member", 403],
-    ["notice_required", 403],
     ["no_session", 404],
     ["submitted", 409],
     ["session_over", 410],
@@ -150,14 +148,9 @@ describe("refuse", () => {
 });
 
 describe("liveMember", () => {
-  it("is the session's member, without checking the notice when it isn't asked to", async () => {
-    expect(await liveMember({ notice: false })).toBe(SESSION);
-    expect(noticeAccepted).not.toHaveBeenCalled();
-  });
-
-  it("is the session's member when they have accepted the current notice", async () => {
-    expect(await liveMember({ notice: true })).toBe(SESSION);
-    expect(noticeAccepted).toHaveBeenCalledExactlyOnceWith(SESSION);
+  it("is the session's member", async () => {
+    expect(await liveMember()).toBe(SESSION);
+    expect(sessionMember).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -166,17 +159,6 @@ describe("liveMember", () => {
     ["failed", "unavailable"],
   ] as const)("turns a session that is %s into %s", async (problem, code) => {
     vi.mocked(sessionMember).mockResolvedValue(problem);
-    expect(await liveMember({ notice: true })).toBe(code);
-    expect(noticeAccepted).not.toHaveBeenCalled();
-  });
-
-  it("asks for the notice when they haven't accepted it", async () => {
-    vi.mocked(noticeAccepted).mockResolvedValue(false);
-    expect(await liveMember({ notice: true })).toBe("notice_required");
-  });
-
-  it("is unavailable when the notice can't be read", async () => {
-    vi.mocked(noticeAccepted).mockResolvedValue("failed");
-    expect(await liveMember({ notice: true })).toBe("unavailable");
+    expect(await liveMember()).toBe(code);
   });
 });

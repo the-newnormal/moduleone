@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { endLiveSession, readOpenSession, saveCoachState } from "@/lib/checkin/live-sessions";
-import { noticeAccepted, sessionMember, type Session } from "@/lib/checkin/session";
+import { sessionMember, type Session } from "@/lib/checkin/session";
 import { initialState, parseState, type CoachState } from "@/lib/coach/policy";
 import { coachInstructions } from "@/lib/coach/prompt";
 import { RubricError } from "@/lib/rubrics/markdown";
@@ -9,7 +9,7 @@ import { POST } from "./route";
 
 // The coach's rubric and policy are the real ones; coachInstructions is only watched, so a test can
 // make the rubric unreadable.
-vi.mock("@/lib/checkin/session", () => ({ sessionMember: vi.fn(), noticeAccepted: vi.fn() }));
+vi.mock("@/lib/checkin/session", () => ({ sessionMember: vi.fn() }));
 vi.mock("@/lib/checkin/live-sessions", () => ({ endLiveSession: vi.fn(), readOpenSession: vi.fn(), saveCoachState: vi.fn() }));
 vi.mock("@/lib/coach/prompt", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/coach/prompt")>();
@@ -52,7 +52,6 @@ function post(body: unknown = BODY, headers: Record<string, string> = {}): Reque
 
 beforeEach(() => {
   vi.mocked(sessionMember).mockReset().mockResolvedValue(SESSION);
-  vi.mocked(noticeAccepted).mockReset().mockResolvedValue(true);
   vi.mocked(endLiveSession).mockReset().mockResolvedValue(true);
   vi.mocked(readOpenSession).mockReset().mockResolvedValue(open());
   vi.mocked(saveCoachState).mockReset().mockResolvedValue(true);
@@ -80,11 +79,6 @@ describe("POST /portal/checkin/live/end", () => {
     await expectEnded(await POST(post()));
     expect(readOpenSession).toHaveBeenCalledExactlyOnceWith(SESSION_ID, MEMBER);
     expect(saveCoachState).not.toHaveBeenCalled();
-  });
-
-  it("doesn't check the notice: ending sends nothing anywhere", async () => {
-    await POST(post());
-    expect(noticeAccepted).not.toHaveBeenCalled();
   });
 
   // The page may send it twice (Finish, then keepalive as it goes away); the second does nothing.

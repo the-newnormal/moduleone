@@ -24,7 +24,6 @@ export const MAX_OFFER_CHARS = 20_000;
 export type LiveErrorCode =
   | "signed_out"
   | "no_member"
-  | "notice_required"
   | "submitted"
   | "too_many_sessions"
   | "no_session"

@@ -23,7 +23,7 @@ const Body = z.strictObject({
 export async function POST(request: Request): Promise<Response> {
   const body = Body.safeParse(await readJson(request));
   if (!body.success) return refuse("bad_request");
-  const session = await liveMember({ notice: false });
+  const session = await liveMember();
   if (typeof session === "string") return refuse(session);
   const { sessionId, recordedMs, shown, fallback } = body.data;
   const memberId = session.member.id;
