@@ -144,14 +144,17 @@ async function thisWeek(
   checkin: { data: CheckinRow | null; error: { code: string } | null },
   draft: { data: DraftRow | null; error: { code: string } | null },
 ): Promise<View> {
-  // Without the note, a take recorded now would be kept 90 days, not the year members are promised.
-  if (note.error) return unavailable("onboarding_note", note.error.code);
   if (checkin.error) return unavailable("checkin", checkin.error.code);
   if (draft.error) return unavailable("draft", draft.error.code);
 
   const submitted = checkin.data;
   if (submitted) return { state: "submitted", submittedAt: submitted.submitted_at };
-  if (!draft.data) return { state: "record", ...checkinQuestion() };
+  if (!draft.data) {
+    // Without the note, a take recorded now would be kept 90 days, not the year members are
+    // promised. Only a new take needs it: a draft or a submitted check-in already has its start.
+    if (note.error) return unavailable("onboarding_note", note.error.code);
+    return { state: "record", ...checkinQuestion() };
+  }
 
   // The member's own folder, so RLS lets them read it (0002), drafts included (0004).
   const { data: signed, error: signError } = await supabase.storage

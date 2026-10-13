@@ -345,7 +345,7 @@ describe("/portal/checkin", () => {
 
   it("lists this week's entry under its year, below the card, when the card can't show it", async () => {
     submitted();
-    vi.mocked(noteOnboardingForm).mockResolvedValue({ error: { code: "PGRST000" } });
+    reads.checkin_drafts = { data: null, error: { code: "PGRST000", message: "down" } };
     const html = await render();
     const doc = new DOMParser().parseFromString(html, "text/html");
     expect(text(card(doc))).toBe("Couldn't load your check-in. Refresh the page to try again.");
@@ -690,6 +690,18 @@ describe("/portal/checkin", () => {
     expect(text(doc.body)).not.toContain("Turn on my camera");
     expect(thenAndNow(doc)).not.toBeNull(); // the diary still shows
     expect(entry(doc, "28 September")).toBeDefined();
+  });
+
+  // A draft or a submitted check-in already has its start time, so the note can't change how long
+  // it is kept: only a new take waits for it.
+  it.each(["draft", "submitted"] as const)("still shows the %s card when the note can't be written", async (state) => {
+    STATES[state]();
+    vi.mocked(noteOnboardingForm).mockResolvedValue({ error: { code: "PGRST000" } });
+    const doc = await page();
+    expect(text(card(doc))).not.toContain("Couldn't load your check-in");
+    if (state === "submitted") expect(text(card(doc).querySelector("h2"))).toBe("Done for this week");
+    else expect(card(doc).querySelector("audio")).not.toBeNull(); // the take waiting to be submitted
+    expect(console.error).not.toHaveBeenCalledWith("checkin page: loading failed", expect.objectContaining({ what: "onboarding_note" }));
   });
 
   it("keeps the history when this week can't load", async () => {
