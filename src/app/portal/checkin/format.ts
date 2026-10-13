@@ -33,6 +33,13 @@ const DAY_AND_TIME = new Intl.DateTimeFormat("en-GB", {
   hour12: true,
 });
 
+const TIME = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Singapore",
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+});
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // A week's Monday ('2026-10-05') → 'Monday 5 October'.
@@ -62,9 +69,11 @@ export function formatDay(iso: string, withYear = false): string {
   return withYear ? `${DAY.format(date)} ${YEAR.format(date)}` : DAY.format(date);
 }
 
-// A timestamp → 'Friday 9 October at 2:15 pm' (Singapore time).
-export function formatDateTime(iso: string): string {
-  return DAY_AND_TIME.format(new Date(iso));
+// A timestamp → 'Friday 9 October at 2:15 pm' (Singapore time), or 'Thursday 9 October 2025 at
+// 2:15 pm' with the year (added on its own, as in formatDay).
+export function formatDateTime(iso: string, withYear = false): string {
+  const date = new Date(iso);
+  return withYear ? `${DAY.format(date)} ${YEAR.format(date)} at ${TIME.format(date)}` : DAY_AND_TIME.format(date);
 }
 
 // A recording's length → '45 s', '3 min 12 s' or '10 min'.

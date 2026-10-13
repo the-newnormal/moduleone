@@ -845,6 +845,7 @@ function loginAllowed(...link: Result[]) {
   userQueue.members = [memberRow()];
   userQueue.member_grants = [rows()];
   serviceQueue.checkins = [rows()];
+  serviceQueue.checkin_views = [rows()];
   serviceQueue.member_profiles = [rows(), rows()]; // the history check, then the late check
   serviceQueue.member_grants = [rows()]; // the late check, after linking
   serviceQueue.members = link;
@@ -860,6 +861,8 @@ const LATE_QUERIES: Query[] = [
 const HISTORY_QUERIES: Query[] = [
   { table: "checkins", calls: [["select", "id"], ["eq", "member_id", PERSON], ["limit", 1]] },
   { table: "member_profiles", calls: [["select", "member_id"], ["eq", "member_id", PERSON], ["limit", 1]] },
+  // Who opened their check-ins (0015), which a reset of every one of them leaves behind.
+  { table: "checkin_views", calls: [["select", "id"], ["eq", "owner_id", PERSON], ["limit", 1]] },
 ];
 
 // Before linking a login the invite only re-sent (made before it): is a removal about to delete
@@ -1058,6 +1061,7 @@ describe("giveLogin", () => {
   it.each([
     ["check-ins", "checkins", { data: [{ id: "x" }], error: null }],
     ["a Big Five profile", "member_profiles", { data: [{ member_id: PERSON }], error: null }],
+    ["a view log (their check-ins since reset)", "checkin_views", { data: [{ id: "x" }], error: null }],
   ])("refuses a member with %s from an earlier login, before inviting", async (_label, table, found) => {
     loginAllowed();
     serviceQueue[table] = [found];
@@ -1084,6 +1088,7 @@ describe("giveLogin", () => {
   it.each([
     ["the check-ins", "checkins"],
     ["the profiles", "member_profiles"],
+    ["the view log", "checkin_views"],
     ["the recordings", "storage"],
   ])("refuses when %s can't be checked, and logs only the code", async (_label, which) => {
     loginAllowed();
@@ -1220,7 +1225,7 @@ describe("giveLogin", () => {
   it("deletes the new login again when the member changed meanwhile", async () => {
     loginAllowed(rows(), rows()); // the guarded update, then "does anyone use this login?"
     await expect(giveLogin(PERSON, EMAIL)).resolves.toEqual({ ok: false, error: INVITE_RACE });
-    expect(serviceQueries[3]).toEqual({
+    expect(serviceQueries[HISTORY_QUERIES.length + 1]).toEqual({
       table: "members",
       calls: [["select", "id"], ["eq", "auth_user_id", NEW_LOGIN], ["limit", 1]],
     });
@@ -1295,8 +1300,8 @@ describe("giveLogin", () => {
     loginAllowed(rows(PERSON));
     await expect(giveLogin(PERSON.toUpperCase(), EMAIL)).resolves.toEqual({ ok: true, value: null });
     expect(listRecordings).toHaveBeenCalledExactlyOnceWith(PERSON, { limit: 1 });
-    expect(serviceQueries.slice(0, 2)).toEqual(HISTORY_QUERIES);
-    expect(serviceQueries[2].calls).toContainEqual(["eq", "id", PERSON]);
+    expect(serviceQueries.slice(0, HISTORY_QUERIES.length)).toEqual(HISTORY_QUERIES);
+    expect(serviceQueries[HISTORY_QUERIES.length].calls).toContainEqual(["eq", "id", PERSON]);
   });
 
   it("doesn't delete when it can't tell whether the login is used", async () => {

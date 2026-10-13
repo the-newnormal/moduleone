@@ -460,14 +460,16 @@ function inviteFailure(context: string, error: { code?: string; status?: number 
 
 // Whether a member row still holds anything from an earlier login (members.auth_user_id is set
 // to null when a login is deleted, and nothing else on the row changes): check-ins, a Big Five
-// profile, recordings (checkin-audio/<member id>/…). A new login on such a row would read them.
-// "found" as soon as one check finds something; otherwise "unknown" when any check fails, which
-// counts as a refusal too.
+// profile, recordings (checkin-audio/<member id>/…), or a view log (checkin_views, 0015: who opened
+// their check-ins, kept after a Master Admin resets every one of them). A new login on such a row
+// would read them. "found" as soon as one check finds something; otherwise "unknown" when any check
+// fails, which counts as a refusal too.
 async function earlierLogin(service: ServiceClient, memberId: string): Promise<"none" | "found" | "unknown"> {
   const checks = await Promise.all([
     service.from("checkins").select("id").eq("member_id", memberId).limit(1),
     service.from("member_profiles").select("member_id").eq("member_id", memberId).limit(1),
     service.storage.from("checkin-audio").list(memberId, { limit: 1 }),
+    service.from("checkin_views").select("id").eq("owner_id", memberId).limit(1),
   ]);
   if (checks.some((check) => !check.error && (check.data ?? []).length > 0)) return "found";
   const failed = checks.find((check) => check.error);
@@ -566,7 +568,7 @@ async function linkAsNoted(
 //      must still be the one noted for this person: another admin may have corrected or forgotten
 //      it since the page loaded;
 //   4. service role: nothing is left on the row from an earlier login (check-ins, a Big Five
-//      profile, recordings), then invite the email (its link goes to Supabase Auth's Site URL +
+//      profile, recordings, a view log), then invite the email (its link goes to Supabase Auth's Site URL +
 //      /auth/callback, which NEXT_PUBLIC_SITE_URL must match; see siteUrl);
 //   5. service role: link the new login, only if the member still has none and still isn't a
 //      Master Admin (and, with `asNoted`, only if the address is still the one noted for them:

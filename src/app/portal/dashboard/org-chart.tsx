@@ -72,6 +72,8 @@ function TeamRow({ row, config, heading }: { row: Row; config: HealthConfig; hea
     >
       <Link
         href={drillIn(row.teamId, cell.week)}
+        // Opening a team's week notes a view of every check-in on it (0015): only on a click.
+        prefetch={false}
         aria-label={`${title}${row.archived ? " (archived)" : ""}. ${lines.join(". ")}. The ${row.cells.length - 1} weeks before, oldest first: ${earlier}.`}
         data-tip-title={title}
         data-tip-body={lines.join("\n")}

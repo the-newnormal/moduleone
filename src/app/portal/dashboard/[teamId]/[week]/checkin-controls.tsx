@@ -37,8 +37,8 @@ export function CheckinControls({
         title={`Reset ${memberName}'s check-in?`}
         description={
           currentWeek
-            ? "The check-in, its recording, transcript and scores are deleted for good. They can record and submit this week's check-in again."
-            : "The check-in, its recording, transcript and scores are deleted for good. That week has closed, so it can't be recorded again."
+            ? "The check-in, its recording, transcript and scores are deleted for good. They can record and submit this week's check-in again. Who opened it stays listed in their Diary."
+            : "The check-in, its recording, transcript and scores are deleted for good. That week has closed, so it can't be recorded again. Who opened it stays listed in their Diary."
         }
         confirmLabel="Reset check-in"
         destructive

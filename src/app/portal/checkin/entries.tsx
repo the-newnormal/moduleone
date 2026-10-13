@@ -1,12 +1,15 @@
 import { ChevronDown } from "lucide-react";
 import { RecordingPlayer } from "@/components/recordings/recording-player";
 import { type Diary, type DiaryEntry, sgtDay, type Spot } from "@/lib/checkin/diary";
+import type { ViewGroup } from "@/lib/checkin/view-log";
 import { formatDay, formatDayMonth, formatLength, formatLongDate } from "./format";
+import { ViewedBy } from "./viewed-by";
 
 // The Diary's timeline: every entry but this week's submitted one (the card has that), newest
 // first, grouped by the year of its Monday. A year with nothing left to play folds away, its heading
 // left outside so it can still be found. Each recording has one player on the page (buildDiary's
-// playsIn); wherever else it is listed links up to it. Never a grade: only what DiaryEntry holds.
+// playsIn); wherever else it is listed links up to it. Never a grade: only what DiaryEntry holds,
+// and under each entry who opened it (./viewed-by.tsx), from the view log's map by week.
 
 const NOTE = "text-[13px] leading-[18px] text-muted-foreground";
 const LINK = "inline-flex min-h-10 w-fit items-center rounded-sm text-[15px] font-medium underline underline-offset-4";
@@ -64,18 +67,21 @@ export function LengthAndKept({ entry }: { entry: DiaryEntry }) {
   );
 }
 
-export function Entries({ diary }: { diary: Diary | "failed" }) {
+// views: who opened each week's check-in (viewsByWeek), when the log loaded.
+type Views = ReadonlyMap<string, readonly ViewGroup[]> | null;
+
+export function Entries({ diary, views = null }: { diary: Diary | "failed"; views?: Views }) {
   return (
     <section aria-labelledby="entries-title" className="grid gap-4">
       <h2 id="entries-title" className="text-xl leading-[26px]">
         Entries
       </h2>
-      <EntriesBody diary={diary} />
+      <EntriesBody diary={diary} views={views} />
     </section>
   );
 }
 
-function EntriesBody({ diary }: { diary: Diary | "failed" }) {
+function EntriesBody({ diary, views }: { diary: Diary | "failed"; views: Views }) {
   if (diary === "failed") return <p role="alert">Couldn&apos;t load your entries. Refresh the page to try again.</p>;
   if (diary.years.length === 0) {
     return (
@@ -94,17 +100,17 @@ function EntriesBody({ diary }: { diary: Diary | "failed" }) {
         </p>
       )}
       {diary.years.map((group) => (
-        <Year key={group.year} {...group} />
+        <Year key={group.year} {...group} views={views} />
       ))}
     </>
   );
 }
 
-function Year({ year, folded, entries }: Diary["years"][number]) {
+function Year({ year, folded, entries, views }: Diary["years"][number] & { views: Views }) {
   const list = (
     <ol className="grid">
       {entries.map((entry) => (
-        <Entry key={entry.id} entry={entry} year={year} />
+        <Entry key={entry.id} entry={entry} year={year} viewedBy={views?.get(entry.week)} />
       ))}
     </ol>
   );
@@ -136,7 +142,7 @@ function Year({ year, folded, entries }: Diary["years"][number]) {
 
 // One week. With a recording to play (here or above), the heading is full size; otherwise the entry
 // is compact and says why there's nothing to play. The dot's shape repeats what the words say.
-function Entry({ entry, year }: { entry: DiaryEntry; year: string }) {
+function Entry({ entry, year, viewedBy }: { entry: DiaryEntry; year: string; viewedBy: readonly ViewGroup[] | undefined }) {
   const playable = entry.src !== null;
   const titleId = `entry-${entry.id}-title`;
   // The day it was submitted, with its year when that isn't the group's (the week of 29 December).
@@ -166,6 +172,7 @@ function Entry({ entry, year }: { entry: DiaryEntry; year: string }) {
         )}
         <EntryAudio entry={entry} here="entries" />
         {entry.keptUntil !== null && <p className={NOTE}>{`Kept until ${formatLongDate(entry.keptUntil)}`}</p>}
+        <ViewedBy groups={viewedBy} />
       </article>
     </li>
   );

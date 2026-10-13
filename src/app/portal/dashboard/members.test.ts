@@ -187,6 +187,8 @@ describe("a member", () => {
       } as never),
     ).rejects.toThrow("NEXT_REDIRECT /portal/checkin");
     expect(loadTeamWeek).not.toHaveBeenCalled();
+    // Nothing listed, so nothing noted in anyone's view log (0015).
+    expect(rpc).not.toHaveBeenCalledWith("log_checkin_views", expect.anything());
   });
 
   it("isn't offered Team health on the portal", async () => {

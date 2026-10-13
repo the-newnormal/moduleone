@@ -4,6 +4,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { RecordingPlayer } from "@/components/recordings/recording-player";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { logCheckinViews } from "@/lib/checkin/view-log";
 import { loadLedTeams, loadRole, loadScoringConfig, loadTeamWeek, type TeamWeekCheckin } from "@/lib/dashboard/load";
 import { coverage, yours } from "@/lib/dashboard/org";
 import { formatWeek, isWeekStart, parseWeekCount, weekStartFor } from "@/lib/dashboard/weeks";
@@ -120,6 +121,12 @@ export default async function TeamWeekPage({
   const covers = coverage(role, ledTeams);
   const teamWeek = await loadTeamWeek(supabase, id, week, covers);
   const { checkins } = teamWeek;
+  // Rendering hands over every check-in listed here (its scores and review, and its transcript even
+  // while that's folded), so each is first noted in its owner's Diary (0015). The database drops the
+  // viewer's own. If it can't be noted, this throws and the error page shows instead: no card is
+  // sent. Never move this into after(), a "use cache" function or anything a prefetch runs
+  // (prefetch-guard.test.ts): the note must happen exactly when the content is sent.
+  await logCheckinViews(supabase, checkins.map((c) => c.id), "opened");
   // Check-ins from the teams under this one come in sections, a team each, in org-chart order.
   type Section = { teamId: string | null; team: string | null; checkins: TeamWeekCheckin[] };
   const sections = checkins.reduce<Section[]>((out, checkin) => {
@@ -135,6 +142,9 @@ export default async function TeamWeekPage({
   const waiting = checkins.length - (cell?.graded ?? 0);
   // Master Admins may delete a recording or reset a check-in (the database checks again).
   const manage = role === "hq" ? { currentWeek: week === weekStartFor(new Date()) } : null;
+  // Tell the viewer their opening shows, whenever the page lists anyone's but their own: outside the
+  // teams they cover a leader sees only their own check-ins, which are never noted.
+  const othersListed = checkins.length > 0 && (role === "hq" || (id !== null && covers(id)));
 
   return (
     <main className="mx-auto grid w-full max-w-3xl grid-cols-[minmax(0,1fr)] gap-6 px-4 py-10">
@@ -149,6 +159,12 @@ export default async function TeamWeekPage({
         )}
         <h1 className="text-4xl">{teamName}</h1>
         <p className="text-muted-foreground">Week of {formatWeek(week, true)}</p>
+        {othersListed && (
+          <p className="text-sm text-muted-foreground">
+            Each person here can see in their Diary that you opened their check-in, and when. Playing a recording
+            shows too.
+          </p>
+        )}
         {cell && (
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <BandBadge band={cell.band} score={formatScore(cell.score, config)} />
