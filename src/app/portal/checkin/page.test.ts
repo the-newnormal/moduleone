@@ -1,4 +1,6 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { createElement } from "react";
@@ -739,5 +741,75 @@ describe("/portal/checkin", () => {
     await render();
     await runAfter();
     expect(processCheckin).not.toHaveBeenCalled();
+  });
+});
+
+// The page writes more than the onboarding note: after the response it tidies the member's files and
+// retries processing, both with the service role (the last tests above). Whoever reviews what a load
+// of the Diary does reads its header comment and CLAUDE.md, so neither may say the note is all it
+// writes: where either says it writes only one thing, it says of which table (recording_notices), and
+// it names the tidying and the retry too.
+describe("what the Diary says it writes", () => {
+  const ROOT = join(import.meta.dirname, "../../../..");
+  const read = (file: string) => readFileSync(join(ROOT, file), "utf8");
+
+  // The comment above CHECKIN_COLUMNS, without its slashes.
+  function pageHeader(): string {
+    const source = read("src/app/portal/checkin/page.tsx");
+    const end = source.indexOf("const CHECKIN_COLUMNS");
+    expect(end).toBeGreaterThan(0);
+    const lines = source.slice(0, end).trimEnd().split("\n");
+    let start = lines.length;
+    while (start > 0 && lines[start - 1].trimStart().startsWith("//")) start -= 1;
+    return lines
+      .slice(start)
+      .map((line) => line.replace(/^\s*\/\/\s?/, ""))
+      .join(" ");
+  }
+
+  // CLAUDE.md's sentences about the Diary, from "The Diary (`/portal/checkin`)" to the RLS tests.
+  function contract(): string {
+    const text = read("CLAUDE.md");
+    const start = text.indexOf("The Diary (`/portal/checkin`)");
+    const end = text.indexOf("RLS tests live in", start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    return text.slice(start, end);
+  }
+
+  // A sentence ends at a full stop followed by a capital letter or a backtick.
+  const sentences = (text: string) => text.split(/(?<=\.)\s+(?=[A-Z`])/);
+
+  function expectAllWritesNamed(text: string) {
+    expect(text).toMatch(/onboarding (note|consent)/);
+    // Any sentence that says the page writes only one thing says of which table.
+    const exclusive = sentences(text).filter((sentence) => /\bwrites (only|one thing)\b/i.test(sentence));
+    expect(exclusive.length).toBeGreaterThan(0);
+    for (const sentence of exclusive) expect(sentence).toContain("recording_notices");
+    // And the after-response work is named alongside it.
+    expect(text).toMatch(/\b(tid(y|ies)|clears? out)\b[^.]*\bdrafts\b[^.]*\bfiles\b/);
+    expect(text).toMatch(/\bretr(y|ies)\b[^.]*\b(processing|grading)\b/);
+  }
+
+  it("is still true of the page: it tidies and retries after the response", () => {
+    const source = read("src/app/portal/checkin/page.tsx");
+    expect(source).toMatch(/after\(\(\) => tidyMemberAudio\(/);
+    expect(source).toMatch(/after\(\(\) => processCheckin\(/);
+  });
+
+  it("in the page's header comment", () => {
+    expectAllWritesNamed(pageHeader());
+  });
+
+  it("in CLAUDE.md", () => {
+    expectAllWritesNamed(contract());
+  });
+
+  it.each([
+    "It writes one thing: the note of the assumed onboarding consent for this login.",
+    "It writes only the onboarding note.",
+    "Of recording_notices it writes only the onboarding note.",
+  ])("rejects %j", (claim) => {
+    expect(() => expectAllWritesNamed(claim)).toThrow();
   });
 });

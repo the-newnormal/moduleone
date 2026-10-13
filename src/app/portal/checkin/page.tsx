@@ -26,8 +26,10 @@ export const maxDuration = 300;
 
 // Members never see their grade, so this page reads only the processing columns of this week's
 // check-in, and for the diary only DIARY_COLUMNS of their own check-ins (src/lib/checkin/diary.ts):
-// never the scores, category, review or transcript. It writes one thing: the note of the assumed
-// onboarding consent for this login (src/lib/checkin/onboarding-note.ts).
+// never the scores, category, review or transcript. Of recording_notices it writes only the note of
+// the assumed onboarding consent for this login (src/lib/checkin/onboarding-note.ts); after the
+// response it also tidies the member's old drafts and files and retries processing that failed or
+// stalled (tidyMemberAudio and processCheckin, below, both with the service role).
 const CHECKIN_COLUMNS = "id, submitted_at, graded_at, processing_started_at, processing_error, processing_attempts";
 // Long enough to come back to the tab and listen before submitting (iOS fetches the audio only when
 // play is pressed). It's the member's own draft, and RLS is checked when the link is signed.
