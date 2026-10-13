@@ -1,6 +1,5 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
-import { noticeVersion } from "./notice";
 
 // Who is checking in, for the check-in's server actions (src/app/portal/checkin/actions.ts) and the
 // live check-in's routes (src/app/portal/checkin/live): always the member the session belongs to,
@@ -30,22 +29,4 @@ export async function sessionMember(): Promise<Session | SessionProblem> {
   }
   if (!member) return "no_member";
   return { supabase, authUserId: data.claims.sub, member };
-}
-
-// Whether the member has accepted the current privacy notice, with this login. Checked before
-// recording, before live transcription starts and before submitting: each sends something to
-// another service, and a change of service changes the notice.
-export async function noticeAccepted({ supabase, authUserId, member }: Session): Promise<boolean | "failed"> {
-  const { data, error } = await supabase
-    .from("recording_notices")
-    .select("member_id")
-    .eq("member_id", member.id)
-    .eq("auth_user_id", authUserId)
-    .eq("notice_version", noticeVersion())
-    .maybeSingle();
-  if (error) {
-    console.error("checkin: reading the notice failed", { code: error.code });
-    return "failed";
-  }
-  return data !== null;
 }

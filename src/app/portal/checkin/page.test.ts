@@ -1,11 +1,13 @@
 // @vitest-environment happy-dom
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DIARY_COLUMNS, type DiaryRow } from "@/lib/checkin/diary";
-import { noticeSections, noticeVersion } from "@/lib/checkin/notice";
+import { noteOnboardingForm } from "@/lib/checkin/onboarding-note";
 import { processCheckin } from "@/lib/checkin/process";
 import { DEFAULT_OPENING_QUESTION, QUESTIONS } from "@/lib/checkin/week";
 import { coachRubric } from "@/lib/coach/rubric";
@@ -27,6 +29,8 @@ vi.mock("next/server", async (importOriginal) => ({
 }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/checkin/process", () => ({ processCheckin: vi.fn() }));
+// Mocked whole, so the service-role client it writes with is never made (onboarding-note.test.ts).
+vi.mock("@/lib/checkin/onboarding-note", () => ({ noteOnboardingForm: vi.fn() }));
 // The real rubric, unless a test breaks it.
 vi.mock("@/lib/coach/rubric", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/coach/rubric")>();
@@ -38,7 +42,6 @@ vi.mock("./housekeeping", async (importOriginal) => ({
 }));
 // The client components' server actions aren't called while rendering; keep their imports inert.
 vi.mock("./actions", () => ({
-  acceptNotice: vi.fn(),
   prepareRecording: vi.fn(),
   saveDraft: vi.fn(),
   deleteDraft: vi.fn(),
@@ -214,9 +217,6 @@ const STATES = {
   unavailable: () => {
     reads.checkin_drafts = { data: null, error: { code: "PGRST000", message: "down" } };
   },
-  notice: () => {
-    lists.recording_notices = { data: [], error: null };
-  },
   record: () => {},
   draft: () => {
     reads.checkin_drafts = { data: DRAFT, error: null };
@@ -232,8 +232,6 @@ beforeEach(() => {
     checkin_drafts: { data: null, error: null },
   };
   lists = {
-    // The notice as it reads now (LIVE_CHECKIN changes it), accepted.
-    recording_notices: () => ({ data: [{ notice_version: noticeVersion(), recording_keep_days: 365 }], error: null }),
     checkins: { data: EARLIER, error: null },
   };
   queries = [];
@@ -246,6 +244,7 @@ beforeEach(() => {
   createSignedUrl.mockReset().mockResolvedValue({ data: { signedUrl: PLAYBACK }, error: null });
   vi.mocked(after).mockReset();
   vi.mocked(processCheckin).mockReset();
+  vi.mocked(noteOnboardingForm).mockReset().mockResolvedValue({ error: null });
   vi.mocked(tidyMemberAudio).mockReset();
   vi.mocked(redirect).mockClear();
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -294,6 +293,7 @@ describe("/portal/checkin", () => {
     expect(html).toContain("Your account isn&#x27;t set up yet. Ask HQ.");
     expect(html).not.toContain("Turn on my camera");
     expect(queries.map((q) => q.table)).toEqual(["members"]);
+    expect(noteOnboardingForm).not.toHaveBeenCalled();
     expect(after).not.toHaveBeenCalled();
     // Nothing of a diary, nor a name to head it with.
     const doc = new DOMParser().parseFromString(html, "text/html");
@@ -308,73 +308,60 @@ describe("/portal/checkin", () => {
     expect(text(card(doc))).toBe("Couldn't load your check-in. Refresh the page to try again.");
     expect(entries(doc)).toBeNull();
     expect(queries.map((q) => q.table)).toEqual(["members"]);
+    expect(noteOnboardingForm).not.toHaveBeenCalled();
   });
 
-  it("shows the privacy notice until it is accepted", async () => {
-    lists.recording_notices = { data: [], error: null };
+  // No privacy notice in the app (the product owner's decision, 13 October 2026): members agree on
+  // the onboarding form, outside Module One. Nobody here has accepted anything.
+  it("shows the recorder to a member who never accepted a notice", async () => {
     const html = await render();
-    for (const { heading } of noticeSections()) expect(html).toContain(heading);
-    expect(html).toContain("I understand, continue");
-    expect(html).not.toContain("Turn on my camera");
+    expect(html).toContain("Record your check-in");
+    expect(html).toContain("Turn on my camera");
+    for (const gone of ["Before you record", "I understand, continue", "How your recording is used"]) {
+      expect(html).not.toContain(gone);
+    }
   });
 
-  it("looks for the notices accepted with this login, not the member row's earlier one", async () => {
+  // submit_checkin_draft keeps a take a year only if its login had a one-year row before the take
+  // started (0013): the note is written as the page loads, before the recorder can show.
+  it("notes the assumed onboarding consent for this member and login, once", async () => {
     await render();
-    const notices = queries.find((q) => q.table === "recording_notices")!;
-    expect(notices.columns).toBe("notice_version, recording_keep_days");
-    expect(notices.filters).toEqual([
-      ["member_id", MEMBER],
-      ["auth_user_id", "u1"],
-    ]);
+    expect(noteOnboardingForm).toHaveBeenCalledExactlyOnceWith(MEMBER, "u1");
   });
 
-  describe("the notice, for", () => {
-    it("someone who hasn't accepted one: once, until it changes", async () => {
-      lists.recording_notices = { data: [], error: null };
-      const doc = await page();
-      expect(text(card(doc))).toContain("How your recording is used. You'll see this again only if it changes.");
-      expect(text(card(doc))).not.toContain("What's changed.");
-    });
+  it.each(["record", "draft", "submitted"] as const)("notes it whatever this week holds (%s)", async (state) => {
+    STATES[state]();
+    await render();
+    expect(noteOnboardingForm).toHaveBeenCalledOnce();
+  });
 
-    it("someone who accepted the 90-day one: what has changed", async () => {
-      lists.recording_notices = {
-        data: [{ notice_version: "2026-10-10.openai", recording_keep_days: 90 }],
-        error: null,
-      };
-      const doc = await page();
-      expect(text(card(doc))).toContain("How your recording is used. It has changed since you last accepted it.");
-      expect(text(card(doc))).toContain(
-        "What's changed. Recordings you submit are now kept for a year, so you can listen back to them in your diary.",
-      );
-    });
+  it("a member who submitted sees Done for this week, whatever they accepted", async () => {
+    submitted();
+    const doc = await page();
+    expect(text(card(doc).querySelector("h2"))).toBe("Done for this week");
+    expect(text(card(doc))).toContain("Submitted on Wednesday 7 October at 2:15 pm.");
+    expect(text(doc.body)).not.toContain("Before you record");
+  });
 
-    it("someone who accepted a one-year one before: that it changed, without the year again", async () => {
-      lists.recording_notices = { data: [{ notice_version: "2026-10-12.openai.live", recording_keep_days: 365 }], error: null };
-      const doc = await page();
-      expect(text(card(doc))).toContain("It has changed since you last accepted it.");
-      expect(text(card(doc))).not.toContain("What's changed.");
-    });
-
-    it("someone who submitted this week: their entry is listed, and the diary is below the notice", async () => {
-      submitted();
-      lists.recording_notices = { data: [], error: null };
-      const html = await render();
-      const doc = new DOMParser().parseFromString(html, "text/html");
-      expect(text(card(doc))).toContain("Before you record");
-      const thisWeek = entry(doc, "5 October")!;
-      expect(thisWeek.closest('section[aria-labelledby="entries-2026"]')).not.toBeNull();
-      expect(text(thisWeek)).toContain("Play it in Then and now, above");
-      // Its player is Now in Then and now.
-      const now = thenAndNow(doc)!.querySelector('article[aria-labelledby="then-and-now-now"]')!;
-      expect(now.querySelector("audio")?.getAttribute("src")).toBe(`/portal/dashboard/recording/${CHECKIN}.webm`);
-      // Below the notice, in page order.
-      const order = [card(doc), thenAndNow(doc)!, entries(doc)!];
-      for (let i = 1; i < order.length; i++) {
-        expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-      }
-      expect(played(html)).toHaveLength(new Set(played(html)).size);
-      expect(createSignedUrl).not.toHaveBeenCalled();
-    });
+  it("lists this week's entry under its year, below the card, when the card can't show it", async () => {
+    submitted();
+    reads.checkin_drafts = { data: null, error: { code: "PGRST000", message: "down" } };
+    const html = await render();
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    expect(text(card(doc))).toBe("Couldn't load your check-in. Refresh the page to try again.");
+    const thisWeek = entry(doc, "5 October")!;
+    expect(thisWeek.closest('section[aria-labelledby="entries-2026"]')).not.toBeNull();
+    expect(text(thisWeek)).toContain("Play it in Then and now, above");
+    // Its player is Now in Then and now.
+    const now = thenAndNow(doc)!.querySelector('article[aria-labelledby="then-and-now-now"]')!;
+    expect(now.querySelector("audio")?.getAttribute("src")).toBe(`/portal/dashboard/recording/${CHECKIN}.webm`);
+    // Below the card, in page order.
+    const order = [card(doc), thenAndNow(doc)!, entries(doc)!];
+    for (let i = 1; i < order.length; i++) {
+      expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(played(html)).toHaveLength(new Set(played(html)).size);
+    expect(createSignedUrl).not.toHaveBeenCalled();
   });
 
   it("shows the recorder when there's nothing yet, with the one open question", async () => {
@@ -494,10 +481,7 @@ describe("/portal/checkin", () => {
     for (const query of checkins) {
       expect(query.columns).not.toMatch(/\*|score|category|review|transcript|grader|rubric|mention|team/);
     }
-    expect(queries.find((q) => q.table === "recording_notices")?.columns).toBe("notice_version, recording_keep_days");
-    expect(new Set(queries.map((q) => q.table))).toEqual(
-      new Set(["members", "recording_notices", "checkins", "checkin_drafts"]),
-    );
+    expect(new Set(queries.map((q) => q.table))).toEqual(new Set(["members", "checkins", "checkin_drafts"]));
   });
 
   describe("shows nothing graded, from any row", () => {
@@ -511,14 +495,6 @@ describe("/portal/checkin", () => {
       STATES[state]();
       const html = await render();
       for (const word of [...THEMES, ...GRADES]) expect(shows(html, word), String(word)).toBe(false);
-    });
-
-    // The notice itself says what leaders see: the transcript and the scores.
-    it("in the notice state", async () => {
-      submitted();
-      STATES.notice();
-      const html = await render();
-      for (const word of THEMES) expect(shows(html, word), String(word)).toBe(false);
     });
   });
 
@@ -613,7 +589,7 @@ describe("/portal/checkin", () => {
     expect(doc.querySelector('section#this-week[aria-label="This week"]')?.contains(card(doc))).toBe(true);
   });
 
-  it.each(["record", "notice", "submitted"] as const)("signs nothing for the diary on load (%s)", async (state) => {
+  it.each(["record", "submitted"] as const)("signs nothing for the diary on load (%s)", async (state) => {
     STATES[state]();
     await render();
     expect(createSignedUrl).not.toHaveBeenCalled();
@@ -622,7 +598,6 @@ describe("/portal/checkin", () => {
   it.each([
     ["no_member", null],
     ["unavailable", null],
-    ["notice", "Before you record"],
     ["record", "Record your check-in"],
     ["draft", "Your recording"],
     ["submitted", "Done for this week"],
@@ -703,15 +678,30 @@ describe("/portal/checkin", () => {
     });
   });
 
-  // As on a database without 0013, whose recording_notices has no recording_keep_days: never taken
-  // for "nothing accepted yet".
-  it("says it couldn't load, rather than show the notice, when the notices can't be read", async () => {
-    lists.recording_notices = { data: null, error: { code: "42703", message: "column does not exist" } };
+  // Without the note, a take recorded now would be kept 90 days, not the year members are promised.
+  it("says it couldn't load, rather than show the recorder, when the note can't be written", async () => {
+    vi.mocked(noteOnboardingForm).mockResolvedValue({ error: { code: "PGRST000" } });
     const doc = await page();
     expect(text(card(doc))).toBe("Couldn't load your check-in. Refresh the page to try again.");
-    expect(console.error).toHaveBeenCalledExactlyOnceWith("checkin page: loading failed", { what: "notice", code: "42703" });
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("checkin page: loading failed", {
+      what: "onboarding_note",
+      code: "PGRST000",
+    });
+    expect(text(doc.body)).not.toContain("Turn on my camera");
     expect(thenAndNow(doc)).not.toBeNull(); // the diary still shows
     expect(entry(doc, "28 September")).toBeDefined();
+  });
+
+  // A draft or a submitted check-in already has its start time, so the note can't change how long
+  // it is kept: only a new take waits for it.
+  it.each(["draft", "submitted"] as const)("still shows the %s card when the note can't be written", async (state) => {
+    STATES[state]();
+    vi.mocked(noteOnboardingForm).mockResolvedValue({ error: { code: "PGRST000" } });
+    const doc = await page();
+    expect(text(card(doc))).not.toContain("Couldn't load your check-in");
+    if (state === "submitted") expect(text(card(doc).querySelector("h2"))).toBe("Done for this week");
+    else expect(card(doc).querySelector("audio")).not.toBeNull(); // the take waiting to be submitted
+    expect(console.error).not.toHaveBeenCalledWith("checkin page: loading failed", expect.objectContaining({ what: "onboarding_note" }));
   });
 
   it("keeps the history when this week can't load", async () => {
@@ -763,5 +753,75 @@ describe("/portal/checkin", () => {
     await render();
     await runAfter();
     expect(processCheckin).not.toHaveBeenCalled();
+  });
+});
+
+// The page writes more than the onboarding note: after the response it tidies the member's files and
+// retries processing, both with the service role (the last tests above). Whoever reviews what a load
+// of the Diary does reads its header comment and CLAUDE.md, so neither may say the note is all it
+// writes: where either says it writes only one thing, it says of which table (recording_notices), and
+// it names the tidying and the retry too.
+describe("what the Diary says it writes", () => {
+  const ROOT = join(import.meta.dirname, "../../../..");
+  const read = (file: string) => readFileSync(join(ROOT, file), "utf8");
+
+  // The comment above CHECKIN_COLUMNS, without its slashes.
+  function pageHeader(): string {
+    const source = read("src/app/portal/checkin/page.tsx");
+    const end = source.indexOf("const CHECKIN_COLUMNS");
+    expect(end).toBeGreaterThan(0);
+    const lines = source.slice(0, end).trimEnd().split("\n");
+    let start = lines.length;
+    while (start > 0 && lines[start - 1].trimStart().startsWith("//")) start -= 1;
+    return lines
+      .slice(start)
+      .map((line) => line.replace(/^\s*\/\/\s?/, ""))
+      .join(" ");
+  }
+
+  // CLAUDE.md's sentences about the Diary, from "The Diary (`/portal/checkin`)" to the RLS tests.
+  function contract(): string {
+    const text = read("CLAUDE.md");
+    const start = text.indexOf("The Diary (`/portal/checkin`)");
+    const end = text.indexOf("RLS tests live in", start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    return text.slice(start, end);
+  }
+
+  // A sentence ends at a full stop followed by a capital letter or a backtick.
+  const sentences = (text: string) => text.split(/(?<=\.)\s+(?=[A-Z`])/);
+
+  function expectAllWritesNamed(text: string) {
+    expect(text).toMatch(/onboarding (note|consent)/);
+    // Any sentence that says the page writes only one thing says of which table.
+    const exclusive = sentences(text).filter((sentence) => /\bwrites (only|one thing)\b/i.test(sentence));
+    expect(exclusive.length).toBeGreaterThan(0);
+    for (const sentence of exclusive) expect(sentence).toContain("recording_notices");
+    // And the after-response work is named alongside it.
+    expect(text).toMatch(/\b(tid(y|ies)|clears? out)\b[^.]*\bdrafts\b[^.]*\bfiles\b/);
+    expect(text).toMatch(/\bretr(y|ies)\b[^.]*\b(processing|grading)\b/);
+  }
+
+  it("is still true of the page: it tidies and retries after the response", () => {
+    const source = read("src/app/portal/checkin/page.tsx");
+    expect(source).toMatch(/after\(\(\) => tidyMemberAudio\(/);
+    expect(source).toMatch(/after\(\(\) => processCheckin\(/);
+  });
+
+  it("in the page's header comment", () => {
+    expectAllWritesNamed(pageHeader());
+  });
+
+  it("in CLAUDE.md", () => {
+    expectAllWritesNamed(contract());
+  });
+
+  it.each([
+    "It writes one thing: the note of the assumed onboarding consent for this login.",
+    "It writes only the onboarding note.",
+    "Of recording_notices it writes only the onboarding note.",
+  ])("rejects %j", (claim) => {
+    expect(() => expectAllWritesNamed(claim)).toThrow();
   });
 });

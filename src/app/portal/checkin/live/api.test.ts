@@ -86,7 +86,7 @@ describe("startLive", () => {
 
   it.each([
     ["off", { status: "off" }, 200],
-    ["an error", { status: "error", code: "notice_required" }, 403],
+    ["an error", { status: "error", code: "submitted" }, 409],
     ["too many sessions", { status: "error", code: "too_many_sessions" }, 429],
   ])("passes on %s as it is", async (_label, body, status) => {
     fetchMock.mockResolvedValue(jsonResponse(body, status));

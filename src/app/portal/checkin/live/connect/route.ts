@@ -23,8 +23,7 @@ export async function POST(request: Request): Promise<Response> {
   const body = Body.safeParse(await readJson(request));
   if (!body.success) return refuse("bad_request");
   if (!liveCheckinEnabled()) return refuse("session_over");
-  // The notice was checked when the session started; this checks who is calling.
-  const session = await liveMember({ notice: false });
+  const session = await liveMember();
   if (typeof session === "string") return refuse(session);
   const { sessionId, offer } = body.data;
 

@@ -1,5 +1,5 @@
 import "server-only";
-import { noticeAccepted, sessionMember, type Session } from "@/lib/checkin/session";
+import { sessionMember, type Session } from "@/lib/checkin/session";
 import type { LiveError, LiveErrorCode } from "./contract";
 
 // What the live check-in's routes share. They are plain POST route handlers (see contract.ts), so
@@ -14,7 +14,6 @@ const STATUS: Record<LiveErrorCode, number> = {
   bad_request: 400,
   signed_out: 401,
   no_member: 403,
-  notice_required: 403,
   no_session: 404,
   submitted: 409,
   session_over: 410,
@@ -56,14 +55,9 @@ export async function readJson(request: Request): Promise<unknown> {
   }
 }
 
-// The signed-in member, or why not. With `notice`, they must also have accepted the current privacy
-// notice, which says where live audio and text go.
-export async function liveMember({ notice }: { notice: boolean }): Promise<Session | LiveErrorCode> {
+// The signed-in member, or why not.
+export async function liveMember(): Promise<Session | LiveErrorCode> {
   const session = await sessionMember();
   if (session === "failed") return "unavailable";
-  if (typeof session === "string") return session;
-  if (!notice) return session;
-  const accepted = await noticeAccepted(session);
-  if (accepted === "failed") return "unavailable";
-  return accepted ? session : "notice_required";
+  return session; // a Session, or "signed_out" / "no_member"
 }

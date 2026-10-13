@@ -25,7 +25,7 @@ export async function POST(request: Request): Promise<Response> {
     return json({ status: "off" } satisfies LiveStartResponse);
   }
 
-  const session = await liveMember({ notice: true });
+  const session = await liveMember();
   if (typeof session === "string") return refuse(session);
   const memberId = session.member.id;
 
