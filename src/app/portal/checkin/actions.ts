@@ -4,10 +4,9 @@ import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { baseMimeType, draftPath, extensionFor, isOwnAudioPath, MAX_AUDIO_BYTES } from "@/lib/checkin/audio";
 import { linkLiveCheckin, linkLiveTake } from "@/lib/checkin/live-sessions";
-import { noticeVersion, RECORDING_KEEP_DAYS } from "@/lib/checkin/notice";
 import { processCheckin } from "@/lib/checkin/process";
 import { currentWeekStart } from "@/lib/checkin/week";
-import { noticeAccepted as hasAcceptedNotice, sessionMember as currentMember, type Session } from "@/lib/checkin/session";
+import { sessionMember as currentMember, type Session } from "@/lib/checkin/session";
 import { createServiceRoleClient } from "@/lib/supabase/admin";
 import { UPLOAD_MAX_AGE_MS } from "./housekeeping";
 
@@ -19,7 +18,6 @@ import { UPLOAD_MAX_AGE_MS } from "./housekeeping";
 export type CheckinErrorCode =
   | "signed_out"
   | "no_member"
-  | "notice_required"
   | "unsupported_audio"
   | "bad_path"
   | "upload_missing"
@@ -34,7 +32,6 @@ export type CheckinError = { status: "error"; code: CheckinErrorCode; message: s
 // This week's check-in is already in; the page shows that instead.
 export type Submitted = { status: "submitted" };
 
-export type AcceptNoticeResult = { status: "accepted" } | CheckinError;
 export type PrepareRecordingResult =
   | { status: "ready"; path: string; token: string; contentType: string }
   | Submitted
@@ -54,7 +51,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MESSAGES: Record<CheckinErrorCode, string> = {
   signed_out: "Your session has ended. Sign in again.",
   no_member: "Your account isn't set up yet. Ask HQ.",
-  notice_required: "Read the privacy notice first.",
   unsupported_audio: "This browser records in a format we can't use. Try Chrome or Safari.",
   bad_path: "That recording can't be saved. Record it again.",
   upload_missing: "The recording didn't finish uploading. Try again.",
@@ -70,27 +66,17 @@ function fail(code: CheckinErrorCode): CheckinError {
   return { status: "error", code, message: MESSAGES[code] };
 }
 
-// The page shows the submitted check-in (or the notice) instead of what the member was doing, so
-// these re-render it.
+// The page shows the submitted check-in instead of what the member was doing, so this re-renders
+// it.
 function submitted(): Submitted {
   revalidatePath(PAGE);
   return { status: "submitted" };
-}
-
-function noticeRequired(): CheckinError {
-  revalidatePath(PAGE);
-  return fail("notice_required");
 }
 
 // The signed-in member (src/lib/checkin/session.ts), or the error the page shows.
 async function sessionMember(): Promise<Session | CheckinError> {
   const session = await currentMember();
   return typeof session === "string" ? fail(session) : session;
-}
-
-async function noticeAccepted(session: Session): Promise<boolean | CheckinError> {
-  const accepted = await hasAcceptedNotice(session);
-  return accepted === "failed" ? fail("failed") : accepted;
 }
 
 // Errors raised by the 0004 functions: SQLSTATE P0001 with a stable message.
@@ -113,41 +99,12 @@ async function removeFile(admin: ReturnType<typeof createServiceRoleClient>, mem
   if (removeError) console.error("checkin: removing a file failed", { code: removeError.name });
 }
 
-// `version` is the notice the member was shown. If the notice has changed since (a different
-// transcription setup), they are shown the new one instead of agreeing to text they never saw. The
-// acceptance records how long that notice promised to keep their recordings (0013).
-export async function acceptNotice(version: string): Promise<AcceptNoticeResult> {
-  const session = await sessionMember();
-  if ("status" in session) return session;
-  if (version !== noticeVersion()) return noticeRequired();
-  const { error } = await createServiceRoleClient()
-    .from("recording_notices")
-    .upsert(
-      {
-        member_id: session.member.id,
-        auth_user_id: session.authUserId,
-        notice_version: noticeVersion(),
-        recording_keep_days: RECORDING_KEEP_DAYS,
-      },
-      // Keep the first acceptance (its time and promise) if the button is pressed twice.
-      { onConflict: "member_id,auth_user_id,notice_version", ignoreDuplicates: true },
-    );
-  if (error) {
-    console.error("acceptNotice failed", { code: error.code });
-    return fail("failed");
-  }
-  revalidatePath(PAGE);
-  return { status: "accepted" };
-}
-
 // A signed upload URL (upsert off) for a new take in the member's own folder. The browser uploads
 // the audio straight to Storage, so it never passes through this server (Vercel caps request
 // bodies at 4.5 MB).
 export async function prepareRecording(mimeType: string): Promise<PrepareRecordingResult> {
   const session = await sessionMember();
   if ("status" in session) return session;
-  const accepted = await noticeAccepted(session);
-  if (accepted !== true) return accepted === false ? noticeRequired() : accepted;
 
   const weekStart = currentWeekStart();
   const { data: existing, error } = await session.supabase
@@ -290,11 +247,10 @@ export async function submitCheckin(shown: string): Promise<SubmitCheckinResult>
   const session = await sessionMember();
   if ("status" in session) return session;
   if (typeof shown !== "string") return fail("bad_path");
-  const accepted = await noticeAccepted(session);
-  if (accepted !== true) return accepted === false ? noticeRequired() : accepted;
 
-  // submit_checkin_draft decides how long the recording is kept (0013), from the login's own
-  // acceptances.
+  // submit_checkin_draft decides how long the recording is kept (0013), from the rows its login had
+  // when the take started: the Diary's onboarding note (src/lib/checkin/onboarding-note.ts) gives a
+  // year.
   const { data: id, error } = await createServiceRoleClient().rpc("submit_checkin_draft", {
     p_member_id: session.member.id,
     p_audio_path: shown,

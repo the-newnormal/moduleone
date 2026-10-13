@@ -10,8 +10,8 @@ import { Tile } from "./tile";
 
 // The portal's main tile: where the viewer is with this week's check-in, and the one thing to do
 // next. Its button is the page's sun, Normal's single accent, while there's a check-in to make.
-// The Diary (/portal/checkin) itself does the recording, shows the privacy notice and submits; this
-// only reports what the viewer's own rows say, and never their grade.
+// The Diary (/portal/checkin) itself does the recording and submits; this only reports what the
+// viewer's own rows say, and never their grade.
 export function CheckinTile({ week, thisWeek }: { week: MyWeek; thisWeek: string }) {
   const deadline = `Submit by ${formatWeekEnd(thisWeek)}, 11:59 pm Singapore time.`;
   return (

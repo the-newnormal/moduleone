@@ -343,16 +343,15 @@ is the only one: no live transcription and no coach calls.
 
 ### End to end
 
-1. **Start.** Once the recording has started (so after the browser's microphone prompt), the
-   browser asks the server for a live session; a refused microphone starts none. The server checks
-   live check-ins are on, `coach.md` can be used, the member has accepted the current privacy
-   notice and hasn't submitted this week, and they have started fewer than 12 sessions in 24 hours,
-   then creates the session. Then the browser sends its WebRTC offer for live transcription to the
-   server (`/portal/checkin/live/connect`), which claims the session's one connection
-   (`connected_at`, migration 0012), opens the transcription session with OpenAI itself and sends
-   OpenAI's answer back. So no OpenAI key, not even a short-lived one, ever reaches the browser,
-   and each live session opens at most one transcription session (this closed
-   [#34](https://github.com/the-newnormal/moduleone/issues/34)). The opening question from
+1. **Start.** Once the recording has started (so after the browser's microphone prompt), the browser
+   asks the server for a live session; a refused microphone starts none. The server checks live
+   check-ins are on, `coach.md` can be used, the member hasn't submitted this week, and they have
+   started fewer than 12 sessions in 24 hours, then creates the session. Then the browser sends its
+   WebRTC offer for live transcription to the server (`/portal/checkin/live/connect`), which claims
+   the session's one connection (`connected_at`, migration 0012), opens the transcription session
+   with OpenAI itself and sends OpenAI's answer back. So no OpenAI key, not even a short-lived one,
+   ever reaches the browser, and each live session opens at most one transcription session (this
+   closed [#34](https://github.com/the-newnormal/moduleone/issues/34)). The opening question from
    `coach.md` is on screen from before Start is pressed:
    *"Talk me through your week, Monday to Saturday: what you worked on and what came of it, a
    moment you or your team were at your best, and how you're feeling about the team."* (Check-ins
@@ -737,9 +736,8 @@ waits for nothing still shows, and is said to.
 Live coaching stops, for the rest of that recording (the metrics below call this falling back),
 when (with the code the end call sends, for the server's log, section 5):
 
-- the start doesn't come back ready (live check-ins off, `coach.md` broken, the privacy notice not
-  accepted, too many sessions, already submitted, and so on): `start_not_ready`, never sent, since
-  no session started;
+- the start doesn't come back ready (live check-ins off, `coach.md` broken, too many sessions,
+  already submitted, and so on): `start_not_ready`, never sent, since no session started;
 - live transcription doesn't connect within 8 s (`connect_timeout`), fails to connect
   (`connect_failed`), or drops once connected (`connection_lost`);
 - the browser gives no microphone level within 3 s (without it, nothing can tell when they
@@ -787,7 +785,8 @@ Weights (0.05 to 3, per topic) set how much each topic matters against the other
 
 These queries run in the **Supabase SQL editor**, by the project owner. `live_checkin_sessions`
 has no access through the app at all: the coach's view of how much someone said is close to a
-judgement, and members are told that nobody sees that record in the app. So:
+judgement, and members are told, on the onboarding form outside Module One, that nobody sees that
+record in the app. So:
 
 - look at totals and shares, never at one person's rows; never join to `members` or select ids;
 - don't export the results with anything that identifies anyone;
@@ -810,7 +809,7 @@ end call came) holds:
 | `counts.reads`, `counts.failures` | Successful Claude reads, and reads that failed (timeout, API error, refusal, unusable reply); a failed read is not in `reads` |
 | `counts.tailored`, `counts.bank` | Questions shown in Claude's wording, and in the file's (skipped ones included) |
 | `counts.rejected` | Questions shown in the file's wording because Claude's failed the checks (also counted in `bank`) |
-| `counts.rejectedWhy` | Why Claude's wording failed the checks: each `validateQuestion` reason code (such as `blocked`, `too_long`, `quote_not_said`) and how many times. A blocked word is kept as `blocked` alone, never which group it was in: Claude words its question from what they said, so `blocked_personal` would mostly record that they raised something personal, which the notice doesn't name. Counted every time, whether or not the file's question shown instead reached the screen, so its total can be above `rejected` |
+| `counts.rejectedWhy` | Why Claude's wording failed the checks: each `validateQuestion` reason code (such as `blocked`, `too_long`, `quote_not_said`) and how many times. A blocked word is kept as `blocked` alone, never which group it was in: Claude words its question from what they said, so `blocked_personal` would mostly record that they raised something personal, which the onboarding form doesn't name. Counted every time, whether or not the file's question shown instead reached the screen, so its total can be above `rejected` |
 | `counts.noRead` | Offers (questions or closing lines) made before Claude's first successful read, so decided without it; each call's offer counts, shown or not |
 | `counts.latencyMs`, `counts.slowestMs` | Total and slowest Claude read time, in ms |
 
@@ -828,14 +827,17 @@ connection was opened; empty if it never connected) and `checkin_id` (the check-
 submitted). A session with no coach call at all has `coach_state = '{}'`. Coverage and mood are as
 of the last read, so anything said after it isn't in `coverage`.
 
-The privacy notice (`src/lib/checkin/notice.ts`) names three things this record keeps: which
-topics they were asked about, how much of each they had covered, and whether it sounded like a hard
-week or like they weren't coping (it then stops asking questions). The row keeps more than those
-three: counts and timings about how the app ran (Claude's reads and failed reads, where each
-question's wording came from and which checks Claude's wording failed, offers made without a read,
-read times, how long live transcription ran, the models and the start time), and how many words Claude had read by its last read (`wordsRead`), which measures how
-much the member said and which the notice doesn't name. Keeping anything more about what members
-say or how they seem means changing the notice and its revision, so members accept it again.
+What members are told about this record (the onboarding form, outside Module One; until 13 October
+2026 the in-app notice) names three things this record keeps: which topics they were asked about,
+how much of each they had covered, and whether it sounded like a hard week or like they weren't
+coping (it then stops asking questions). The row keeps more than those three: counts and timings
+about how the app ran (Claude's reads and failed reads, where each question's wording came from and
+which checks Claude's wording failed, offers made without a read, read times, how long live
+transcription ran, the models and the start time), and how many words Claude had read by its last
+read (`wordsRead`), which measures how much the member said and which the form doesn't name. Keeping
+anything more about what members say or how they seem means the product owner changing the
+onboarding form first, and telling members who already completed it: the app no longer asks them
+again.
 
 ### The metrics
 
@@ -1138,8 +1140,8 @@ invent the words, in Singapore English; never paste a real member's check-in, si
 the repository.
 
 **Rolling out.** `LIVE_CHECKIN` (in Vercel's environment variables) switches the live check-in on
-or off for everyone; off, the opening question is the only one. Switching it either way changes
-the privacy notice, so every member is asked to accept it again before their next recording.
+or off for everyone; off, the opening question is the only one. Before switching it on, check that
+the onboarding form tells members about the live check-in: the app no longer asks them.
 
 ### Ideas not built yet
 
@@ -1154,5 +1156,5 @@ These came up in the design work. None of them exists today:
 - **Give the grader the questions shown:** today the grader is told follow-ups may have been shown
   but not which.
 - **An admin metrics page:** the queries above, in the app. It would need its own read-only access
-  that returns only totals, since `live_checkin_sessions` has none, and a look at the privacy
-  notice, which says nobody sees the record in the app.
+  that returns only totals, since `live_checkin_sessions` has none, and a change to the onboarding
+  form, which tells members nobody sees the record in the app.

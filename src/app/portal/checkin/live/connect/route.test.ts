@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectLiveSession } from "@/lib/checkin/live-sessions";
-import { noticeAccepted, sessionMember, type Session } from "@/lib/checkin/session";
+import { sessionMember, type Session } from "@/lib/checkin/session";
 import { LiveTranscriptionError, openLiveTranscription } from "@/lib/stt/live";
 import { MAX_OFFER_CHARS } from "../contract";
 import { POST } from "./route";
 
-vi.mock("@/lib/checkin/session", () => ({ sessionMember: vi.fn(), noticeAccepted: vi.fn() }));
+vi.mock("@/lib/checkin/session", () => ({ sessionMember: vi.fn() }));
 vi.mock("@/lib/checkin/live-sessions", () => ({ connectLiveSession: vi.fn() }));
 vi.mock("@/lib/stt/live", async () => ({
   ...(await vi.importActual<typeof import("@/lib/stt/live")>("@/lib/stt/live")),
@@ -37,7 +37,6 @@ function post(body: unknown = { sessionId: SESSION_ID, offer: OFFER }, headers: 
 beforeEach(() => {
   vi.stubEnv("LIVE_CHECKIN", "on");
   vi.mocked(sessionMember).mockReset().mockResolvedValue(SESSION);
-  vi.mocked(noticeAccepted).mockReset().mockResolvedValue(true);
   vi.mocked(connectLiveSession).mockReset().mockResolvedValue(true);
   vi.mocked(openLiveTranscription).mockReset().mockResolvedValue(ANSWER);
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -69,10 +68,9 @@ describe("POST /portal/checkin/live/connect", () => {
     expect(connectLiveSession).toHaveBeenCalledExactlyOnceWith(SESSION_ID, MEMBER);
   });
 
-  it("checks who is calling, not the notice again (checked when the session started)", async () => {
+  it("checks who is calling", async () => {
     await POST(post());
     expect(sessionMember).toHaveBeenCalledOnce();
-    expect(noticeAccepted).not.toHaveBeenCalled();
   });
 
   it.each([

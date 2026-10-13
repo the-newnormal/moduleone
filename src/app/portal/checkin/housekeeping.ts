@@ -114,9 +114,10 @@ export async function tidyMemberAudio(memberId: string, weekStart: string): Prom
   }
 }
 
-// Recordings are kept as long as the privacy notice promised when they were made (0013): a
-// check-in's for its `audio_keep_days` (90 days, or a year once its speaker had accepted the Diary's
-// notice before recording), every other file 90 days. forget_expired_checkin_audio takes each file
+// Recordings are kept as long as their speaker was promised when they were made (0013): a check-in's
+// for its `audio_keep_days` (a year when, as the take started, the speaker's login had the Diary's
+// onboarding note, src/lib/checkin/onboarding-note.ts, or had accepted the old in-app one-year
+// notice; 90 days otherwise), every other file 90 days. forget_expired_checkin_audio takes each file
 // whose time is up off the check-in or draft that points at it and returns the files, which this
 // then deletes. A file it fails to delete is returned again on the next run. Run daily with
 // processPendingCheckins. Never throws.

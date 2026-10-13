@@ -266,14 +266,18 @@ describe("saveTake", () => {
     expect(await saveTake(fresh, steps)).toEqual({ step: "saved" });
   });
 
-  it("uploads nothing until the privacy notice is accepted", async () => {
+  it("uploads nothing when the server refuses to prepare the upload", async () => {
     const steps = fakes();
-    const notice = { status: "error", code: "notice_required", message: "Read the privacy notice first." } as const;
-    steps.prepare.mockResolvedValueOnce(notice);
+    const refused = {
+      status: "error",
+      code: "unsupported_audio",
+      message: "This browser records in a format we can't use. Try Chrome or Safari.",
+    } as const;
+    steps.prepare.mockResolvedValueOnce(refused);
     expect(await saveTake(fresh, steps)).toEqual({
       step: "failed",
       take: stamp(fresh),
-      message: notice.message,
+      message: refused.message,
       updated: false,
     });
     expect(steps.upload).not.toHaveBeenCalled();

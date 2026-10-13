@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { noticeSections } from "@/lib/checkin/notice";
 import { DEFAULT_OPENING_QUESTION, QUESTIONS } from "@/lib/checkin/week";
 import { coachRubric } from "@/lib/coach/rubric";
 import { RubricError } from "@/lib/rubrics/markdown";
@@ -9,7 +8,8 @@ import { text } from "@/test/dom";
 import { QuestionsTile } from "./questions-tile";
 
 // The home page's question tile: the one open question from rubrics/coach.md, with a note about
-// follow-ups while the live check-in is on; and the privacy notice to read again either way.
+// follow-ups while the live check-in is on. No privacy notice: members agree on the onboarding form,
+// outside Module One (the product owner's decision, 13 October 2026).
 
 vi.mock("@/lib/coach/rubric", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/coach/rubric")>();
@@ -26,7 +26,6 @@ function render() {
 }
 
 const items = (tile: HTMLElement) => [...tile.querySelectorAll("li")].map((li) => text(li));
-const notice = (tile: HTMLElement) => text(tile.querySelector("details")!);
 
 beforeEach(() => {
   vi.stubEnv("LIVE_CHECKIN", "off");
@@ -78,22 +77,10 @@ describe("the questions tile", () => {
     expect(() => render()).toThrow("boom");
   });
 
-  it.each([["off"], ["on"]])("keeps the privacy notice to read again, as it reads with LIVE_CHECKIN=%s", (value) => {
+  it.each([["off"], ["on"]])("has no privacy notice to read with LIVE_CHECKIN=%s", (value) => {
     vi.stubEnv("LIVE_CHECKIN", value);
     const tile = render();
-    const details = tile.querySelector("details")!;
-    expect(details.hasAttribute("open")).toBe(false);
-    expect(text(details.querySelector("summary")!)).toBe("How your recording is used");
-    for (const { heading, body } of noticeSections()) {
-      expect(notice(tile)).toContain(heading);
-      expect(notice(tile)).toContain(body);
-    }
-  });
-
-  it("names OpenAI for the live audio in the notice when the live check-in is on", () => {
-    vi.stubEnv("LIVE_CHECKIN", "on");
-    vi.stubEnv("STT_PROVIDER", "local");
-    vi.stubEnv("STT_FALLBACK", "none");
-    expect(notice(render())).toContain("While you record, your voice is streamed to OpenAI, in the United States");
+    expect(tile.querySelector("details")).toBeNull();
+    expect(text(tile)).not.toContain("How your recording is used");
   });
 });
