@@ -5,7 +5,7 @@ import { useEffect, useRef, type ReactNode, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { Tag } from "@/components/normal/tag";
 import type { Area, Touched } from "@/lib/coach/types";
-import { ON_STAGE_MAIN, ON_STAGE_OUTLINE } from "../camera-stage";
+import { ON_STAGE_MAIN, ON_STAGE_OUTLINE, STAGE_QUESTION } from "../camera-stage";
 import type { ShownOffer } from "./contract";
 import type { FollowUpStatus } from "./pacing";
 import { OPENING_OFFER_ID } from "./use-live-coach";
@@ -107,7 +107,8 @@ export function LivePrompt({
 
   return (
     <>
-      <h3 className={onStage ? "text-2xl leading-snug font-medium sm:text-4xl" : "text-2xl leading-snug"}>{offer.text}</h3>
+      {/* Over the camera, the size it was before the take began, so the panel doesn't cover their face. */}
+      <h3 className={onStage ? STAGE_QUESTION : "text-2xl leading-snug"}>{offer.text}</h3>
       {status && <FollowUpLine status={status} offer={offer} onStage={onStage} />}
       {touched && (
         <ul aria-label="What you've talked about so far" className="flex flex-wrap gap-2">

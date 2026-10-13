@@ -3,7 +3,7 @@ import { act, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_OPENING_QUESTION, QUESTIONS } from "@/lib/checkin/week";
 import { button, click, queryButton, render, settle, text } from "@/test/dom";
-import { VOICE_ONLY_LINE } from "./camera-stage";
+import { STAGE_QUESTION, VOICE_ONLY_LINE } from "./camera-stage";
 import type { LiveReady } from "./live/api";
 import { MAX_READS } from "./live/pacing";
 import type { ShownOffer } from "./live/contract";
@@ -1414,6 +1414,7 @@ describe("a live check-in", () => {
     await turnOnCamera();
     expect(stage()?.textContent).toContain("Ready when you are.");
     expect(stage()?.textContent).toContain(OPENING);
+    expect([...(stage()?.querySelectorAll("p") ?? [])].find((p) => p.textContent === OPENING)?.className).toBe(STAGE_QUESTION);
     expect(text().split(OPENING)).toHaveLength(2); // once: not again in the card under the stage
     expect(stage()?.textContent).not.toContain("What have you done this week?");
     expect(document.activeElement).toBe(button("Start recording"));
@@ -1424,6 +1425,8 @@ describe("a live check-in", () => {
     const { microphone } = await startRecording();
     expect(FakeRecorder.last?.stream).toBe(microphone); // the camera never reaches the recorder
     expect(stage()?.querySelector("h3")?.textContent).toBe(OPENING);
+    // The size it was before the take began, so the panel leaves their face in view.
+    expect(stage()?.querySelector("h3")?.className).toBe(STAGE_QUESTION);
     expect(stage()?.contains(button("Finish"))).toBe(true);
     expect(button("Finish")).toBe(document.activeElement);
     expect(button("Finish").className).toContain("bg-white"); // light on the dark stage

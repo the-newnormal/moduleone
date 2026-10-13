@@ -98,6 +98,9 @@ export const ON_STAGE_MAIN = "focus-visible:outline-white bg-white text-black ho
 export const ON_STAGE_OUTLINE =
   "focus-visible:outline-white border-white/60 bg-transparent text-white hover:bg-white/15 hover:text-white dark:border-white/60 dark:bg-transparent dark:hover:bg-white/15";
 export const STAGE_PILL = "rounded-full bg-black/55 px-3 py-1 text-sm backdrop-blur-md";
+// The question on the stage, before the take and during it alike (during it, it's an h3: weight and
+// spacing set back to the body text's): small enough that the panel leaves the member's face in view.
+export const STAGE_QUESTION = "text-lg leading-snug font-normal tracking-normal";
 // A button in the stage's top row, straight over the camera's picture: outlined in white on a dark
 // ground of its own, as the pills are, so its words can be read over a bright picture, and with a dark
 // band round its white focus ring, so the ring can be seen over one too.

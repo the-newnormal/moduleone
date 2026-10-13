@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { button, click, queryButton, render, text } from "@/test/dom";
 import type { Touched } from "@/lib/coach/types";
 import type { ShownOffer } from "./contract";
+import { STAGE_QUESTION } from "../camera-stage";
 import { FOLLOW_UP_COPY, LAST_FOLLOW_UP, LivePrompt } from "./live-prompt";
 import type { FollowUpStatus } from "./pacing";
 
@@ -75,6 +76,14 @@ describe("LivePrompt", () => {
     expect(button("Different question").className).toContain("text-white");
     expect(document.querySelectorAll("li")[1].firstElementChild?.className).toContain("text-white/80"); // "Not yet"
     expect(document.querySelector("p")?.className).toContain("text-white/75");
+  });
+
+  // The panel lies over the member's face: the question stays the size it was before the take began.
+  it("sets the question over the camera as the stage set it before the take, and larger in the card", async () => {
+    const page = await render(prompt({ offer: FOLLOW_UP, onStage: true }));
+    expect(document.querySelector("h3")?.className).toBe(STAGE_QUESTION);
+    await page.rerender(prompt({ offer: FOLLOW_UP }));
+    expect(document.querySelector("h3")?.className).toBe("text-2xl leading-snug");
   });
 
   it("shows only the question and Finish when no follow-ups are coming", async () => {

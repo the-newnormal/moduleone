@@ -9,7 +9,7 @@ import { baseMimeType, extensionFor } from "@/lib/checkin/audio";
 import { DEFAULT_OPENING_QUESTION } from "@/lib/checkin/week";
 import { createClient } from "@/lib/supabase/client";
 import { prepareRecording, saveDraft } from "./actions";
-import { CameraButton, CameraRow, CameraStage, ON_STAGE_MAIN, STAGE_PILL, VoiceOnlyLine } from "./camera-stage";
+import { CameraButton, CameraRow, CameraStage, ON_STAGE_MAIN, STAGE_PILL, STAGE_QUESTION, VoiceOnlyLine } from "./camera-stage";
 import { formatClock } from "./format";
 import { followUpCopy, LivePrompt } from "./live/live-prompt";
 import type { ShownOffer } from "./live/contract";
@@ -818,7 +818,7 @@ export function Recorder({
           {state.step === "idle" && (
             <>
               <p className="text-2xl leading-snug font-medium sm:text-3xl">Ready when you are.</p>
-              <p className="text-lg leading-snug">{opening}</p>
+              <p className={STAGE_QUESTION}>{opening}</p>
               <p className="text-sm text-white/75">
                 {live
                   ? "We'll start with this question; follow-ups may appear when you pause."
