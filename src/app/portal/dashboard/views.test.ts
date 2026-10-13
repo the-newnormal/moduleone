@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadHeatmapData, loadLedTeams, loadRole, loadScoringConfig, loadTeamWeek } from "@/lib/dashboard/load";
+import { loadHeatmapData, loadLedTeams, loadMemberId, loadRole, loadScoringConfig, loadTeamWeek } from "@/lib/dashboard/load";
 import type { CheckinRow } from "@/lib/dashboard/org";
 import type { TeamNode } from "@/lib/dashboard/tree";
 import type { HealthConfig } from "@/lib/health/health";
@@ -25,6 +25,7 @@ vi.mock("@/lib/dashboard/load", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/dashboard/load")>()),
   loadHeatmapData: vi.fn(),
   loadLedTeams: vi.fn(),
+  loadMemberId: vi.fn(),
   loadRole: vi.fn(),
   loadScoringConfig: vi.fn(),
   loadTeamWeek: vi.fn(),
@@ -96,6 +97,7 @@ beforeEach(() => {
   } as never);
   vi.mocked(loadScoringConfig).mockResolvedValue(CONFIG);
   vi.mocked(loadLedTeams).mockResolvedValue([]);
+  vi.mocked(loadMemberId).mockResolvedValue("m-viewer");
   vi.mocked(loadRole).mockResolvedValue("hq");
   vi.mocked(loadTeamWeek).mockResolvedValue({ teamName: "Gather", context: [], checkins: [] });
 });
@@ -242,6 +244,7 @@ describe("a team's week", () => {
   it("puts check-ins from the teams under it in a section each", async () => {
     const checkin = (id: string, memberName: string, team: string | null, teamId: string = team ?? IP_LAB) => ({
       id,
+      memberId: `m-${id}`,
       memberName,
       teamId,
       team,
@@ -272,6 +275,7 @@ describe("a team's week, for a Master Admin", () => {
   const IP_LAB = "00000000-0000-4000-8000-0000000000bb";
   const card = (id: string, memberName: string, graded: boolean, hasRecording: boolean) => ({
     id,
+    memberId: `m-${id}`,
     memberName,
     teamId: IP_LAB,
     team: null,
@@ -323,6 +327,7 @@ describe("a team's week, noting who opened it (0015)", () => {
   const IP_LAB = "00000000-0000-4000-8000-0000000000bb";
   const card = (id: string, memberName: string) => ({
     id,
+    memberId: `m-${id}`,
     memberName,
     teamId: IP_LAB,
     team: null,
@@ -411,11 +416,23 @@ describe("a team's week, noting who opened it (0015)", () => {
   it("doesn't tell a leader who sees only their own check-ins there, which are never noted", async () => {
     vi.mocked(loadRole).mockResolvedValue("leader");
     vi.mocked(loadLedTeams).mockResolvedValue(["somewhere-else"]);
+    vi.mocked(loadTeamWeek).mockResolvedValue({ teamName: "IP Lab", context: [], checkins: [{ ...card("c1", "Abe"), memberId: "m-viewer" }] });
     const html = renderToStaticMarkup(await drillIn());
     expect(html).toContain("Your check-ins · IP Lab");
     expect(html).not.toContain(NOTE);
     // Still sent: the database drops their own.
-    expect(rpc).toHaveBeenCalledExactlyOnceWith("log_checkin_views", { p_checkin_ids: ["c1", "c2", "c3"], p_kind: "opened" });
+    expect(rpc).toHaveBeenCalledExactlyOnceWith("log_checkin_views", { p_checkin_ids: ["c1"], p_kind: "opened" });
+  });
+
+  it.each(["hq", "leader"] as const)("doesn't tell %s when every check-in listed is their own", async (role) => {
+    vi.mocked(loadRole).mockResolvedValue(role);
+    vi.mocked(loadLedTeams).mockResolvedValue([IP_LAB]);
+    const mine = { ...card("c1", "Abe"), memberId: "m-viewer" };
+    vi.mocked(loadTeamWeek).mockResolvedValue({ teamName: "IP Lab", context: [], checkins: [mine] });
+    expect(renderToStaticMarkup(await drillIn())).not.toContain(NOTE);
+    // Anyone else's beside it, and they are told.
+    vi.mocked(loadTeamWeek).mockResolvedValue({ teamName: "IP Lab", context: [], checkins: [mine, card("c2", "Bea")] });
+    expect(renderToStaticMarkup(await drillIn())).toContain(NOTE);
   });
 });
 
@@ -423,6 +440,7 @@ describe("a team's week, with two teams of the same name under it", () => {
   it("keeps their check-ins in separate sections", async () => {
     const checkin = (id: string, memberName: string, teamId: string) => ({
       id,
+      memberId: `m-${id}`,
       memberName,
       teamId,
       team: "Twins",

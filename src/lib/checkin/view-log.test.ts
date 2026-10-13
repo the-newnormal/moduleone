@@ -149,19 +149,20 @@ describe("viewsByWeek", () => {
       view({ week_start: "2026-09-28", checkin_id: B, viewed_at: "2026-10-01T03:00:00+00:00" }),
     ]);
     expect([...weeks.keys()]).toEqual(["2026-10-05", "2026-09-28"]);
+    const jane = { name: "Jane Tan", role: "HQ" };
+    const ali = { name: "Ali Rahman", role: "Leader" };
     expect(weeks.get("2026-10-05")).toEqual([
       {
         name: "Jane Tan",
-        role: "HQ",
         lines: [
-          { kind: "played", at: "2026-10-09T02:00:00+00:00", reset: false },
-          { kind: "opened", at: "2026-10-07T01:00:00+00:00", reset: false },
+          { ...jane, kind: "played", at: "2026-10-09T02:00:00+00:00", reset: false },
+          { ...jane, kind: "opened", at: "2026-10-07T01:00:00+00:00", reset: false },
         ],
       },
-      { name: "Ali Rahman", role: "Leader", lines: [{ kind: "opened", at: "2026-10-08T01:00:00+00:00", reset: false }] },
+      { name: "Ali Rahman", lines: [{ ...ali, kind: "opened", at: "2026-10-08T01:00:00+00:00", reset: false }] },
     ]);
     expect(weeks.get("2026-09-28")).toEqual([
-      { name: "Jane Tan", role: "HQ", lines: [{ kind: "opened", at: "2026-10-01T03:00:00+00:00", reset: false }] },
+      { name: "Jane Tan", lines: [{ ...jane, kind: "opened", at: "2026-10-01T03:00:00+00:00", reset: false }] },
     ]);
   });
 
@@ -173,13 +174,17 @@ describe("viewsByWeek", () => {
     expect(group.lines.map((l) => l.reset)).toEqual([false, true]);
   });
 
-  it("shows each viewer under the name and label they had when they last looked", () => {
+  it("names each viewer as they were when they last looked, and keeps each line as it was then", () => {
     const [group] = viewsByWeek([
-      view({ viewer_name: "Jane Tan (new)", viewer_role: "leader", viewed_at: "2026-10-09T01:00:00+00:00" }),
+      view({ viewer_name: "Jane Tan (new)", viewer_role: "hq", kind: "played", viewed_at: "2026-10-09T01:00:00+00:00" }),
       view({ viewer_name: "Jane Tan", viewer_role: "leader", viewed_at: "2026-10-06T01:00:00+00:00" }),
     ]).get("2026-10-05")!;
-    expect(group).toMatchObject({ name: "Jane Tan (new)", role: "Leader" });
-    expect(group.lines).toHaveLength(2);
+    expect(group.name).toBe("Jane Tan (new)");
+    // Made HQ since: the earlier opening was still a Leader's.
+    expect(group.lines.map((l) => [l.name, l.role, l.kind])).toEqual([
+      ["Jane Tan (new)", "HQ", "played"],
+      ["Jane Tan", "Leader", "opened"],
+    ]);
   });
 
   it("groups by viewer_key, not by name: two people with one name stay apart", () => {
@@ -204,8 +209,8 @@ describe("viewsByWeek", () => {
       expect(json).not.toContain(secret);
     }
     const [group] = viewsByWeek(rows as ViewLogRow[]).get("2026-10-05")!;
-    expect(Object.keys(group).sort()).toEqual(["lines", "name", "role"]);
-    expect(Object.keys(group.lines[0]).sort()).toEqual(["at", "kind", "reset"]);
+    expect(Object.keys(group).sort()).toEqual(["lines", "name"]);
+    expect(Object.keys(group.lines[0]).sort()).toEqual(["at", "kind", "name", "reset", "role"]);
   });
 
   it("is empty with no rows", () => {

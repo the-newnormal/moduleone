@@ -5,7 +5,7 @@ import { notFound, redirect } from "next/navigation";
 import { RecordingPlayer } from "@/components/recordings/recording-player";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { logCheckinViews } from "@/lib/checkin/view-log";
-import { loadLedTeams, loadRole, loadScoringConfig, loadTeamWeek, type TeamWeekCheckin } from "@/lib/dashboard/load";
+import { loadLedTeams, loadMemberId, loadRole, loadScoringConfig, loadTeamWeek, type TeamWeekCheckin } from "@/lib/dashboard/load";
 import { coverage, yours } from "@/lib/dashboard/org";
 import { formatWeek, isWeekStart, parseWeekCount, weekStartFor } from "@/lib/dashboard/weeks";
 import { formatScore, type HealthConfig, healthBand, healthScore, teamWeekHealth } from "@/lib/health/health";
@@ -109,10 +109,11 @@ export default async function TeamWeekPage({
         ? "/portal/dashboard"
         : `/portal/dashboard?week=${chartWeek}`;
 
-  const [config, role, ledTeams] = await Promise.all([
+  const [config, role, ledTeams, me] = await Promise.all([
     loadScoringConfig(supabase),
     loadRole(supabase),
     loadLedTeams(supabase),
+    loadMemberId(supabase),
   ]);
   // Members never see their grade or the leaders-only review (see ../../page.tsx).
   if (role === "member") redirect("/portal/checkin");
@@ -142,9 +143,9 @@ export default async function TeamWeekPage({
   const waiting = checkins.length - (cell?.graded ?? 0);
   // Master Admins may delete a recording or reset a check-in (the database checks again).
   const manage = role === "hq" ? { currentWeek: week === weekStartFor(new Date()) } : null;
-  // Tell the viewer their opening shows, whenever the page lists anyone's but their own: outside the
-  // teams they cover a leader sees only their own check-ins, which are never noted.
-  const othersListed = checkins.length > 0 && (role === "hq" || (id !== null && covers(id)));
+  // Tell the viewer their opening shows, whenever the page lists anyone's check-in but their own
+  // (theirs are never noted).
+  const othersListed = checkins.some((checkin) => checkin.memberId !== me);
 
   return (
     <main className="mx-auto grid w-full max-w-3xl grid-cols-[minmax(0,1fr)] gap-6 px-4 py-10">

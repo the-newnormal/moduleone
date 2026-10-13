@@ -26,11 +26,19 @@ export function viewerNames(groups: readonly ViewGroup[]): string {
   return `${names.slice(0, 2).join(", ")} and ${names.length - 2} others`;
 }
 
-// "Jane Tan · HQ — opened your check-in on Friday 9 October at 2:15 pm", with the year when it isn't
-// this one in Singapore.
-export function viewLine(group: ViewGroup, line: ViewLine, thisYear: string): string {
+// "Jane Tan · HQ — opened your check-in on Friday 9 October at 2:15 pm", under the name and label
+// they had that time, with the year when it isn't this one in Singapore.
+export function viewLine(line: ViewLine, thisYear: string): string {
   const when = formatDateTime(line.at, sgtDay(line.at).slice(0, 4) !== thisYear);
-  return `${group.name} · ${group.role} — ${DID[line.kind]} on ${when}${line.reset ? RESET : ""}`;
+  return `${line.name} · ${line.role} — ${DID[line.kind]} on ${when}${line.reset ? RESET : ""}`;
+}
+
+// What the summary says they did: "Opened by" only when each of them opened it, since a recording
+// can be played from its own address without opening the check-in.
+export function viewedByLabel(groups: readonly ViewGroup[]): string {
+  const opened = groups.filter((g) => g.lines.some((line) => line.kind === "opened")).length;
+  if (opened === groups.length) return "Opened by";
+  return opened === 0 ? "Recording played by" : "Opened or played by";
 }
 
 // Every line, a person at a time.
@@ -39,13 +47,13 @@ function ViewLines({ groups, className = "" }: { groups: readonly ViewGroup[]; c
   return (
     <ul className={`grid gap-1.5 text-[13px] leading-[18px] break-words ${className}`}>
       {groups.flatMap((group, g) =>
-        group.lines.map((line, l) => <li key={`${g}-${l}`}>{viewLine(group, line, thisYear)}</li>),
+        group.lines.map((line, l) => <li key={`${g}-${l}`}>{viewLine(line, thisYear)}</li>),
       )}
     </ul>
   );
 }
 
-// Folded under an entry: "Opened by …", then each line.
+// Folded under an entry: "Opened by …" (or "Recording played by …"), then each line.
 export function ViewedBy({ groups }: { groups: readonly ViewGroup[] | undefined }) {
   if (!groups || groups.length === 0) return null;
   return (
@@ -53,7 +61,7 @@ export function ViewedBy({ groups }: { groups: readonly ViewGroup[] | undefined 
       <summary
         className={`flex min-h-10 w-fit cursor-pointer list-none items-center gap-1.5 rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden ${NOTE}`}
       >
-        <span className="break-words">{`Opened by ${viewerNames(groups)}`}</span>
+        <span className="break-words">{`${viewedByLabel(groups)} ${viewerNames(groups)}`}</span>
         <ChevronDown aria-hidden strokeWidth={1.5} className="size-3.5 shrink-0 motion-safe:transition-transform group-open:rotate-180" />
       </summary>
       <ViewLines groups={groups} className="pt-1 pb-2" />

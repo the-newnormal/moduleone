@@ -62,16 +62,18 @@ export const loadViewLog = (supabase: SupabaseClient, ownerId: string) =>
   });
 
 export type ViewLine = {
+  name: string; // as it was when they looked
+  role: "Leader" | "HQ"; // as it was when they looked
   kind: ViewKind;
   at: string; // viewed_at
   reset: boolean; // it was an earlier check-in for that week, since reset
 };
 
-// One person's views of one week's check-in, newest first, under the name and label they had when
-// they last looked.
-export type ViewGroup = { name: string; role: "Leader" | "HQ"; lines: ViewLine[] };
+// One person's views of one week's check-in, newest first, each line under the name and label they
+// had that time; `name` is the one they had when they last looked, for the summary.
+export type ViewGroup = { name: string; lines: ViewLine[] };
 
-const ROLE_LABEL: Record<ViewLogRow["viewer_role"], ViewGroup["role"]> = { leader: "Leader", hq: "HQ" };
+const ROLE_LABEL: Record<ViewLogRow["viewer_role"], ViewLine["role"]> = { leader: "Leader", hq: "HQ" };
 
 // The log by week ('YYYY-MM-DD' Monday): a group per viewer (by viewer_key, so two people with one
 // name stay apart and a renamed one stays together), the most recent viewer first. Named fields
@@ -82,12 +84,17 @@ export function viewsByWeek(rows: readonly ViewLogRow[]): Map<string, ViewGroup[
     let viewers = weeks.get(row.week_start);
     if (!viewers) weeks.set(row.week_start, (viewers = new Map()));
     let entry = viewers.get(row.viewer_key);
-    if (!entry) viewers.set(row.viewer_key, (entry ={ group: { name: row.viewer_name, role: "Leader", lines: [] }, latest: "" }));
-    entry.group.lines.push({ kind: row.kind === "played" ? "played" : "opened", at: row.viewed_at, reset: row.checkin_id === null });
+    if (!entry) viewers.set(row.viewer_key, (entry = { group: { name: row.viewer_name, lines: [] }, latest: "" }));
+    entry.group.lines.push({
+      name: row.viewer_name,
+      role: ROLE_LABEL[row.viewer_role] ?? "Leader",
+      kind: row.kind === "played" ? "played" : "opened",
+      at: row.viewed_at,
+      reset: row.checkin_id === null,
+    });
     if (newer(row.viewed_at, entry.latest)) {
       entry.latest = row.viewed_at;
       entry.group.name = row.viewer_name;
-      entry.group.role = ROLE_LABEL[row.viewer_role] ?? "Leader";
     }
   }
   const out = new Map<string, ViewGroup[]>();

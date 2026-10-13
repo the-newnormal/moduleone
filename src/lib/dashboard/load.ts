@@ -29,6 +29,13 @@ export async function loadRole(supabase: SupabaseClient): Promise<Role | null> {
   return (data as Role | null) ?? null;
 }
 
+// The signed-in viewer's member id (null if they have no member row).
+export async function loadMemberId(supabase: SupabaseClient): Promise<string | null> {
+  const { data, error } = await supabase.rpc("app_current_member_id");
+  if (error) throw new Error(`Couldn't load who you are: ${error.message}`);
+  return (data as string | null) ?? null;
+}
+
 // Everything a heat-map view needs for these weeks (oldest first).
 export async function loadHeatmapData(supabase: SupabaseClient, weeks: readonly string[]) {
   const [teams, checkins, config, role, ledTeams] = await Promise.all([
@@ -76,6 +83,7 @@ async function loadCheckins(supabase: SupabaseClient, from: string, to: string):
 
 export type TeamWeekCheckin = {
   id: string;
+  memberId: string; // whose it is (never rendered)
   memberName: string | null;
   teamId: string | null; // the team it was made in
   // That team's name, when it's a team under the page's ("IP Lab › IP Lab 1" on Gather's page);
@@ -122,7 +130,7 @@ export async function loadTeamWeek(
         let query = supabase
           .from("checkins")
           .select(
-            "id, team_id, activity_score, excellence_score, morale_score, rubric_review, transcript, audio_path, submitted_at, graded_at, members(name)",
+            "id, member_id, team_id, activity_score, excellence_score, morale_score, rubric_review, transcript, audio_path, submitted_at, graded_at, members(name)",
           )
           .eq("week_start", week);
         query = ids ? query.in("team_id", ids) : query.is("team_id", null);
@@ -159,6 +167,7 @@ export async function loadTeamWeek(
       const member = c.members as unknown as { name: string } | null;
       const row: TeamWeekCheckin = {
         id: c.id,
+        memberId: c.member_id,
         memberName: member?.name ?? null,
         teamId: c.team_id,
         team: teamLabel(c.team_id),

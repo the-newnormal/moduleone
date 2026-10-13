@@ -29,6 +29,7 @@ vi.mock("@/lib/dashboard/load", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/dashboard/load")>()),
   loadHeatmapData: vi.fn(),
   loadLedTeams: vi.fn(),
+  loadMemberId: vi.fn(),
   loadRole: vi.fn(),
   loadScoringConfig: vi.fn(),
   loadTeamWeek: vi.fn(),
