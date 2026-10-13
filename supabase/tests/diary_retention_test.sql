@@ -1,16 +1,18 @@
 -- How long each recording is kept (0013). Run: supabase test db
 -- Builds its own fixtures inside the transaction and rolls back, so it doesn't depend on seed.sql.
 --
--- Fixtures: members r1–r11 in one team, each with their own login (u1–u11), and a spare login u12.
--- Submitting: each records a take this week under the notices the cases below describe.
+-- Fixtures: members r1–r11 and r13–r16 in one team, each with their own login (u1–u16; u12 is spare).
+-- Submitting: each records a take this week under the notices the cases below describe; r13–r16 under
+-- the Diary's onboarding note (src/lib/checkin/onboarding-note.ts), the only row the app writes since
+-- the in-app notice went (13 October 2026).
 -- Forgetting: check-ins for earlier weeks, drafts and loose files, with their uploads backdated.
 begin;
-select plan(48);
+select plan(52);
 
 -- ---------- fixtures ----------
 insert into auth.users (id, email)
   select format('ab000000-0000-4000-8000-%s', lpad(i::text, 12, '0'))::uuid, format('u%s@diary.test', i)
-  from generate_series(1, 12) i;
+  from generate_series(1, 16) i;
 
 insert into teams (id, name) values ('bb000000-0000-4000-8000-000000000001', 'Diary team');
 
@@ -18,7 +20,7 @@ insert into members (id, auth_user_id, name, team_id, role)
   select format('cb000000-0000-4000-8000-%s', lpad(i::text, 12, '0'))::uuid,
          format('ab000000-0000-4000-8000-%s', lpad(i::text, 12, '0'))::uuid,
          format('r%s', i), 'bb000000-0000-4000-8000-000000000001', 'member'
-  from generate_series(1, 11) i;
+  from generate_series(1, 16) i where i <> 12;
 
 -- The Monday of this Singapore week, worked out the same way as the column defaults.
 create function pg_temp.this_week() returns date language sql stable as $$
@@ -115,7 +117,7 @@ select function_privs_are('public', f, args, 'service_role', array['EXECUTE'], f
 set local role service_role;
 insert into storage.objects (bucket_id, name, created_at)
   select 'checkin-audio', pg_temp.take(pg_temp.r(i), pg_temp.this_week(), 'take.webm'), now() - interval '5 minutes'
-  from generate_series(1, 10) i;
+  from generate_series(1, 16) i where i not in (11, 12);
 insert into checkin_drafts (member_id, audio_path, mime_type, recorded_at, duration_ms)
   select pg_temp.r(i), pg_temp.take(pg_temp.r(i), pg_temp.this_week(), 'take.webm'), 'audio/webm', recorded_at, duration_ms
   from (values
@@ -129,7 +131,12 @@ insert into checkin_drafts (member_id, audio_path, mime_type, recorded_at, durat
     (8,  now() - interval '58 minutes', 120000),
     (9,  now() - interval '58 minutes', 120000),
     (10, now() - interval '58 minutes', 120000),
-    (11, now() - interval '1 minute',   120000)
+    (11, now() - interval '1 minute',   120000),
+    -- r13–r16: each take started 3 minutes ago (stopped a minute ago, after 2 minutes).
+    (13, now() - interval '1 minute',   120000),
+    (14, now() - interval '1 minute',   120000),
+    (15, now() - interval '1 minute',   120000),
+    (16, now() - interval '1 minute',   120000)
   ) as t (i, recorded_at, duration_ms);
 insert into recording_notices (member_id, auth_user_id, notice_version, accepted_at, recording_keep_days)
   select pg_temp.r(member), pg_temp.u(login), version, now() - ago, days
@@ -147,11 +154,17 @@ insert into recording_notices (member_id, auth_user_id, notice_version, accepted
     (9,  9,  'diary.live',     interval '10 minutes', 365),
     (10, 10, 'diary.openai',   interval '3 hours',    365),
     (10, 10, 'shorter.openai', interval '5 minutes',  90),
-    (11, 11, 'diary.openai',   interval '1 hour',     365)
+    (11, 11, 'diary.openai',   interval '1 hour',     365),
+    (13, 13, 'assumed:onboarding-form.2026-10-13', interval '1 hour',      365),
+    (14, 14, 'old.openai',                         interval '3 hours',     90),
+    (14, 14, 'assumed:onboarding-form.2026-10-13', interval '1 hour',      365),
+    (15, 15, 'old.openai',                         interval '3 hours',     90),
+    (15, 15, 'assumed:onboarding-form.2026-10-13', interval '2 minutes',   365),
+    (16, 16, 'assumed:onboarding-form.2026-10-13', interval '2 minutes',   365)
   ) as t (member, login, version, ago, days);
 select lives_ok(
   $$select submit_checkin_draft(pg_temp.r(i), pg_temp.take(pg_temp.r(i), pg_temp.this_week(), 'take.webm'))
-      from generate_series(1, 11) i$$,
+      from generate_series(1, 16) i where i <> 12$$,
   'the server submits each member''s take (the two-argument call, unchanged)'
 );
 reset role;
@@ -178,6 +191,14 @@ select is(pg_temp.stamp(pg_temp.r(10)), pg_temp.kept(pg_temp.r(10), 90),
   'r10 accepted a shorter notice after recording: the later, shorter promise wins');
 select is(pg_temp.stamp(pg_temp.r(11)), (365, null::timestamptz)::text,
   'r11''s file never reached Storage: a year, with no date to show');
+select is(pg_temp.stamp(pg_temp.r(13)), pg_temp.kept(pg_temp.r(13), 365),
+  'r13 never accepted a notice in the app; the Diary noted the onboarding form before the take: a year');
+select is(pg_temp.stamp(pg_temp.r(14)), pg_temp.kept(pg_temp.r(14), 365),
+  'r14 accepted only the 90-day notice, then the note came before this take: a year');
+select is(pg_temp.stamp(pg_temp.r(15)), pg_temp.kept(pg_temp.r(15), 90),
+  'r15''s take started before the note: 90 days, as the notice it was recorded under said');
+select is(pg_temp.stamp(pg_temp.r(16)), pg_temp.kept(pg_temp.r(16), 90),
+  'r16''s take started before the note, with no notice in force: 90 days');
 
 -- Members read the new columns of their own rows, and can't change them.
 set local role authenticated;

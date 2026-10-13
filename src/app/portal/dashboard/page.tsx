@@ -50,7 +50,7 @@ export default async function OrgChartPage({ searchParams }: PageProps<"/portal/
   const week = showable(picked) ? picked : thisWeek;
   const weeks = weeksEndingAt(week, ORG_WEEKS);
   const { teams, checkins, config, role, ledTeams } = await loadHeatmapData(supabase, weeks);
-  // Members never see their grade (the owner's rule, and the privacy notice says so): their only
+  // Members never see their grade (the owner's rule): their only
   // box here would be their own scores. The heat-map is for leaders and hq.
   if (role === "member") redirect("/portal/checkin");
   const org = buildOrg({ teams, checkins, weeks, config, covers: coverage(role, ledTeams) });

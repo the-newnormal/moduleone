@@ -198,7 +198,7 @@ describe("CameraStage", () => {
 });
 
 // The promise members are given before they record, word for word: change it only together with
-// what they are told (the privacy notice, or the onboarding form that replaces it).
+// what they are told (README's "What members are told", which the onboarding form covers).
 describe("VOICE_ONLY_LINE", () => {
   it("says only the voice is recorded, and the picture is never saved or sent", () => {
     expect(VOICE_ONLY_LINE).toBe(

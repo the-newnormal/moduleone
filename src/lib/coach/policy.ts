@@ -331,7 +331,7 @@ export function moreToAsk(state: CoachState, offer: Offer | null, rubric: CoachR
 
 // Only the reason code is kept, never the wording that failed; and for a blocked word, not which
 // group it was in. Claude words its question from what they said, so `blocked_personal` would mostly
-// record that they raised something personal, which the privacy notice doesn't name.
+// record that they raised something personal, which the onboarding form doesn't name.
 function countRejection(state: CoachState, problem: string): CoachState {
   const reason = problem.startsWith("blocked_") ? "blocked" : problem;
   const rejectedWhy = { ...state.counts.rejectedWhy, [reason]: (state.counts.rejectedWhy[reason] ?? 0) + 1 };

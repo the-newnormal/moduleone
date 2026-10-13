@@ -5,8 +5,8 @@ import { useEffect, useRef, type ReactNode, type RefObject } from "react";
 import { pauseOtherAudio } from "@/components/recordings/pause-others";
 import { Button } from "@/components/ui/button";
 
-// What members are told before they record (the privacy notice's "What we record", or the onboarding
-// form that replaces it), shortened for the screen. Say nothing here that they aren't told.
+// What members are told before they record (README's "What members are told", which the onboarding
+// form covers), shortened for the screen. Say nothing here that they aren't told.
 export const VOICE_ONLY_LINE =
   "Only your voice is recorded. The camera just shows you to yourself; its picture is never saved or sent.";
 
@@ -104,7 +104,7 @@ export const STAGE_PILL = "rounded-full bg-black/55 px-3 py-1 text-sm backdrop-b
 export const ON_STAGE_TOP =
   "focus-visible:outline-white focus-visible:shadow-[0_0_0_6px_rgb(0_0_0/0.6)] border-white/60 bg-black/55 text-white backdrop-blur-md hover:bg-black/70 hover:text-white dark:border-white/60 dark:bg-black/55 dark:hover:bg-black/70";
 
-// The privacy notice's line, on the stage (under its main buttons) and in the card.
+// That line, on the stage (under its main buttons) and in the card.
 export function VoiceOnlyLine({ id, onStage = false, className }: { id?: string; onStage?: boolean; className?: string }) {
   const muted = onStage ? "text-sm text-white/75" : "text-sm text-muted-foreground";
   return (

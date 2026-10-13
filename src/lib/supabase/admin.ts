@@ -9,9 +9,11 @@ import { createClient } from "@supabase/supabase-js";
 //   someone removed from Module One, each after checking, as the signed-in admin, that it may;
 // - the check-in's server code (src/app/portal/checkin/actions.ts and housekeeping.ts,
 //   src/lib/checkin/process.ts), which writes recordings, drafts, transcripts and scores for the
-//   member it takes from the session, never from the request (members only read; CLAUDE.md), and
-//   the live check-in's session store (src/lib/checkin/live-sessions.ts, 0011), which starts, claims,
-//   ends and links that member's live sessions;
+//   member it takes from the session, never from the request (members only read; CLAUDE.md), the
+//   live check-in's session store (src/lib/checkin/live-sessions.ts, 0011), which starts, claims,
+//   ends and links that member's live sessions, and the Diary's onboarding note
+//   (src/lib/checkin/onboarding-note.ts), which notes the assumed onboarding consent for the
+//   session's login;
 // - the cost log (src/lib/costs/record.ts), which records the numbers and model names of paid API
 //   calls in processing_costs through the client its caller passes in;
 // - the Master Admin's delete-recording and reset-check-in actions

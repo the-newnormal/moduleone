@@ -1,13 +1,13 @@
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startLiveSession } from "@/lib/checkin/live-sessions";
-import { noticeAccepted, sessionMember, type Session } from "@/lib/checkin/session";
+import { sessionMember, type Session } from "@/lib/checkin/session";
 import { parseCoachRubric } from "@/lib/coach/rubric";
 import { mintLiveTranscriptionKey, openLiveTranscription } from "@/lib/stt/live";
 import { POST } from "./route";
 
 // The coach's prompt and rubric are the real ones, read from rubrics/coach.md.
-vi.mock("@/lib/checkin/session", () => ({ sessionMember: vi.fn(), noticeAccepted: vi.fn() }));
+vi.mock("@/lib/checkin/session", () => ({ sessionMember: vi.fn() }));
 vi.mock("@/lib/checkin/live-sessions", () => ({ startLiveSession: vi.fn() }));
 // Watched only to show the start route never touches OpenAI: the connect route opens the transcription.
 vi.mock("@/lib/stt/live", () => ({ mintLiveTranscriptionKey: vi.fn(), openLiveTranscription: vi.fn() }));
@@ -39,7 +39,6 @@ beforeEach(() => {
   vi.stubEnv("STT_LIVE_MODEL", "");
   vi.stubEnv("COACH_MODEL", "");
   vi.mocked(sessionMember).mockReset().mockResolvedValue(SESSION);
-  vi.mocked(noticeAccepted).mockReset().mockResolvedValue(true);
   vi.mocked(startLiveSession).mockReset().mockResolvedValue({ id: SESSION_ID });
   vi.mocked(mintLiveTranscriptionKey).mockReset();
   vi.mocked(openLiveTranscription).mockReset();
@@ -108,7 +107,6 @@ describe("POST /portal/checkin/live", () => {
   it.each([
     ["live check-ins are off", () => vi.stubEnv("LIVE_CHECKIN", "off")],
     ["the caller is signed out", () => vi.mocked(sessionMember).mockResolvedValue("signed_out")],
-    ["the notice isn't accepted", () => vi.mocked(noticeAccepted).mockResolvedValue(false)],
     ["the session can't start", () => vi.mocked(startLiveSession).mockResolvedValue("too_many_sessions")],
   ])("logs no start when %s", async (_label, arrange) => {
     arrange();
@@ -152,13 +150,13 @@ describe("POST /portal/checkin/live", () => {
     expect(startLiveSession).not.toHaveBeenCalled();
   });
 
-  it("asks for the current privacy notice first, before starting anything", async () => {
-    vi.mocked(noticeAccepted).mockResolvedValue(false);
+  // No notice to accept: members agree on the onboarding form, outside Module One.
+  it("starts for the signed-in member, checking only who is calling", async () => {
     const response = await POST(post());
-    expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({ status: "error", code: "notice_required" });
-    expect(noticeAccepted).toHaveBeenCalledExactlyOnceWith(SESSION);
-    expect(startLiveSession).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ status: "ready" });
+    expect(sessionMember).toHaveBeenCalledOnce();
+    expect(startLiveSession).toHaveBeenCalledOnce();
   });
 
   it.each([

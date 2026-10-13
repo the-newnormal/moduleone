@@ -243,8 +243,7 @@ describe("buildDiary", () => {
     expect(playsIn(diary)).toMatchObject({ "2026-09-28": "then-and-now", "2026-07-13": "then-and-now" });
   });
 
-  // The notice state: the member has submitted this week but must accept the new notice before
-  // recording again. The card shows the notice, so this week's entry heads its year.
+  // The card doesn't show this week's entry (the unavailable state, say), so it heads its year.
   it("lists this week's entry under its year when the card doesn't show it", () => {
     const diary = build(ROWS, false);
     expect(diary.card).toBeNull();

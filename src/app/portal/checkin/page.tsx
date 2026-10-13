@@ -3,13 +3,7 @@ import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { buildDiary, type DiaryEntry, type DiaryRow, loadDiaryRows } from "@/lib/checkin/diary";
-import {
-  NOTICE_CHANGE,
-  type NoticeAcceptance,
-  noticeSections,
-  noticeStatus,
-  noticeVersion,
-} from "@/lib/checkin/notice";
+import { noteOnboardingForm } from "@/lib/checkin/onboarding-note";
 import { checkinQuestion } from "@/lib/checkin/opening";
 import { processCheckin } from "@/lib/checkin/process";
 import { currentWeekStart } from "@/lib/checkin/week";
@@ -20,7 +14,6 @@ import { DraftPlayer } from "./draft-player";
 import { Entries, EntryAudio } from "./entries";
 import { formatDateTime, formatLength, formatLongDate, formatWeekEnd, formatWeekStart } from "./format";
 import { needsProcessing, tidyMemberAudio, type ProcessingState } from "./housekeeping";
-import { NoticeForm } from "./notice-form";
 import { Recorder } from "./recorder";
 import { SavedTake } from "./saved-take";
 import { ThenAndNow } from "./then-and-now";
@@ -33,7 +26,10 @@ export const maxDuration = 300;
 
 // Members never see their grade, so this page reads only the processing columns of this week's
 // check-in, and for the diary only DIARY_COLUMNS of their own check-ins (src/lib/checkin/diary.ts):
-// never the scores, category, review or transcript.
+// never the scores, category, review or transcript. Of recording_notices it writes only the note of
+// the assumed onboarding consent for this login (src/lib/checkin/onboarding-note.ts); after the
+// response it also tidies the member's old drafts and files and retries processing that failed or
+// stalled (tidyMemberAudio and processCheckin, below, both with the service role).
 const CHECKIN_COLUMNS = "id, submitted_at, graded_at, processing_started_at, processing_error, processing_attempts";
 // Long enough to come back to the tab and listen before submitting (iOS fetches the audio only when
 // play is pressed). It's the member's own draft, and RLS is checked when the link is signed.
@@ -45,8 +41,6 @@ type DraftRow = { audio_path: string; duration_ms: number | null; recorded_at: s
 type View =
   | { state: "no_member" }
   | { state: "unavailable" }
-  // returning: this login accepted an earlier notice. keepChanged: and none that kept recordings a year.
-  | { state: "notice"; returning: boolean; keepChanged: boolean }
   | { state: "submitted"; submittedAt: string | null }
   | { state: "draft"; path: string; playbackUrl: string | null; durationMs: number | null; recordedAt: string }
   | { state: "record"; opening: string; live: boolean };
@@ -113,14 +107,10 @@ async function loadPage(
   if (memberError) return { name: null, view: unavailable("member", memberError.code), rows: null };
   if (!member) return { name: null, view: { state: "no_member" }, rows: null };
 
-  const [notices, checkin, draft, diary] = await Promise.all([
-    // Every notice this login accepted, with what each promised: whether to show it again, and how.
-    supabase
-      .from("recording_notices")
-      .select("notice_version, recording_keep_days")
-      .eq("member_id", member.id)
-      .eq("auth_user_id", authUserId)
-      .overrideTypes<NoticeAcceptance[], { merge: false }>(),
+  const [note, checkin, draft, diary] = await Promise.all([
+    // Members agree on the onboarding form, outside Module One; noted for this login before the
+    // recorder can show (src/lib/checkin/onboarding-note.ts).
+    noteOnboardingForm(member.id, authUserId),
     supabase
       .from("checkins")
       .select(CHECKIN_COLUMNS)
@@ -144,25 +134,27 @@ async function loadPage(
 
   if (diary.error) console.error("checkin page: loading failed", { what: "diary", code: diary.error.code });
   const rows = diary.error ? "failed" : (diary.data ?? []);
-  return { name: member.name, view: await thisWeek(supabase, notices, checkin, draft), rows };
+  return { name: member.name, view: await thisWeek(supabase, note, checkin, draft), rows };
 }
 
-// This week's card, from the notices, this week's check-in and its draft.
+// This week's card, from the onboarding note, this week's check-in and its draft.
 async function thisWeek(
   supabase: Awaited<ReturnType<typeof createClient>>,
-  notices: { data: NoticeAcceptance[] | null; error: { code: string } | null },
+  note: { error: { code: string } | null },
   checkin: { data: CheckinRow | null; error: { code: string } | null },
   draft: { data: DraftRow | null; error: { code: string } | null },
 ): Promise<View> {
-  if (notices.error) return unavailable("notice", notices.error.code);
   if (checkin.error) return unavailable("checkin", checkin.error.code);
   if (draft.error) return unavailable("draft", draft.error.code);
 
-  const notice = noticeStatus(notices.data ?? []);
-  if (!notice.accepted) return { state: "notice", returning: notice.returning, keepChanged: notice.keepChanged };
   const submitted = checkin.data;
   if (submitted) return { state: "submitted", submittedAt: submitted.submitted_at };
-  if (!draft.data) return { state: "record", ...checkinQuestion() };
+  if (!draft.data) {
+    // Without the note, a take recorded now would be kept 90 days, not the year members are
+    // promised. Only a new take needs it: a draft or a submitted check-in already has its start.
+    if (note.error) return unavailable("onboarding_note", note.error.code);
+    return { state: "record", ...checkinQuestion() };
+  }
 
   // The member's own folder, so RLS lets them read it (0002), drafts included (0004).
   const { data: signed, error: signError } = await supabase.storage
@@ -200,37 +192,6 @@ function CheckinCard({ view, entry, weekStart }: { view: View; entry: DiaryEntry
         <Card>
           <CardContent>
             <p role="alert">Couldn&apos;t load your check-in. Refresh the page to try again.</p>
-          </CardContent>
-        </Card>
-      );
-    case "notice":
-      return (
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              <h2 tabIndex={-1} className="text-2xl outline-none">Before you record</h2>
-            </CardTitle>
-            <CardDescription>
-              {view.returning
-                ? "How your recording is used. It has changed since you last accepted it."
-                : "How your recording is used. You'll see this again only if it changes."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-6">
-            {view.keepChanged && (
-              <p className="rounded-md bg-muted px-4 py-3 text-sm">
-                <span className="font-medium">What&apos;s changed.</span> {NOTICE_CHANGE}
-              </p>
-            )}
-            <dl className="grid gap-4 text-sm leading-6">
-              {noticeSections().map((section) => (
-                <div key={section.heading} className="grid gap-1">
-                  <dt className="font-medium">{section.heading}</dt>
-                  <dd className="text-muted-foreground">{section.body}</dd>
-                </div>
-              ))}
-            </dl>
-            <NoticeForm version={noticeVersion()} />
           </CardContent>
         </Card>
       );

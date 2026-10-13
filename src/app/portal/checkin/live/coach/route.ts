@@ -34,8 +34,7 @@ export async function POST(request: Request): Promise<Response> {
   } catch {
     return refuse("unavailable");
   }
-  // The notice was checked when the session started; this checks who is calling.
-  const session = await liveMember({ notice: false });
+  const session = await liveMember();
   if (typeof session === "string") return refuse(session);
   const memberId = session.member.id;
   const { sessionId, transcript, elapsedMs, shown, skip, reread } = body.data;
