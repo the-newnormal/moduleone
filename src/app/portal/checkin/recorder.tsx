@@ -9,7 +9,7 @@ import { baseMimeType, extensionFor } from "@/lib/checkin/audio";
 import { DEFAULT_OPENING_QUESTION } from "@/lib/checkin/week";
 import { createClient } from "@/lib/supabase/client";
 import { prepareRecording, saveDraft } from "./actions";
-import { CameraStage, ON_STAGE_MAIN, ON_STAGE_OUTLINE, STAGE_PILL } from "./camera-stage";
+import { CameraRow, CameraStage, ON_STAGE_MAIN, STAGE_PILL, VOICE_ONLY_LINE } from "./camera-stage";
 import { formatClock } from "./format";
 import { followUpCopy, LivePrompt } from "./live/live-prompt";
 import type { ShownOffer } from "./live/contract";
@@ -32,6 +32,11 @@ const LAST_MINUTE = "One minute left. The recording stops at 10 minutes.";
 const AWAY = "Your phone may have paused the recording while you were away. Listen back before you submit.";
 const CAMERA_ASKING = "If your browser asks about the camera, answer it to go on. On a computer, it's by the address bar.";
 const CAMERA_STOPPED = "Your camera stopped before the recording began. Turn it on again, or record without it.";
+// Under the camera button in the card, while recording: never announced (a screen reader's voice
+// could reach the microphone), and short, so the member isn't sent into browser settings mid-take.
+const CAMERA_ASKING_DURING =
+  "You're still recording. If your browser asks about the camera, answer it; on a computer, it's by the address bar.";
+const CAMERA_DIDNT_COME_ON = "Your camera didn't come on, so you're recording without it.";
 const FELL_BACK = "Follow-up questions have stopped. Keep going, and press Finish when you're done.";
 // Live coaching never got going for this take (the start refused, or transcription never connected).
 const NO_FOLLOW_UPS = "No follow-up questions this time. Answer out loud, then press Finish.";
@@ -43,9 +48,10 @@ type State =
   | { step: "saving" }
   | SaveOutcome;
 
-// The member's camera, shown mirrored so they see themselves as they talk: they record looking at
-// themselves, so it has to be on to start. Only a preview: it never reaches the recorder, so the
-// take stays audio-only. Small and front-facing.
+// The member's camera, shown mirrored so they see themselves as they talk. Optional: the member
+// turns it on or off, before the take or during it. Only a preview: it is asked for on its own
+// (video, never audio) and never reaches the recorder, so the take stays audio-only. Small and
+// front-facing.
 const CAMERA: MediaTrackConstraints = { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } };
 
 // What is live while recording: the microphone stream, the recorder, the clock, and what becomes
@@ -58,8 +64,12 @@ type CameraState = { stream: MediaStream | null; asked: number };
 
 // While the camera is off: "asking" while the browser's question about it is open (Start waits for
 // the answer: Chrome won't ask this page anything else meanwhile, so the microphone's question would
-// never come), or why it couldn't come on.
-type CameraNote = "asking" | { problem: string } | null;
+// never come), or why it couldn't come on. during: it was asked for mid-take, so the card says only
+// that it didn't come on, until the take is over.
+type CameraNote = "asking" | { problem: string; during: boolean } | null;
+
+// A note that is no longer "asking": the browser's question has been answered.
+const clearAsking = (note: CameraNote): CameraNote => (note === "asking" ? null : note);
 
 // The browser's camera question while it's open, settling with whether it was answered Allow.
 // Leaving by a link within the app keeps it open, and Chrome asks nothing else (the microphone
@@ -202,9 +212,10 @@ export function Recorder({
   const media = useRef<Media | null>(null);
   // Never waited on: the recording starts, carries on and is saved the same with or without it.
   const { view: liveView, coach } = useLiveCoach(live && !heldOnly ? { opening } : undefined);
-  // The member's camera, which they need on to start. It comes on only when they turn it on, never by
-  // itself (even where the browser would allow it): the stage would cover the Diary they may have
-  // come to listen to. Off once the take ends, or when they choose Not now.
+  // The member's camera, only ever a preview, which they choose to turn on or off before a take or
+  // during it. It comes on only when they turn it on, never by itself (even where the browser would
+  // allow it): the stage would cover the Diary they may have come to listen to. Off once the take
+  // ends, or when they turn it off.
   const camera = useRef<CameraState>({ stream: null, asked: 0 });
   const [mirror, setMirror] = useState<MediaStream | null>(null);
   // A question an earlier recorder in this tab left open: wait for its answer too. Read once, so the
@@ -233,6 +244,11 @@ export function Recorder({
   // member has moved on (or started again) is let go instead of recording in the background.
   const startCount = useRef(0);
   const primary = useRef<HTMLButtonElement>(null);
+  // The camera's on/off button, in whichever layout is up.
+  const cameraButton = useRef<HTMLButtonElement>(null);
+  // Set by the camera button during a take, so the layout switch it causes focuses the button's
+  // counterpart in the new layout, not Finish, where a second Enter would end the take.
+  const toggledCamera = useRef(false);
   const [refreshing, startRefresh] = useTransition();
 
   // A take whose save failed, kept so leaving the page can still try to save it.
@@ -367,7 +383,9 @@ export function Recorder({
     const last = shown.current;
     if (last.step === step && last.problem === problem && last.staged === staged) return;
     shown.current = { step, problem, staged };
-    primary.current?.focus();
+    const toToggle = toggledCamera.current && last.step === "recording" && step === "recording";
+    toggledCamera.current = false;
+    (toToggle ? cameraButton : primary).current?.focus();
   }, [step, problem, staged]);
 
   async function save(take: Take): Promise<SaveOutcome> {
@@ -378,16 +396,16 @@ export function Recorder({
   }
 
   // The camera note is left as it is: null while the camera was on, and the camera's problem after a
-  // take recorded without it, so that take ends with the reason and Record without camera still there.
+  // take recorded without it, so that take ends with the reason. A question still open is cleared
+  // once the browser's answer comes (see requestCamera).
   function turnCameraOff() {
     closeCamera(camera);
     setMirror(null);
   }
 
-  // The member pressed Turn on my camera, so the browser may ask them.
-  async function turnCameraOn() {
-    // A browser that can't record the take gets no camera, but the reason.
-    if (!pickMimeType()) return setState({ step: "idle", problem: UNSUPPORTED });
+  // Asks the browser for the camera, on its own: video only, never audio, so it can't reach the
+  // take. A new request every time it's turned on. during: asked for mid-take.
+  async function requestCamera(during: boolean) {
     const attempt = ++camera.current.asked;
     setCameraNote("asking");
     let stream: MediaStream;
@@ -396,12 +414,22 @@ export function Recorder({
       holdCameraQuestion(request);
       stream = await request;
     } catch (error) {
-      if (attempt === camera.current.asked) setCameraNote({ problem: cameraProblem(error) });
+      if (attempt === camera.current.asked) {
+        toggledCamera.current = false; // no layout switch is coming
+        setCameraNote({ problem: cameraProblem(error), during });
+      } else {
+        // Answered after the take ended (Finish, Sign out, the limit) or the page was left: the
+        // question is over, so nothing waits on it, but the refusal is old news.
+        toggledCamera.current = false;
+        setCameraNote(clearAsking);
+      }
       return;
     }
-    // Turned off (or the page left) while the browser asked: let it go.
+    // Turned off (or the take ended, or the page left) while the browser asked: let it go.
     if (attempt !== camera.current.asked) {
       stream.getTracks().forEach((track) => track.stop());
+      toggledCamera.current = false;
+      setCameraNote(clearAsking);
       return;
     }
     camera.current.stream = stream;
@@ -413,8 +441,25 @@ export function Recorder({
     );
   }
 
+  // The member pressed Turn on my camera before a take, so the browser may ask them.
+  async function turnCameraOn() {
+    // A browser that can't record the take gets no camera, but the reason.
+    if (!pickMimeType()) return setState({ step: "idle", problem: UNSUPPORTED });
+    await requestCamera(false);
+  }
+
   function showCamera() {
     if (cameraNote !== "asking") void turnCameraOn();
+  }
+
+  // The camera button during a take. Only the camera changes: the recorder, the microphone and the
+  // live coach carry on untouched, whichever way it goes.
+  function toggleCameraDuringTake() {
+    if (state.step !== "recording" || !media.current || cameraNote === "asking") return;
+    toggledCamera.current = true;
+    // Off stops every camera track, so the camera's light goes out; the take moves to the card.
+    if (camera.current.stream) turnCameraOff();
+    else void requestCamera(true); // the stage comes up once the browser allows it
   }
 
   // Finish, or the ten-minute limit.
@@ -427,13 +472,15 @@ export function Recorder({
     stopAndTrack(live);
   }
 
-  // withoutCamera: Record without camera, offered only when the camera can't come on. Otherwise the
-  // member records looking at themselves.
+  // withoutCamera: Record without camera, in the card. Otherwise Start recording on the stage, which
+  // means with the camera on (the member can still turn it off during the take).
   async function start(withoutCamera = false) {
     if (!camera.current.stream && !withoutCamera) return;
     const mimeType = pickMimeType();
     if (!mimeType) return setState({ step: "idle", problem: UNSUPPORTED });
     setState({ step: "starting" });
+    // An earlier take's mid-take failure isn't this take's news; its reason stays for the idle card.
+    setCameraNote((note) => (note && note !== "asking" && note.during ? { ...note, during: false } : note));
     // A diary entry playing on this page would be recorded into the take (and graded): stop it first.
     pauseOtherAudio();
     const attempt = ++startCount.current;
@@ -456,7 +503,7 @@ export function Recorder({
     // the member turns the camera on again, or chooses to record without it.
     if (!withoutCamera && !camera.current.stream) {
       stream.getTracks().forEach((track) => track.stop());
-      setCameraNote({ problem: CAMERA_STOPPED });
+      setCameraNote({ problem: CAMERA_STOPPED, during: false });
       return setState({ step: "idle", problem: null });
     }
 
@@ -583,6 +630,13 @@ export function Recorder({
   const noMoreNote = state.step === "recording" && coached?.status === "no_more" && offer.kind === "question";
   // A node of its own in the live region too, so a question shown in the last minute is still read.
   const lastMinute = state.step === "recording" && elapsedMs >= WARN_MS;
+  // Under the camera button in the card while recording: never in the live region, and never an alert.
+  const midTakeNote =
+    cameraNote === "asking"
+      ? CAMERA_ASKING_DURING
+      : cameraNote !== null && cameraNote.during
+        ? CAMERA_DIDNT_COME_ON
+        : null;
 
   return (
     <div className="grid gap-4">
@@ -611,10 +665,7 @@ export function Recorder({
               minutes is plenty; the recording stops at 10 minutes. You can listen back before you submit.
             </p>
           )}
-          <p className="text-sm text-muted-foreground">
-            You record with your camera on, so you see yourself as you talk. Only your voice is recorded;
-            the picture isn&apos;t saved.
-          </p>
+          <p className="text-sm text-muted-foreground">{VOICE_ONLY_LINE}</p>
           <p className="text-lg leading-snug">{opening}</p>
         </>
       )}
@@ -631,30 +682,26 @@ export function Recorder({
               {cameraNote.problem}
             </p>
           )}
-          <Button
-            ref={primary}
-            type="button"
-            onClick={showCamera}
-            disabled={refreshing}
-            aria-disabled={cameraNote === "asking"}
-            className="justify-self-start"
-          >
-            <Camera aria-hidden="true" />
-            {cameraNote === "asking" ? "Waiting for your camera…" : "Turn on my camera"}
-          </Button>
-          {cameraNote === "asking" && <p className="text-sm text-muted-foreground">{CAMERA_ASKING}</p>}
-          {/* The way round a camera that can't come on (blocked, missing, busy): the take, in this card. */}
-          {cameraNote !== null && cameraNote !== "asking" && (
+          <div className="flex flex-wrap gap-2">
             <Button
+              ref={primary}
               type="button"
-              variant="link"
-              onClick={() => void start(true)}
+              onClick={showCamera}
               disabled={refreshing}
-              className="justify-self-start px-0 underline"
+              aria-disabled={cameraNote === "asking"}
             >
-              Record without camera
+              <Camera aria-hidden="true" />
+              {cameraNote === "asking" ? "Waiting for your camera…" : "Turn on my camera"}
             </Button>
-          )}
+            {/* The camera is optional: the take, in this card. Not while the browser asks about the
+                camera, since Chrome asks nothing else (the microphone included) until that's answered. */}
+            {cameraNote !== "asking" && (
+              <Button type="button" variant="outline" onClick={() => void start(true)} disabled={refreshing}>
+                Record without camera
+              </Button>
+            )}
+          </div>
+          {cameraNote === "asking" && <p className="text-sm text-muted-foreground">{CAMERA_ASKING}</p>}
         </>
       )}
 
@@ -668,7 +715,7 @@ export function Recorder({
       {state.step === "recording" && !staged && (
         <>
           <div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
-            <span>Recording</span>
+            <span>Recording your voice</span>
             <span className="flex items-center gap-2 font-mono tabular-nums">
               <span aria-hidden="true" className="size-2 animate-pulse rounded-full bg-destructive" />
               <span role="timer" aria-label="Time recorded">
@@ -688,6 +735,13 @@ export function Recorder({
             {fellBackNote && <p className="text-sm text-muted-foreground">{stoppedNote}</p>}
             {lastMinute && <p className="rounded-md bg-muted px-3 py-2 text-sm">{LAST_MINUTE}</p>}
           </LivePrompt>
+          <CameraRow
+            on={false}
+            waiting={cameraNote === "asking"}
+            note={midTakeNote}
+            onToggle={toggleCameraDuringTake}
+            buttonRef={cameraButton}
+          />
         </>
       )}
 
@@ -732,7 +786,7 @@ export function Recorder({
           top={
             state.step === "recording" && (
               <>
-                <span className={STAGE_PILL}>Recording</span>
+                <span className={STAGE_PILL}>Recording your voice</span>
                 <span className={`${STAGE_PILL} flex items-center gap-2 font-mono tabular-nums`}>
                   <span aria-hidden="true" className="size-2 animate-pulse rounded-full bg-destructive" />
                   <span role="timer" aria-label="Time recorded">
@@ -750,15 +804,13 @@ export function Recorder({
               <p className="text-sm text-white/75">
                 {live
                   ? "We'll start with this question; follow-ups may appear when you pause."
-                  : "Answer it out loud, then press Finish."}{" "}
-                Only your voice is recorded; the picture isn&apos;t saved.
+                  : "Answer it out loud, then press Finish."}
               </p>
               {state.problem && (
                 <p role="alert" className="text-sm font-medium">
                   {state.problem}
                 </p>
               )}
-              {/* Not now: back to the card, with the camera off, and the Diary below in reach again. */}
               <div className="flex flex-wrap gap-2">
                 <Button
                   ref={primary}
@@ -770,10 +822,9 @@ export function Recorder({
                   <Mic aria-hidden="true" />
                   Start recording
                 </Button>
-                <Button type="button" variant="outline" onClick={turnCameraOff} className={ON_STAGE_OUTLINE}>
-                  Not now
-                </Button>
               </div>
+              {/* Turn off my camera: back to the card, with the camera off, and the Diary below in reach again. */}
+              <CameraRow on onToggle={turnCameraOff} buttonRef={cameraButton} onStage />
             </>
           )}
           {state.step === "starting" && (
@@ -783,20 +834,23 @@ export function Recorder({
             </p>
           )}
           {state.step === "recording" && (
-            <LivePrompt
-              offer={offer}
-              touched={coached?.touched ?? null}
-              status={coached?.status ?? null}
-              canSkip={canSkip(liveView)}
-              onSkip={coach.skip}
-              onFinish={finish}
-              finishRef={primary}
-              onStage
-            >
-              {fellBackNote && <p className="text-sm text-white/75">{stoppedNote}</p>}
-              {lastMinute && <p className="text-sm text-white/80">{LAST_MINUTE}</p>}
-              {awayNote && <p className="text-sm text-white/80">{AWAY}</p>}
-            </LivePrompt>
+            <>
+              <LivePrompt
+                offer={offer}
+                touched={coached?.touched ?? null}
+                status={coached?.status ?? null}
+                canSkip={canSkip(liveView)}
+                onSkip={coach.skip}
+                onFinish={finish}
+                finishRef={primary}
+                onStage
+              >
+                {fellBackNote && <p className="text-sm text-white/75">{stoppedNote}</p>}
+                {lastMinute && <p className="text-sm text-white/80">{LAST_MINUTE}</p>}
+                {awayNote && <p className="text-sm text-white/80">{AWAY}</p>}
+              </LivePrompt>
+              <CameraRow on onToggle={toggleCameraDuringTake} buttonRef={cameraButton} onStage />
+            </>
           )}
         </CameraStage>
       )}

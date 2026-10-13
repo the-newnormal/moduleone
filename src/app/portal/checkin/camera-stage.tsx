@@ -1,7 +1,14 @@
 "use client";
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { Camera, CameraOff } from "lucide-react";
+import { useEffect, useId, useRef, type ReactNode, type RefObject } from "react";
 import { pauseOtherAudio } from "@/components/recordings/pause-others";
+import { Button } from "@/components/ui/button";
+
+// The privacy notice's VOICE_ONLY (src/lib/checkin/notice.ts), shortened for the screen. Say nothing
+// here that the notice doesn't say.
+export const VOICE_ONLY_LINE =
+  "Only your voice is recorded. The camera just shows you to yourself; its picture is never saved or sent.";
 
 // The camera on a stage that fills the screen below the app bar, with what the member needs laid
 // over it: the progress and clock along the top (top), the question and the buttons in a panel at
@@ -53,7 +60,7 @@ export function CameraStage({ stream, top, children }: { stream: MediaStream; to
         />
         {/* Scrolls when there isn't room for both (a short screen, or zoomed in), so the question is never cut off. */}
         <div className="absolute inset-0 flex flex-col justify-between gap-3 overflow-y-auto p-3 sm:p-5">
-          <div className="flex items-start justify-between gap-2">{top}</div>
+          <div className="flex flex-wrap items-start justify-between gap-2">{top}</div>
           <div className="mx-auto grid w-full max-w-3xl gap-4 rounded-2xl bg-black/65 p-4 backdrop-blur-md sm:p-6">
             {children}
           </div>
@@ -69,3 +76,57 @@ export const ON_STAGE_MAIN = "focus-visible:outline-white bg-white text-black ho
 export const ON_STAGE_OUTLINE =
   "focus-visible:outline-white border-white/60 bg-transparent text-white hover:bg-white/15 hover:text-white dark:border-white/60 dark:bg-transparent dark:hover:bg-white/15";
 export const STAGE_PILL = "rounded-full bg-black/55 px-3 py-1 text-sm backdrop-blur-md";
+
+// The camera's own row, under the main buttons, on the stage and in the card: what is recorded, and
+// the camera's on/off button. Never the main action (no sun, never ON_STAGE_MAIN). Never announced;
+// the note under it is tied to the button by aria-describedby instead.
+// on: the camera is on (the button turns it off). waiting: the browser is asking about the camera, so
+// the button waits, and ignores presses, until it's answered. note: a line under the row (why the
+// camera isn't on yet, or didn't come on). onStage: over the dark stage.
+export function CameraRow({
+  on,
+  waiting = false,
+  note = null,
+  onToggle,
+  buttonRef,
+  onStage = false,
+}: {
+  on: boolean;
+  waiting?: boolean;
+  note?: string | null;
+  onToggle: () => void;
+  buttonRef: RefObject<HTMLButtonElement | null>;
+  onStage?: boolean;
+}) {
+  const lineId = useId();
+  const noteId = useId();
+  const muted = onStage ? "text-sm text-white/75" : "text-sm text-muted-foreground";
+  const label = waiting ? "Waiting for your camera…" : on ? "Turn off my camera" : "Turn on my camera";
+  return (
+    <div className="grid gap-2">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <p id={lineId} className={`${muted} min-w-48 flex-1`}>
+          {VOICE_ONLY_LINE}
+        </p>
+        <Button
+          ref={buttonRef}
+          type="button"
+          variant="outline"
+          size="sm"
+          aria-disabled={waiting}
+          aria-describedby={note ? `${lineId} ${noteId}` : lineId}
+          onClick={() => !waiting && onToggle()}
+          className={onStage ? ON_STAGE_OUTLINE : undefined}
+        >
+          {on && !waiting ? <CameraOff aria-hidden="true" /> : <Camera aria-hidden="true" />}
+          {label}
+        </Button>
+      </div>
+      {note && (
+        <p id={noteId} className={muted}>
+          {note}
+        </p>
+      )}
+    </div>
+  );
+}

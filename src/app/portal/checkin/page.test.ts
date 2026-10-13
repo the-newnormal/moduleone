@@ -11,6 +11,7 @@ import { DEFAULT_OPENING_QUESTION, QUESTIONS } from "@/lib/checkin/week";
 import { coachRubric } from "@/lib/coach/rubric";
 import { RubricError } from "@/lib/rubrics/markdown";
 import { createClient } from "@/lib/supabase/server";
+import { VOICE_ONLY_LINE } from "./camera-stage";
 import { tidyMemberAudio } from "./housekeeping";
 import CheckinPage, { metadata } from "./page";
 
@@ -379,7 +380,10 @@ describe("/portal/checkin", () => {
 
   it("shows the recorder when there's nothing yet, with the one open question", async () => {
     const html = await render();
-    expect(html).toContain("Turn on my camera"); // they record looking at themselves, so the camera comes first
+    expect(html).toContain("Turn on my camera"); // the camera comes first, so they can see themselves as they talk
+    expect(html).toContain("Record without camera"); // but it's optional
+    expect(html).toContain(renderToStaticMarkup(VOICE_ONLY_LINE));
+    expect(html).not.toContain("You record with your camera on");
     expect(html).toContain(renderToStaticMarkup(coachRubric().opening));
     for (const { text: question } of QUESTIONS) expect(html).not.toContain(renderToStaticMarkup(question));
   });
