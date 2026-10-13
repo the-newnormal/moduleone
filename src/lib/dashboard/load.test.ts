@@ -68,6 +68,7 @@ const WEEK = "2026-10-05";
 let n = 0;
 const checkin = (team_id: string | null, member: string, week_start = WEEK): Row => ({
   id: `c${String(++n).padStart(3, "0")}`,
+  member_id: `m-${member}`,
   team_id,
   week_start,
   activity_score: 3,
@@ -96,6 +97,8 @@ describe("loadTeamWeek", () => {
     const week = await loadTeamWeek(supabase, "ga", WEEK, coverage("hq", []));
     expect(week.teamName).toBe("Gather");
     expect(week.context).toEqual([]);
+    // Whose each is, for the page to tell the viewer's own from others' (never rendered).
+    expect(week.checkins.map((c) => c.memberId)).toEqual(["m-Wen", "m-Abe", "m-Xia", "m-Yan", "m-Zed"]);
     expect(week.checkins.map((c) => [c.team, c.memberName])).toEqual([
       ["IP Lab", "Wen"],
       ["IP Lab › IP Lab 1", "Abe"],

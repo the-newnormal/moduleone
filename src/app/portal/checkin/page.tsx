@@ -6,6 +6,7 @@ import { buildDiary, type DiaryEntry, type DiaryRow, loadDiaryRows } from "@/lib
 import { noteOnboardingForm } from "@/lib/checkin/onboarding-note";
 import { checkinQuestion } from "@/lib/checkin/opening";
 import { processCheckin } from "@/lib/checkin/process";
+import { loadViewLog, type ViewGroup, type ViewLogRow, viewsByWeek } from "@/lib/checkin/view-log";
 import { currentWeekStart } from "@/lib/checkin/week";
 import { createClient } from "@/lib/supabase/server";
 import { CardFocus } from "./card-focus";
@@ -17,6 +18,7 @@ import { needsProcessing, tidyMemberAudio, type ProcessingState } from "./housek
 import { Recorder } from "./recorder";
 import { SavedTake } from "./saved-take";
 import { ThenAndNow } from "./then-and-now";
+import { NoLongerInDiary, ViewedBy } from "./viewed-by";
 
 export const metadata: Metadata = { title: "Diary · Module One" };
 
@@ -26,10 +28,12 @@ export const maxDuration = 300;
 
 // Members never see their grade, so this page reads only the processing columns of this week's
 // check-in, and for the diary only DIARY_COLUMNS of their own check-ins (src/lib/checkin/diary.ts):
-// never the scores, category, review or transcript. Of recording_notices it writes only the note of
-// the assumed onboarding consent for this login (src/lib/checkin/onboarding-note.ts); after the
-// response it also tidies the member's old drafts and files and retries processing that failed or
-// stalled (tidyMemberAudio and processCheckin, below, both with the service role).
+// never the scores, category, review or transcript. Who opened them comes from a separate read of
+// their own view log (VIEW_LOG_COLUMNS, src/lib/checkin/view-log.ts), never by widening those. Of
+// recording_notices it writes only the note of the assumed onboarding consent for this login
+// (src/lib/checkin/onboarding-note.ts); after the response it also tidies the member's old drafts and
+// files and retries processing that failed or stalled (tidyMemberAudio and processCheckin, below,
+// both with the service role).
 const CHECKIN_COLUMNS = "id, submitted_at, graded_at, processing_started_at, processing_error, processing_attempts";
 // Long enough to come back to the tab and listen before submitting (iOS fetches the audio only when
 // play is pressed). It's the member's own draft, and RLS is checked when the link is signed.
@@ -53,13 +57,18 @@ export default async function CheckinPage() {
   if (!data?.claims) redirect("/login?next=/portal/checkin");
 
   const weekStart = currentWeekStart();
-  const { name, view, rows } = await loadPage(supabase, data.claims.sub, weekStart);
+  const { name, view, rows, viewLog } = await loadPage(supabase, data.claims.sub, weekStart);
   // The card plays this week's recording once it is submitted; before that, it heads its year.
   const diary =
     rows === null || rows === "failed"
       ? rows
       : buildDiary(rows, { weekStart, cardShowsThisWeek: view.state === "submitted" });
   const built = diary === "failed" ? null : diary; // the diary, when it loaded
+  // Who opened each week's check-in, shown with that week's entry, so only when the diary loaded.
+  // Weeks with no entry left (reset, and not recorded again) are listed after the entries.
+  const views = built && Array.isArray(viewLog) ? viewsByWeek(viewLog) : null;
+  const onPage = new Set([built?.card?.week, ...(built?.years ?? []).flatMap((y) => y.entries.map((e) => e.week))]);
+  const elsewhere = [...(views ?? [])].filter(([week]) => !onPage.has(week)).sort(([a], [b]) => b.localeCompare(a));
 
   return (
     <main className="mx-auto grid w-full max-w-2xl grid-cols-[minmax(0,1fr)] gap-10 px-4 py-12">
@@ -74,6 +83,15 @@ export default async function CheckinPage() {
         <p className="text-[13px] leading-[18px] text-muted-foreground">
           Each recording you submit is also your weekly check-in for your team leader and HQ.
         </p>
+        <p className="text-[13px] leading-[18px] text-muted-foreground">
+          Under each one, you can see which leaders and HQ have opened it or played its recording in Module One,
+          and when. The list starts from when Module One began keeping it.
+        </p>
+        {viewLog === "failed" && (
+          <p className="text-[13px] leading-[18px] text-muted-foreground">
+            Couldn&apos;t load who has opened your check-ins. Refresh the page to try again.
+          </p>
+        )}
       </header>
       <section id="this-week" aria-label="This week" className="grid gap-3">
         <p className="text-[13px] leading-[18px] text-muted-foreground">
@@ -82,32 +100,38 @@ export default async function CheckinPage() {
         </p>
         {/* Only the card: CardFocus moves focus to the first h2 inside it. */}
         <CardFocus state={view.state}>
-          <CheckinCard view={view} entry={built?.card ?? null} weekStart={weekStart} />
+          <CheckinCard
+            view={view}
+            entry={built?.card ?? null}
+            viewedBy={built?.card ? views?.get(built.card.week) : undefined}
+            weekStart={weekStart}
+          />
         </CardFocus>
       </section>
       {built?.thenAndNow && <ThenAndNow then={built.thenAndNow.then} now={built.thenAndNow.now} />}
-      {diary !== null && <Entries diary={diary} />}
+      {diary !== null && <Entries diary={diary} views={views} />}
+      <NoLongerInDiary weeks={elsewhere} />
     </main>
   );
 }
 
-// The member's name, this week's card and their diary's rows. rows is null when there is no member
-// (or it couldn't be loaded), and "failed" when only the diary couldn't: this week still works
-// without it, and the diary shows without this week.
+// The member's name, this week's card, their diary's rows and their view log. rows and viewLog are
+// null when there is no member (or it couldn't be loaded), and "failed" when only they couldn't:
+// this week still works without them, and the diary shows without this week or the log.
 async function loadPage(
   supabase: Awaited<ReturnType<typeof createClient>>,
   authUserId: string,
   weekStart: string,
-): Promise<{ name: string | null; view: View; rows: DiaryRow[] | "failed" | null }> {
+): Promise<{ name: string | null; view: View; rows: DiaryRow[] | "failed" | null; viewLog: ViewLogRow[] | "failed" | null }> {
   const { data: member, error: memberError } = await supabase
     .from("members")
     .select("id, name")
     .eq("auth_user_id", authUserId)
     .maybeSingle<{ id: string; name: string }>();
-  if (memberError) return { name: null, view: unavailable("member", memberError.code), rows: null };
-  if (!member) return { name: null, view: { state: "no_member" }, rows: null };
+  if (memberError) return { name: null, view: unavailable("member", memberError.code), rows: null, viewLog: null };
+  if (!member) return { name: null, view: { state: "no_member" }, rows: null, viewLog: null };
 
-  const [note, checkin, draft, diary] = await Promise.all([
+  const [note, checkin, draft, diary, views] = await Promise.all([
     // Members agree on the onboarding form, outside Module One; noted for this login before the
     // recorder can show (src/lib/checkin/onboarding-note.ts).
     noteOnboardingForm(member.id, authUserId),
@@ -124,6 +148,8 @@ async function loadPage(
       .eq("week_start", weekStart)
       .maybeSingle<DraftRow>(),
     loadDiaryRows(supabase, member.id),
+    // Who opened their check-ins (0015): their own rows only, as RLS also insists.
+    loadViewLog(supabase, member.id),
   ]);
 
   // After the page is sent: clear out old drafts and unsaved takes, and pick up a submitted
@@ -134,7 +160,9 @@ async function loadPage(
 
   if (diary.error) console.error("checkin page: loading failed", { what: "diary", code: diary.error.code });
   const rows = diary.error ? "failed" : (diary.data ?? []);
-  return { name: member.name, view: await thisWeek(supabase, note, checkin, draft), rows };
+  if (views.error) console.error("checkin page: loading failed", { what: "views", code: views.error.code });
+  const viewLog = views.error ? "failed" : views.data;
+  return { name: member.name, view: await thisWeek(supabase, note, checkin, draft), rows, viewLog };
 }
 
 // This week's card, from the onboarding note, this week's check-in and its draft.
@@ -176,8 +204,19 @@ function unavailable(what: string, code: string | undefined): View {
   return { state: "unavailable" };
 }
 
-// entry: this week's diary entry, when the card is "submitted" and the diary loaded.
-function CheckinCard({ view, entry, weekStart }: { view: View; entry: DiaryEntry | null; weekStart: string }) {
+// entry: this week's diary entry, when the card is "submitted" and the diary loaded; viewedBy: who
+// opened it.
+function CheckinCard({
+  view,
+  entry,
+  viewedBy,
+  weekStart,
+}: {
+  view: View;
+  entry: DiaryEntry | null;
+  viewedBy: readonly ViewGroup[] | undefined;
+  weekStart: string;
+}) {
   switch (view.state) {
     case "no_member":
       return (
@@ -210,6 +249,7 @@ function CheckinCard({ view, entry, weekStart }: { view: View; entry: DiaryEntry
                 : "Your check-in for this week is in. Thanks, see you next week."}
             </p>
             {entry && <EntryAudio entry={entry} here="card" />}
+            {entry && <ViewedBy groups={viewedBy} />}
             <SavedTake path={null} />
           </CardContent>
         </Card>

@@ -35,12 +35,22 @@ export async function playableRecordings(
   return new Set((data ?? []).flatMap((s) => (s.path && s.signedUrl && !s.error ? [s.path] : [])));
 }
 
-// A fresh short-lived link to one check-in's recording, or null when there is none the viewer may
-// play: RLS decides whether they can read the check-in, then Storage whether it signs the file.
-export async function recordingLink(supabase: SupabaseClient, checkinId: string): Promise<string | null> {
-  const { data, error } = await supabase.from("checkins").select("audio_path").eq("id", checkinId).maybeSingle();
+// A fresh short-lived link to one check-in's recording, with whose check-in it is (so the route
+// can tell the speaker's own plays from someone else's, which it notes first), or null when there
+// is none the viewer may play: RLS decides whether they can read the check-in, then Storage whether
+// it signs the file.
+export async function recordingLink(
+  supabase: SupabaseClient,
+  checkinId: string,
+): Promise<{ link: string; ownerId: string } | null> {
+  const { data, error } = await supabase
+    .from("checkins")
+    .select("audio_path, member_id")
+    .eq("id", checkinId)
+    .maybeSingle<{ audio_path: string | null; member_id: string }>();
   if (error) throw new Error(`Couldn't load the check-in: ${error.message}`);
   if (!data?.audio_path) return null;
   const signed = await supabase.storage.from(BUCKET).createSignedUrl(data.audio_path, RECORDING_LINK_SECONDS);
-  return signed.data?.signedUrl ?? null;
+  const link = signed.data?.signedUrl;
+  return link ? { link, ownerId: data.member_id } : null;
 }

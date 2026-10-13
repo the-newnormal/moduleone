@@ -5,7 +5,9 @@ import { recordingPath } from "@/lib/dashboard/recordings";
 // can still play. Members never see their grade, so this reads only DIARY_COLUMNS of their own rows,
 // and every entry is built from named fields only. A recording plays through
 // /portal/dashboard/recording/[checkinId], which signs a link as the viewer when they press play, so
-// nothing is signed as the page loads and the storage path never leaves the server.
+// nothing is signed as the page loads and the storage path never leaves the server. Who opened each
+// check-in (the view log, 0015) is a separate read of the member's own checkin_views rows
+// (src/lib/checkin/view-log.ts), passed to the page beside the diary: never a column added here.
 
 // Only what the Diary shows. RLS (0003) also hands a member their own scores, theme, review and
 // transcript, and a leader or hq other people's rows: hence this list and the member filter. Never

@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadHeatmapData, loadLedTeams, loadRole, loadScoringConfig, loadTeamWeek } from "@/lib/dashboard/load";
+import { loadHeatmapData, loadLedTeams, loadMemberId, loadRole, loadScoringConfig, loadTeamWeek } from "@/lib/dashboard/load";
 import type { CheckinRow } from "@/lib/dashboard/org";
 import type { TeamNode } from "@/lib/dashboard/tree";
 import type { HealthConfig } from "@/lib/health/health";
@@ -25,6 +25,7 @@ vi.mock("@/lib/dashboard/load", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/dashboard/load")>()),
   loadHeatmapData: vi.fn(),
   loadLedTeams: vi.fn(),
+  loadMemberId: vi.fn(),
   loadRole: vi.fn(),
   loadScoringConfig: vi.fn(),
   loadTeamWeek: vi.fn(),
@@ -79,14 +80,24 @@ function heatmapData(
 const page = async (searchParams: Record<string, string>) =>
   renderToStaticMarkup(await DashboardPage({ searchParams: Promise.resolve(searchParams) } as never));
 
+// The viewer's database functions, by name (the loaders above are mocked, so only the drill-in's
+// view log is called): log_checkin_views answers `noted`, anything else an error.
+let noted: Promise<{ data: null; error: unknown }> | { data: null; error: unknown };
+const rpc = vi.fn<(fn: string, args?: unknown) => Promise<{ data: null; error: unknown }>>(async (fn) =>
+  fn === "log_checkin_views" ? noted : { data: null, error: { code: "42883", message: `unexpected rpc ${fn}` } },
+);
+
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-10-08T12:00:00+08:00")); // a Thursday in the week of 5 Oct
+  noted = { data: null, error: null };
   vi.mocked(createClient).mockResolvedValue({
     auth: { getClaims: async () => ({ data: { claims: { sub: "u1" } } }) },
+    rpc,
   } as never);
   vi.mocked(loadScoringConfig).mockResolvedValue(CONFIG);
   vi.mocked(loadLedTeams).mockResolvedValue([]);
+  vi.mocked(loadMemberId).mockResolvedValue("m-viewer");
   vi.mocked(loadRole).mockResolvedValue("hq");
   vi.mocked(loadTeamWeek).mockResolvedValue({ teamName: "Gather", context: [], checkins: [] });
 });
@@ -233,6 +244,7 @@ describe("a team's week", () => {
   it("puts check-ins from the teams under it in a section each", async () => {
     const checkin = (id: string, memberName: string, team: string | null, teamId: string = team ?? IP_LAB) => ({
       id,
+      memberId: `m-${id}`,
       memberName,
       teamId,
       team,
@@ -263,6 +275,7 @@ describe("a team's week, for a Master Admin", () => {
   const IP_LAB = "00000000-0000-4000-8000-0000000000bb";
   const card = (id: string, memberName: string, graded: boolean, hasRecording: boolean) => ({
     id,
+    memberId: `m-${id}`,
     memberName,
     teamId: IP_LAB,
     team: null,
@@ -310,10 +323,124 @@ describe("a team's week, for a Master Admin", () => {
   });
 });
 
+describe("a team's week, noting who opened it (0015)", () => {
+  const IP_LAB = "00000000-0000-4000-8000-0000000000bb";
+  const card = (id: string, memberName: string) => ({
+    id,
+    memberId: `m-${id}`,
+    memberName,
+    teamId: IP_LAB,
+    team: null,
+    activity_score: 3,
+    excellence_score: 3,
+    morale_score: 3,
+    rubric_review: `SECRET REVIEW of ${memberName}`,
+    transcript: `SECRET TRANSCRIPT of ${memberName}`,
+    recording: null,
+    hasRecording: false,
+    awaitingGrader: false,
+  });
+  const NOTE =
+    "Each person here can see in their Diary that you opened their check-in, and when. Playing a recording shows too.";
+  const drillIn = (teamId = IP_LAB) =>
+    TeamWeekPage({ params: Promise.resolve({ teamId, week: THIS_WEEK }), searchParams: Promise.resolve({}) } as never);
+
+  beforeEach(() => {
+    vi.mocked(loadTeamWeek).mockResolvedValue({
+      teamName: "IP Lab",
+      context: [],
+      checkins: [card("c1", "Abe"), card("c2", "Bea"), card("c3", "Cy")],
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.mocked(console.error).mockRestore();
+  });
+
+  it("notes every check-in it lists as opened, before handing any of them over", async () => {
+    let settle!: (result: { data: null; error: null }) => void;
+    noted = new Promise((resolve) => (settle = resolve));
+    let rendered = false;
+    const pending = drillIn().then((element) => {
+      rendered = true;
+      return element;
+    });
+    await vi.waitFor(() => expect(rpc).toHaveBeenCalled());
+    expect(rpc).toHaveBeenCalledExactlyOnceWith("log_checkin_views", { p_checkin_ids: ["c1", "c2", "c3"], p_kind: "opened" });
+    // Nothing comes back while the note is outstanding.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(rendered).toBe(false);
+    settle({ data: null, error: null });
+    const html = renderToStaticMarkup(await pending);
+    expect(html).toContain("SECRET REVIEW of Abe");
+  });
+
+  it("notes everyone listed for hq on any node, the organisation's included", async () => {
+    vi.mocked(loadRole).mockResolvedValue("hq");
+    await drillIn();
+    expect(rpc).toHaveBeenCalledWith("log_checkin_views", expect.objectContaining({ p_checkin_ids: ["c1", "c2", "c3"] }));
+  });
+
+  it("notes nothing when nothing is listed", async () => {
+    vi.mocked(loadTeamWeek).mockResolvedValue({ teamName: "IP Lab", context: [], checkins: [] });
+    const html = renderToStaticMarkup(await drillIn());
+    expect(rpc).not.toHaveBeenCalled();
+    expect(html).toContain("No check-ins you can see from this team that week.");
+    expect(html).not.toContain(NOTE);
+  });
+
+  it.each([
+    ["refuses", () => ({ data: null, error: { code: "42883", message: "function log_checkin_views does not exist" } })],
+    ["can't be reached", () => ({ data: null, error: { code: "", message: "TypeError: fetch failed" } })],
+  ])("shows the error page, and no check-in, when the database %s", async (_label, result) => {
+    noted = result();
+    await expect(drillIn()).rejects.toThrow("Couldn't note who opened it");
+    expect(console.error).toHaveBeenCalledExactlyOnceWith("view log: noting failed", { code: result().error.code });
+  });
+
+  it("is never reached by a member, who is sent to their Diary first", async () => {
+    vi.mocked(loadRole).mockResolvedValue("member");
+    await expect(drillIn()).rejects.toThrow("NEXT_REDIRECT /portal/checkin");
+    expect(loadTeamWeek).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("tells the viewer, under the week, that each person sees it in their Diary", async () => {
+    vi.mocked(loadRole).mockResolvedValue("leader");
+    vi.mocked(loadLedTeams).mockResolvedValue([IP_LAB]);
+    const html = renderToStaticMarkup(await drillIn());
+    expect(html).toMatch(new RegExp(`Week of 5 Oct 2026</p><p class="[^"]*">${NOTE}</p>`));
+  });
+
+  it("doesn't tell a leader who sees only their own check-ins there, which are never noted", async () => {
+    vi.mocked(loadRole).mockResolvedValue("leader");
+    vi.mocked(loadLedTeams).mockResolvedValue(["somewhere-else"]);
+    vi.mocked(loadTeamWeek).mockResolvedValue({ teamName: "IP Lab", context: [], checkins: [{ ...card("c1", "Abe"), memberId: "m-viewer" }] });
+    const html = renderToStaticMarkup(await drillIn());
+    expect(html).toContain("Your check-ins · IP Lab");
+    expect(html).not.toContain(NOTE);
+    // Still sent: the database drops their own.
+    expect(rpc).toHaveBeenCalledExactlyOnceWith("log_checkin_views", { p_checkin_ids: ["c1"], p_kind: "opened" });
+  });
+
+  it.each(["hq", "leader"] as const)("doesn't tell %s when every check-in listed is their own", async (role) => {
+    vi.mocked(loadRole).mockResolvedValue(role);
+    vi.mocked(loadLedTeams).mockResolvedValue([IP_LAB]);
+    const mine = { ...card("c1", "Abe"), memberId: "m-viewer" };
+    vi.mocked(loadTeamWeek).mockResolvedValue({ teamName: "IP Lab", context: [], checkins: [mine] });
+    expect(renderToStaticMarkup(await drillIn())).not.toContain(NOTE);
+    // Anyone else's beside it, and they are told.
+    vi.mocked(loadTeamWeek).mockResolvedValue({ teamName: "IP Lab", context: [], checkins: [mine, card("c2", "Bea")] });
+    expect(renderToStaticMarkup(await drillIn())).toContain(NOTE);
+  });
+});
+
 describe("a team's week, with two teams of the same name under it", () => {
   it("keeps their check-ins in separate sections", async () => {
     const checkin = (id: string, memberName: string, teamId: string) => ({
       id,
+      memberId: `m-${id}`,
       memberName,
       teamId,
       team: "Twins",

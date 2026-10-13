@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DIARY_COLUMNS, type DiaryRow } from "@/lib/checkin/diary";
 import { noteOnboardingForm } from "@/lib/checkin/onboarding-note";
 import { processCheckin } from "@/lib/checkin/process";
+import { VIEW_LOG_COLUMNS, type ViewLogRow } from "@/lib/checkin/view-log";
 import { DEFAULT_OPENING_QUESTION, QUESTIONS } from "@/lib/checkin/week";
 import { coachRubric } from "@/lib/coach/rubric";
 import { RubricError } from "@/lib/rubrics/markdown";
@@ -86,6 +87,10 @@ function from(table: string) {
     },
     eq(column: string, value: unknown) {
       query.filters.push([column, value]);
+      return builder;
+    },
+    gt(column: string, value: unknown) {
+      query.filters.push([`${column} >`, value]);
       return builder;
     },
     order(column: string, options: unknown) {
@@ -278,6 +283,7 @@ describe("/portal/checkin", () => {
       "Mei Wong",
       "Your weekly recordings, in your own voice, to listen back to.",
       "Each recording you submit is also your weekly check-in for your team leader and HQ.",
+      "Under each one, you can see which leaders and HQ have opened it or played its recording in Module One, and when. The list starts from when Module One began keeping it.",
     ]);
     expect(queries.find((q) => q.table === "members")?.columns).toBe("id, name");
   });
@@ -485,7 +491,9 @@ describe("/portal/checkin", () => {
     for (const query of checkins) {
       expect(query.columns).not.toMatch(/\*|score|category|review|transcript|grader|rubric|mention|team/);
     }
-    expect(new Set(queries.map((q) => q.table))).toEqual(new Set(["members", "checkins", "checkin_drafts"]));
+    expect(new Set(queries.map((q) => q.table))).toEqual(
+      new Set(["members", "checkins", "checkin_drafts", "checkin_views"]),
+    );
   });
 
   describe("shows nothing graded, from any row", () => {
@@ -757,6 +765,186 @@ describe("/portal/checkin", () => {
     await render();
     await runAfter();
     expect(processCheckin).not.toHaveBeenCalled();
+  });
+});
+
+// Who opened each check-in (the view log, 0015): read from the member's own rows, shown under the
+// entry it was about, and never anything about the viewer but their name and Leader or HQ.
+describe("/portal/checkin, who opened it", () => {
+  const JANE = "a1000000-0000-4000-8000-000000000001";
+  const ALI = "a1000000-0000-4000-8000-000000000002";
+  let v = 0;
+  // A row as RLS hands it to the owner, carrying what the page must never show.
+  function view(fields: Partial<ViewLogRow>): ViewLogRow {
+    v += 1;
+    return {
+      id: `e1000000-0000-4000-8000-${String(v).padStart(12, "0")}`,
+      checkin_id: CHECKIN,
+      week_start: WEEK,
+      viewer_key: JANE,
+      viewer_name: "Jane Tan",
+      viewer_role: "hq",
+      kind: "opened",
+      viewed_at: "2026-10-07T07:15:00+00:00",
+      ...({ owner_id: MEMBER, viewed_on: "2026-10-07", team: "SECRET TEAM", email: "jane@example.com" } as object),
+      ...fields,
+    };
+  }
+  const VIEWS = [
+    // This week's, in the card: Jane opened it, and an earlier one she saw before it was reset.
+    view({}),
+    view({ checkin_id: null, viewed_at: "2026-10-06T01:00:00+00:00" }),
+    // 28 September's, under its entry.
+    view({ checkin_id: SEP_28.id, week_start: SEP_28.week_start, viewer_key: ALI, viewer_name: "Ali Rahman", viewer_role: "leader", viewed_at: "2026-10-01T02:00:00+00:00" }),
+    view({ checkin_id: SEP_28.id, week_start: SEP_28.week_start, viewer_key: ALI, viewer_name: "Ali Rahman", viewer_role: "leader", kind: "played", viewed_at: "2026-10-01T02:05:00+00:00" }),
+    // 22 December 2025's, last year.
+    view({ checkin_id: DEC_22.id, week_start: DEC_22.week_start, viewed_at: "2025-12-23T02:00:00+00:00" }),
+    // 24 August's was reset and never recorded again: no entry left.
+    view({ checkin_id: null, week_start: "2026-08-24", viewed_at: "2026-08-27T08:30:00+00:00" }),
+  ];
+  const noLonger = (doc: Document) => doc.querySelector<HTMLElement>('section[aria-labelledby="no-longer-title"]');
+  const lines = (el: Element | null | undefined) => [...(el?.querySelectorAll("li") ?? [])].map(text);
+
+  beforeEach(() => {
+    lists.checkin_views = { data: VIEWS, error: null };
+  });
+
+  it("reads only the member's own log, a page at a time, apart from their check-ins", async () => {
+    submitted();
+    await render();
+    const log = queries.filter((q) => q.table === "checkin_views");
+    expect(log).toHaveLength(1);
+    expect(log[0].columns).toBe(VIEW_LOG_COLUMNS);
+    expect(log[0].filters).toEqual([["owner_id", MEMBER]]);
+    expect(log[0].order).toEqual([["id", undefined]]);
+    expect(log[0].limit).toBe(1000);
+    // The diary still asks for exactly what it did.
+    expect(queries.filter((q) => q.table === "checkins")[1].columns).toBe(DIARY_COLUMNS);
+  });
+
+  it("asks for no log without a member", async () => {
+    reads.members = { data: null, error: null };
+    await render();
+    expect(queries.map((q) => q.table)).toEqual(["members"]);
+  });
+
+  it("shows this week's under the card's player, before the saved-take marker", async () => {
+    submitted();
+    const doc = await page();
+    const content = card(doc).querySelector('[data-slot="card-content"]')!;
+    const details = content.querySelector("details")!;
+    expect(text(details.querySelector("summary"))).toBe("Opened by Jane Tan");
+    expect(details.hasAttribute("open")).toBe(false);
+    expect(lines(details)).toEqual([
+      "Jane Tan · HQ — opened your check-in on Wednesday 7 October at 3:15 pm",
+      "Jane Tan · HQ — opened your check-in on Tuesday 6 October at 9:00 am (an earlier check-in for this week, since reset)",
+    ]);
+    expect(content.querySelector("audio")!.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(content.lastElementChild?.getAttribute("data-saved-take")).toBe("none");
+  });
+
+  it("shows each entry's under it, with the year when it isn't this one", async () => {
+    submitted();
+    const doc = await page();
+    const sep28 = entry(doc, "28 September")!;
+    expect(text(sep28.querySelector("summary"))).toBe("Opened by Ali Rahman");
+    expect(lines(sep28)).toEqual([
+      "Ali Rahman · Leader — played your recording on Thursday 1 October at 10:05 am",
+      "Ali Rahman · Leader — opened your check-in on Thursday 1 October at 10:00 am",
+    ]);
+    // After its kept-until line.
+    const kept = [...sep28.querySelectorAll("p")].find((p) => text(p).startsWith("Kept until"))!;
+    expect(kept.compareDocumentPosition(sep28.querySelector("details")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(lines(entry(doc, "22 December"))).toEqual(["Jane Tan · HQ — opened your check-in on Tuesday 23 December 2025 at 10:00 am"]);
+    // Entries nobody opened say nothing about it.
+    for (const week of ["20 July", "13 July", "6 July", "5 January", "29 December"]) {
+      expect(entry(doc, week)!.querySelector("details")).toBeNull();
+      expect(text(entry(doc, week))).not.toContain("Opened by");
+    }
+    // Then and now doesn't repeat them.
+    expect(text(thenAndNow(doc))).not.toContain("Opened by");
+  });
+
+  it("lists weeks with no entry left after the entries, as no longer in the Diary", async () => {
+    submitted();
+    const doc = await page();
+    const section = noLonger(doc)!;
+    expect(text(section.querySelector("h2"))).toBe("No longer in your Diary");
+    expect([...section.querySelectorAll("h3")].map(text)).toEqual(["Week of 24 August"]);
+    expect(lines(section)).toEqual([
+      "Jane Tan · HQ — opened your check-in on Thursday 27 August at 4:30 pm (an earlier check-in for this week, since reset)",
+    ]);
+    expect(entries(doc)!.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("puts this week's there too while it has no entry (reset, and not recorded again yet)", async () => {
+    const doc = await page(); // recording: this week has no check-in
+    expect([...noLonger(doc)!.querySelectorAll("h3")].map(text)).toEqual(["Week of 5 October", "Week of 24 August"]);
+    expect(card(doc).querySelector("details")).toBeNull();
+  });
+
+  it("names a few people, then how many more", async () => {
+    submitted();
+    const people = ["Ann Ong", "Ben Ho", "Cai Lin", "Dev Raj"].map((name, i) =>
+      view({ viewer_key: `a2000000-0000-4000-8000-00000000000${i}`, viewer_name: name, viewed_at: `2026-10-07T0${i}:00:00+00:00` }),
+    );
+    lists.checkin_views = { data: people.slice(0, 3), error: null };
+    expect(text(card(await page()).querySelector("summary"))).toBe("Opened by Cai Lin, Ben Ho and Ann Ong");
+    lists.checkin_views = { data: people, error: null };
+    expect(text(card(await page()).querySelector("summary"))).toBe("Opened by Dev Raj, Cai Lin and 2 others");
+  });
+
+  it("says nothing at all when nobody has opened anything", async () => {
+    submitted();
+    lists.checkin_views = { data: [], error: null };
+    const html = await render();
+    expect(html).not.toContain("Opened by");
+    expect(html).not.toContain("No longer in your Diary");
+    expect(html).not.toContain("<details class=\"group\"><summary class=\"flex min-h-10 w-fit");
+  });
+
+  it("never shows a grade, the viewer's key, team or email, or the owner", async () => {
+    submitted();
+    const html = await render();
+    for (const word of ["SECRET", "wellbeing", "burnt out", "exhausted", /\brough\b/, "score", "Score", "review", "transcript", "category", "Red", "Yellow", "Green", /\b[1-5]\s*\/\s*5\b/]) {
+      expect(typeof word === "string" ? html.includes(word) : word.test(html), String(word)).toBe(false);
+    }
+    for (const secret of [JANE, ALI, "jane@example.com", "SECRET TEAM", "2026-10-07", "viewed_on"]) {
+      expect(html).not.toContain(secret);
+    }
+  });
+
+  describe("when the log can't load", () => {
+    beforeEach(() => {
+      lists.checkin_views = { data: null, error: { code: "42P01", message: "relation \"checkin_views\" does not exist" } };
+    });
+
+    it("says so in one line, and the rest of the Diary still shows", async () => {
+      submitted();
+      const doc = await page();
+      expect([...doc.querySelectorAll("header p")].map(text)).toContain(
+        "Couldn't load who has opened your check-ins. Refresh the page to try again.",
+      );
+      expect(card(doc).querySelectorAll("audio")).toHaveLength(1);
+      expect(entry(doc, "28 September")!.querySelector("audio")).not.toBeNull();
+      expect(thenAndNow(doc)).not.toBeNull();
+      expect(text(doc.body)).not.toContain("Opened by");
+      expect(noLonger(doc)).toBeNull();
+      expect(console.error).toHaveBeenCalledExactlyOnceWith("checkin page: loading failed", { what: "views", code: "42P01" });
+    });
+
+    it("keeps this week working", async () => {
+      expect(text(card(await page()))).toContain("Turn on my camera");
+    });
+  });
+
+  it("shows none of it when the entries can't load, since there's nothing to put it under", async () => {
+    submitted();
+    lists.checkins = { data: null, error: { code: "PGRST000", message: "down" } };
+    const html = await render();
+    expect(html).not.toContain("Opened by");
+    expect(html).not.toContain("No longer in your Diary");
+    expect(html).not.toContain("Couldn&#x27;t load who has opened");
   });
 });
 

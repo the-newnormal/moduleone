@@ -45,6 +45,12 @@ describe("check-in formatting", () => {
     expect(formatDateTime("2026-10-11T15:59:00Z")).toBe("Sunday 11 October at 11:59 pm");
   });
 
+  it("adds the year to a time on its own, without en-GB's comma after the weekday", () => {
+    expect(formatDateTime("2025-10-09T06:15:00Z", true)).toBe("Thursday 9 October 2025 at 2:15 pm");
+    // The Singapore day and year: New Year's Eve in UTC is already New Year's Day there.
+    expect(formatDateTime("2025-12-31T16:30:00Z", true)).toBe("Thursday 1 January 2026 at 12:30 am");
+  });
+
   it.each([
     [0, "0 s"],
     [45_400, "45 s"],
