@@ -180,6 +180,11 @@ describe("CameraStage", () => {
     // The row first, so it sits above the panel; the button at its end (the right).
     expect(row.compareDocumentPosition(panel!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(button("Turn off my camera").parentElement?.classList).toContain("ml-auto");
+    // Only on a very short screen (zoomed in, or a phone on its side), where the row would leave the
+    // panel a sliver, does the whole layer scroll instead, row and all.
+    expect(row.parentElement?.classList).toContain("[@media(max-height:30rem)]:overflow-y-auto");
+    expect(row.parentElement?.classList).not.toContain("overflow-y-auto");
+    expect(panel?.classList).toContain("[@media(max-height:30rem)]:overflow-y-visible");
   });
 
   it("has an empty top row when there's nothing to show there", async () => {

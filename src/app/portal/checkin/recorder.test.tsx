@@ -1055,6 +1055,28 @@ describe("the camera", () => {
       expect(added).toEqual([]);
     });
 
+    // On a short phone the stage's panel scrolls. Focus goes to the camera button in the top row, which
+    // doesn't scroll the panel, so the panel is brought to Finish (as focus brought it when the take
+    // began there), without moving focus there.
+    it("comes back on with the stage's panel at Finish, and focus on the camera button", async () => {
+      const lens = cameras();
+      await takeOnStage(lens.next);
+      await click(button("Turn off my camera"));
+      const scrolled = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+      try {
+        await click(button("Turn on my camera"));
+        await settle();
+        expect(video()).not.toBeNull();
+        expect(document.activeElement).toBe(button("Turn off my camera"));
+        expect(scrolled.mock.contexts).toContain(button("Finish"));
+        const call = scrolled.mock.calls[scrolled.mock.contexts.indexOf(button("Finish"))];
+        expect(call[0]).toEqual({ block: "nearest" }); // only as far as it takes
+        expect(scroller(button("Finish"))).not.toBeNull(); // in the panel that scrolls
+      } finally {
+        scrolled.mockRestore();
+      }
+    });
+
     it("keeps one take, audio only, across three times off and on, and saves it at Finish", async () => {
       const lens = cameras();
       await takeOnStage(lens.next);

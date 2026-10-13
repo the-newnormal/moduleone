@@ -388,6 +388,10 @@ export function Recorder({
     const toToggle = toggledCamera.current && last.step === "recording" && step === "recording";
     toggledCamera.current = false;
     (toToggle ? cameraButton : primary).current?.focus();
+    // Back on the stage mid-take: its camera button sits above the panel, so focusing it doesn't
+    // scroll the panel, which on a short phone would come back with Finish out of view. Brought just
+    // far enough to show Finish, as focus brought it when the take began, without taking focus there.
+    if (toToggle && staged) primary.current?.scrollIntoView({ block: "nearest" });
   }, [step, problem, staged]);
 
   async function save(take: Take): Promise<SaveOutcome> {

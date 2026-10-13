@@ -69,16 +69,19 @@ export function CameraStage({
           aria-hidden="true"
           className="absolute inset-0 size-full -scale-x-100 object-cover"
         />
-        <div className="absolute inset-0 flex flex-col gap-3 p-3 sm:p-5">
-          {/* Never scrolls, so the camera's button is always in view; it wraps under the status on a phone. */}
+        {/* On a very short screen (zoomed in, as WCAG's 320 x 256, or a phone on its side) the top row
+            would leave the panel only a sliver to scroll in, so there the whole layer scrolls instead,
+            top row and all. Every phone held upright is taller than that. */}
+        <div className="absolute inset-0 flex flex-col gap-3 p-3 sm:p-5 [@media(max-height:30rem)]:overflow-y-auto">
+          {/* Doesn't scroll, so the camera's button is always in view; it wraps under the status on a phone. */}
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             {status}
             {control && <div className="ml-auto">{control}</div>}
           </div>
-          {/* The panel sits at the bottom, and scrolls when there isn't room for it (a short screen, or
-              zoomed in), so the question is never cut off. mt-auto, not justify-end, which would put
-              the panel's top out of reach once it scrolls. */}
-          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          {/* The panel sits at the bottom, and scrolls when there isn't room for it (a short phone), so
+              the question is never cut off. mt-auto, not justify-end, which would put the panel's top
+              out of reach once it scrolls. */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto [@media(max-height:30rem)]:min-h-auto [@media(max-height:30rem)]:overflow-y-visible">
             <div className="mx-auto mt-auto grid w-full max-w-3xl gap-4 rounded-2xl bg-black/65 p-4 backdrop-blur-md sm:p-6">
               {children}
             </div>
