@@ -3,6 +3,7 @@ import { act, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_OPENING_QUESTION, QUESTIONS } from "@/lib/checkin/week";
 import { button, click, queryButton, render, settle, text } from "@/test/dom";
+import { VOICE_ONLY_LINE } from "./camera-stage";
 import type { LiveReady } from "./live/api";
 import { MAX_READS } from "./live/pacing";
 import type { ShownOffer } from "./live/contract";
@@ -40,7 +41,6 @@ vi.mock("./live/voice", async (importOriginal) => ({
   startLevelMeter: fakes.startLevelMeter,
 }));
 
-
 const take: Take = {
   blob: new Blob([new Uint8Array([1])], { type: "audio/webm" }),
   mimeType: "audio/webm",
@@ -62,9 +62,11 @@ async function load() {
 }
 
 // A MediaRecorder whose stop event comes only when the test fires it, as a real one's comes later.
+// made: how many were built since devices() was last called (one per take, whatever the camera does).
 class FakeRecorder {
   static isTypeSupported = () => true;
   static last: FakeRecorder | null = null;
+  static made = 0;
   stream: unknown;
   state: "inactive" | "recording" = "inactive";
   mimeType = "audio/webm;codecs=opus";
@@ -74,6 +76,7 @@ class FakeRecorder {
   constructor(stream: unknown) {
     this.stream = stream;
     FakeRecorder.last = this;
+    FakeRecorder.made += 1;
   }
   start() {
     this.state = "recording";
@@ -97,15 +100,32 @@ function fakeTrack() {
 function cameraStream(lens: ReturnType<typeof fakeTrack> = fakeTrack()) {
   return Object.assign(new MediaStream(), { getTracks: () => [lens] });
 }
-// The browser's devices. permission: what navigator.permissions says about the camera ("granted":
-// allowed here before, so the browser wouldn't ask; the recorder still waits for the member).
+// Every request for the camera and the microphone together. There must never be one, in any test:
+// the camera is only a preview, asked for on its own, and the take is the microphone alone.
+const together: MediaStreamConstraints[] = [];
+afterEach(() => {
+  expect(together.splice(0)).toEqual([]);
+});
+// The browser's devices. camera: what each request for the camera gets (a new stream each time, by
+// default). permission: what navigator.permissions says about the camera ("granted": allowed here
+// before, so the browser wouldn't ask; the recorder still waits for the member).
 function devices(camera: () => Promise<unknown> = async () => cameraStream(), permission: PermissionState = "prompt") {
   const mic = fakeTrack();
   const microphone = { getTracks: () => [mic], getAudioTracks: () => [mic] };
   const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) =>
     constraints.video ? camera() : microphone,
   );
-  Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia }, configurable: true });
+  FakeRecorder.made = 0;
+  // The page's getUserMedia, which refuses the camera and the microphone asked for together (a test
+  // replacing getUserMedia's implementation keeps the guard).
+  const guarded = async (constraints: MediaStreamConstraints) => {
+    if (constraints.audio && constraints.video) {
+      together.push(constraints);
+      throw new Error("camera and microphone asked for together");
+    }
+    return getUserMedia(constraints);
+  };
+  Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia: guarded }, configurable: true });
   Object.defineProperty(navigator, "permissions", {
     value: { query: vi.fn(async () => ({ state: permission })) },
     configurable: true,
@@ -153,9 +173,37 @@ function diary(recorder: ReactNode) {
   );
 }
 const inert = (id: string) => document.getElementById(id)?.hasAttribute("inert");
+// What a screen reader reads as a control's description, as it lands on it: the text of each element
+// its aria-describedby names.
+const description = (element: Element | null) =>
+  (element?.getAttribute("aria-describedby") ?? "")
+    .split(" ")
+    .filter(Boolean)
+    .map((id) => document.getElementById(id)?.textContent ?? null);
+// The part of the camera stage that scrolls when there isn't room for all of it (a short phone).
+const scroller = (element: Element) => element.closest('[class~="overflow-y-auto"]');
+const follows = (first: Element, second: Element) => (first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
 const entryPlayer = () => document.querySelector<HTMLAudioElement>("#entries audio")!;
 // A media event as the browser fires it on the element.
 const fire = (el: HTMLMediaElement, type: string) => act(async () => void el.dispatchEvent(new Event(type)));
+// What the take is saved through, so a test can see the take reach the draft.
+function saving() {
+  fakes.prepareRecording.mockResolvedValue({
+    status: "ready",
+    path: "3e3b0000-0000-4000-8000-000000000003/2026-10-05-take.webm",
+    token: "token-1",
+    contentType: "audio/webm",
+  });
+  fakes.createClient.mockReturnValue({
+    storage: { from: () => ({ uploadToSignedUrl: async () => ({ error: null }) }) },
+  });
+  fakes.saveDraft.mockReset().mockResolvedValue({ status: "saved" });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify({ now: Date.now() }), { headers: { "content-type": "application/json" } })),
+  );
+}
+
 async function turnOnCamera() {
   await click(button("Turn on my camera"));
   await settle();
@@ -251,7 +299,7 @@ describe("a diary recording playing on the page", () => {
   });
 
   // Its controls go out of reach under the stage (inert and covered), so it would play on there
-  // with only Start (a take) or Not now to stop it.
+  // with only Start (a take) or Turn off my camera to stop it.
   it("is paused when the camera's stage comes up over it", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     devices();
@@ -329,36 +377,40 @@ describe("a diary recording playing on the page", () => {
   });
 });
 
-// The member records looking at themselves: the camera has to be on to start, it can't be hidden,
-// and it's only a mirror, never recorded.
+// The member can record looking at themselves: the camera is optional, chosen by the member before
+// a take or during it, and it's only a mirror, never recorded.
 describe("the camera", () => {
-  it("is asked for only when the member turns it on, and there's no Start without it", async () => {
+  it("is asked for only when the member turns it on; the card offers Record without camera beside it", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     const { cameraAsks } = devices();
     const { Recorder } = await load();
     const page = await render(<Recorder />);
     await settle();
     expect(cameraAsks()).toBe(0); // no question just for opening the page
-    expect(text(page.container)).toContain("You record with your camera on");
-    expect(document.querySelector("button")?.textContent).toBe("Turn on my camera");
-    expect([...document.querySelectorAll("button")].some((b) => b.textContent === "Start recording")).toBe(false);
+    expect(text(page.container)).toContain(VOICE_ONLY_LINE);
+    expect(document.querySelector("button")?.textContent).toBe("Turn on my camera"); // still first
+    expect(button("Record without camera")).toBeTruthy();
+    expect(queryButton("Start recording")).toBeNull();
+    expect(cameraAsks()).toBe(0);
     vi.unstubAllGlobals();
   });
 
-  it("offers no way to record without it while it can still come on", async () => {
+  it("hides Record without camera only while the browser asks about the camera", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     let allow: (stream: unknown) => void = () => {};
     devices(() => new Promise((resolve) => (allow = resolve)));
     const { Recorder } = await load();
     await render(<Recorder />);
     await settle();
-    const wayRound = () => [...document.querySelectorAll("button")].some((b) => b.textContent === "Record without camera");
-    expect(wayRound()).toBe(false); // before it's asked for
+    const wayRound = () => queryButton("Record without camera") !== null;
+    expect(wayRound()).toBe(true); // before it's asked for
     await click(button("Turn on my camera"));
-    expect(wayRound()).toBe(false); // while the browser asks
+    expect(wayRound()).toBe(false); // while the browser asks: Chrome asks nothing else meanwhile
     await act(async () => allow(cameraStream()));
     expect(video()).not.toBeNull();
-    expect(wayRound()).toBe(false); // on the stage
+    expect(wayRound()).toBe(false); // on the stage, where Start recording is with the camera
+    await click(button("Turn off my camera"));
+    expect(wayRound()).toBe(true); // back in the card
     vi.unstubAllGlobals();
   });
 
@@ -489,20 +541,23 @@ describe("the camera", () => {
     vi.unstubAllGlobals();
   });
 
-  it("goes off with Not now, back to the card, with the Diary in reach again", async () => {
+  it("goes off with Turn off my camera before the take, back to the card, with the Diary in reach again", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     const lens = fakeTrack();
     devices(async () => cameraStream(lens));
     const { Recorder } = await load();
     await render(diary(<Recorder />));
     await turnOnCamera();
-    await click(button("Not now"));
+    expect(queryButton("Not now")).toBeNull(); // the camera's own button does that now
+    await click(button("Turn off my camera"));
     expect(video()).toBeNull();
     expect(lens.stop).toHaveBeenCalled();
     expect(document.documentElement.style.overflow).toBe("");
     expect(inert("entries")).toBe(false);
     expect(document.activeElement).toBe(button("Turn on my camera")); // to come back to it
-    expect(queryButton("Start recording")).toBeNull(); // no take without it
+    expect(queryButton("Start recording")).toBeNull(); // Start is the stage's, with the camera
+    expect(queryButton("Not now")).toBeNull();
+    expect(button("Record without camera")).toBeTruthy(); // or the take without it, in the card
     vi.unstubAllGlobals();
   });
 
@@ -527,15 +582,32 @@ describe("the camera", () => {
     expect(stage?.contains(button("Start recording"))).toBe(true); // the controls are on the stage
     expect(document.activeElement).toBe(button("Start recording")); // and focus went with them
     expect(document.documentElement.style.overflow).toBe("hidden"); // the page behind stays put
+    // What is recorded, under Start; Start alone in its row; the camera's button on the stage, which
+    // the line describes before the take (nothing records yet).
+    const voiceLine = () => [...(stage?.querySelectorAll("p") ?? [])].filter((p) => p.textContent === VOICE_ONLY_LINE);
+    expect(voiceLine()).toHaveLength(1);
+    expect(follows(button("Start recording"), voiceLine()[0])).toBe(true);
+    expect(stage?.contains(button("Turn off my camera"))).toBe(true);
+    expect(description(button("Turn off my camera"))).toEqual([VOICE_ONLY_LINE]);
+    expect([...(button("Start recording").parentElement?.querySelectorAll("button") ?? [])]).toEqual([button("Start recording")]);
+    expect(document.querySelector("[aria-live]")?.textContent).not.toContain(VOICE_ONLY_LINE);
 
     await record();
     expect(getUserMedia).toHaveBeenLastCalledWith(expect.objectContaining({ audio: expect.anything() }));
     expect(getUserMedia.mock.lastCall?.[0]).not.toHaveProperty("video");
     expect(FakeRecorder.last?.stream).toBe(microphone); // the camera never reaches the recorder
     expect(video()).toBe(mirror); // the same mirror, carried on into the recording
-    expect(stage?.textContent).toContain("Recording");
+    expect(stage?.textContent).toContain("Recording your voice");
+    expect(stage?.textContent).toContain(VOICE_ONLY_LINE);
+    expect(voiceLine()).toHaveLength(1);
+    expect(stage?.querySelector("h3 + p")?.textContent).not.toBe(VOICE_ONLY_LINE); // not taken for the status line
     expect(stage?.querySelector("h3")?.textContent).toBe(DEFAULT_OPENING_QUESTION);
     expect(stage?.contains(button("Finish"))).toBe(true);
+    expect(follows(button("Finish"), voiceLine()[0])).toBe(true); // under Finish
+    expect(stage?.contains(button("Turn off my camera"))).toBe(true);
+    // While recording, no description: a screen reader reads one out as focus lands on the button.
+    expect(description(button("Turn off my camera"))).toEqual([]);
+    expect(document.querySelector("[aria-live]")?.textContent).not.toContain(VOICE_ONLY_LINE);
 
     await finish();
     expect(video()).toBeNull(); // gone at Finish
@@ -546,16 +618,36 @@ describe("the camera", () => {
     vi.unstubAllGlobals();
   });
 
-  it("can't be hidden, before or during the take", async () => {
+  // On a short phone the stage's panel (the question, Start or Finish, the voice-only line) doesn't
+  // fit, and scrolls. The camera's button sits above it in the stage's top row, beside the pill and
+  // the clock during the take, so it is always in view; the line stays in the panel, under the buttons.
+  it("keeps its button in the stage's top row, out of the panel that scrolls, before and during the take", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     devices();
     const { Recorder } = await load();
-    await render(<Recorder />);
+    await render(diary(<Recorder />));
     await turnOnCamera();
-    const hideable = () => [...document.querySelectorAll("button")].some((b) => /hide|off/i.test(b.textContent ?? ""));
-    expect(hideable()).toBe(false);
+    const stage = video()!.parentElement!;
+    const line = () => [...stage.querySelectorAll("p")].find((p) => p.textContent === VOICE_ONLY_LINE)!;
+    const panel = scroller(button("Start recording"));
+    expect(panel).not.toBeNull(); // the panel scrolls on a short screen
+    expect(stage.contains(button("Turn off my camera"))).toBe(true);
+    expect(scroller(button("Turn off my camera"))).toBeNull(); // the button doesn't
+    expect(follows(button("Turn off my camera"), panel!)).toBe(true); // above it
+    expect(scroller(line())).toBe(panel); // the line in the panel, under Start
+    expect(follows(button("Start recording"), line())).toBe(true);
+
     await record();
-    expect(hideable()).toBe(false);
+    const pill = [...stage.querySelectorAll("span")].find((span) => span.textContent === "Recording your voice")!;
+    const row = pill.parentElement!;
+    expect(row.contains(stage.querySelector('[role="timer"]'))).toBe(true);
+    expect(row.contains(button("Turn off my camera"))).toBe(true); // beside the pill and the clock
+    expect(row.contains(button("Finish"))).toBe(false);
+    expect(scroller(row)).toBeNull();
+    expect(scroller(button("Finish"))).not.toBeNull();
+    expect(scroller(line())).toBe(scroller(button("Finish"))); // the line in the panel, under Finish
+    expect(follows(button("Finish"), line())).toBe(true);
+    expect(document.activeElement).toBe(button("Finish"));
     vi.unstubAllGlobals();
   });
 
@@ -832,6 +924,364 @@ describe("the camera", () => {
     expect(button("Turn on my camera")).toBeTruthy();
     vi.unstubAllGlobals();
   });
+
+  // The member turns the camera off, or on again, while recording: only the camera changes. The
+  // take is still the one recorder, on the microphone alone, and nothing new is said aloud.
+  describe("turned off and on during the take", () => {
+    const CAMERA_ASKING = "If your browser asks about the camera, answer it to go on.";
+    const CAMERA_ASKING_DURING =
+      "You're still recording. If your browser asks about the camera, answer it; on a computer, it's by the address bar.";
+    const CAMERA_DIDNT_COME_ON = "Your camera didn't come on, so you're recording without it.";
+
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    });
+
+    // A camera that hands out a new stream, with a track of its own, each time it's asked for.
+    function cameras() {
+      const lenses: ReturnType<typeof fakeTrack>[] = [];
+      const streams: MediaStream[] = [];
+      const next = async () => {
+        const lens = fakeTrack();
+        lenses.push(lens);
+        streams.push(cameraStream(lens));
+        return streams.at(-1);
+      };
+      return { lenses, streams, next };
+    }
+    // The first request for the camera is allowed at once; later ones answer when the test says.
+    function slowAfterFirst() {
+      let answer: { allow: (stream: unknown) => void; block: (error: unknown) => void } | null = null;
+      let asks = 0;
+      const camera = () =>
+        ++asks === 1
+          ? Promise.resolve(cameraStream())
+          : new Promise((allow, block) => {
+              answer = { allow, block };
+            });
+      return {
+        camera,
+        allow: (stream: unknown) => act(async () => answer?.allow(stream)),
+        block: (error: unknown) => act(async () => answer?.block(error)),
+      };
+    }
+    // A take recording on the stage, in the Diary.
+    async function takeOnStage(camera?: () => Promise<unknown>) {
+      vi.stubGlobal("MediaRecorder", FakeRecorder);
+      const found = devices(camera);
+      const { Recorder, ...saves } = await load();
+      const page = await render(diary(<Recorder />));
+      await turnOnCamera();
+      await record();
+      expect(FakeRecorder.last?.state).toBe("recording");
+      return { ...found, ...saves, page };
+    }
+    const audioAsks = (getUserMedia: ReturnType<typeof devices>["getUserMedia"]) =>
+      getUserMedia.mock.calls.filter(([constraints]) => constraints.audio).length;
+    const region = () => document.querySelector('[aria-live="polite"]')?.textContent ?? "";
+    const paragraph = (words: string) => [...document.querySelectorAll("p")].find((p) => p.textContent === words);
+
+    it("goes off mid-take into the card, stops the camera, and leaves the take as it was", async () => {
+      const lens = cameras();
+      const { microphone, page } = await takeOnStage(lens.next);
+      const recorder = FakeRecorder.last;
+      const question = page.container.querySelector("h3")?.textContent;
+      const added = addedToLiveRegion();
+      await click(button("Turn off my camera"));
+      expect(lens.lenses[0].stop).toHaveBeenCalled(); // its light goes out
+      expect(video()).toBeNull();
+      expect(FakeRecorder.made).toBe(1);
+      expect(FakeRecorder.last).toBe(recorder);
+      expect(recorder?.state).toBe("recording");
+      expect(recorder?.stream).toBe(microphone);
+      expect(microphone.getTracks()[0].stop).not.toHaveBeenCalled();
+      expect(page.container.querySelector("h3")?.textContent).toBe(question);
+      expect(document.activeElement).toBe(button("Turn on my camera")); // not Finish
+      expect(document.documentElement.style.overflow).toBe("");
+      expect(inert("entries")).toBe(false);
+      expect(inert("cover")).toBe(false);
+      expect(text(page.container)).toContain("Recording your voice");
+      expect(text(page.container)).toContain(VOICE_ONLY_LINE);
+      expect(added).toEqual([]);
+    });
+
+    // Focus moves to the camera button's counterpart at each switch, and a screen reader reads a
+    // focused control's description: the voice-only line (or any note) read out through the speakers
+    // would reach the microphone, the take, the live transcript and the grade. So no description
+    // while recording, either way round, waiting or refused.
+    it("moves focus at each switch to a camera button with no description, so nothing more is read into the take", async () => {
+      const slow = slowAfterFirst();
+      await takeOnStage(slow.camera);
+      const added = addedToLiveRegion();
+      expect(description(button("Turn off my camera"))).toEqual([]);
+      await click(button("Turn off my camera"));
+      expect(document.activeElement).toBe(button("Turn on my camera"));
+      expect(description(document.activeElement)).toEqual([]);
+      await click(button("Turn on my camera"));
+      expect(document.activeElement).toBe(button("Waiting for your camera…"));
+      expect(description(document.activeElement)).toEqual([]);
+      await slow.allow(cameraStream());
+      await settle();
+      expect(document.activeElement).toBe(button("Turn off my camera"));
+      expect(description(document.activeElement)).toEqual([]);
+      await click(button("Turn off my camera"));
+      await click(button("Turn on my camera"));
+      await slow.block(new DOMException("blocked", "NotAllowedError"));
+      await settle();
+      expect(text()).toContain(CAMERA_DIDNT_COME_ON);
+      expect(document.activeElement).toBe(button("Turn on my camera"));
+      expect(description(document.activeElement)).toEqual([]);
+      expect(FakeRecorder.last?.state).toBe("recording");
+      expect(added).toEqual([]);
+    });
+
+    it("comes on again mid-take, asked for on its own, and brings the stage back", async () => {
+      const lens = cameras();
+      const { getUserMedia, cameraAsks } = await takeOnStage(lens.next);
+      const added = addedToLiveRegion();
+      await click(button("Turn off my camera"));
+      await click(button("Turn on my camera"));
+      await settle();
+      expect(cameraAsks()).toBe(2);
+      const videoCalls = getUserMedia.mock.calls.filter(([constraints]) => constraints.video);
+      expect(videoCalls.at(-1)?.[0]).toEqual({ video: expect.any(Object) }); // never with audio
+      expect(video()?.srcObject).toBe(lens.streams[1]);
+      expect(document.activeElement).toBe(button("Turn off my camera"));
+      expect(inert("entries")).toBe(true);
+      expect(document.documentElement.style.overflow).toBe("hidden");
+      expect(FakeRecorder.made).toBe(1);
+      expect(audioAsks(getUserMedia)).toBe(1);
+      expect(added).toEqual([]);
+    });
+
+    // On a short phone the stage's panel scrolls. Focus goes to the camera button in the top row, which
+    // doesn't scroll the panel, so the panel is brought to Finish (as focus brought it when the take
+    // began there), without moving focus there.
+    it("comes back on with the stage's panel at Finish, and focus on the camera button", async () => {
+      const lens = cameras();
+      await takeOnStage(lens.next);
+      await click(button("Turn off my camera"));
+      const scrolled = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+      try {
+        await click(button("Turn on my camera"));
+        await settle();
+        expect(video()).not.toBeNull();
+        expect(document.activeElement).toBe(button("Turn off my camera"));
+        expect(scrolled.mock.contexts).toContain(button("Finish"));
+        const call = scrolled.mock.calls[scrolled.mock.contexts.indexOf(button("Finish"))];
+        expect(call[0]).toEqual({ block: "nearest" }); // only as far as it takes
+        expect(scroller(button("Finish"))).not.toBeNull(); // in the panel that scrolls
+      } finally {
+        scrolled.mockRestore();
+      }
+    });
+
+    it("keeps one take, audio only, across three times off and on, and saves it at Finish", async () => {
+      const lens = cameras();
+      await takeOnStage(lens.next);
+      for (let i = 0; i < 3; i++) {
+        await click(button("Turn off my camera"));
+        await click(button("Turn on my camera"));
+        await settle();
+      }
+      expect(lens.streams).toHaveLength(4);
+      saving();
+      fakes.prepareRecording.mockClear();
+      await finish();
+      await act(async () => {
+        FakeRecorder.last?.ondataavailable?.({ data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }) });
+        FakeRecorder.last?.onstop?.();
+      });
+      for (let i = 0; i < 5; i++) await settle();
+      expect(fakes.saveDraft).toHaveBeenCalledOnce();
+      expect(fakes.prepareRecording.mock.lastCall?.[0]).toMatch(/^audio\//); // the take's type
+      expect(FakeRecorder.made).toBe(1);
+      for (const each of lens.lenses) expect(each.stop).toHaveBeenCalled();
+      expect(text()).toContain("Saved.");
+    });
+
+    it("carries on recording in the card when it's refused mid-take, and says so quietly", async () => {
+      const slow = slowAfterFirst();
+      const { page } = await takeOnStage(slow.camera);
+      const added = addedToLiveRegion();
+      await click(button("Turn off my camera"));
+      await click(button("Turn on my camera"));
+      await slow.block(new DOMException("blocked", "NotAllowedError"));
+      await settle();
+      expect(button("Finish")).toBeTruthy();
+      expect(FakeRecorder.last?.state).toBe("recording");
+      expect(text(page.container)).toContain(CAMERA_DIDNT_COME_ON);
+      const note = paragraph(CAMERA_DIDNT_COME_ON)!;
+      expect(note.hasAttribute("role")).toBe(false);
+      expect(note.closest("[aria-live]")).toBeNull();
+      expect(region()).not.toContain(CAMERA_DIDNT_COME_ON);
+      expect(document.querySelector('[role="alert"]')).toBeNull();
+      expect(text()).not.toContain("Camera access is blocked"); // the reason waits until after the take
+      expect(document.activeElement).toBe(button("Turn on my camera"));
+      // Just under it, and not its description: a description that changes on the focused button is
+      // read out too, into the take.
+      expect(follows(button("Turn on my camera"), note)).toBe(true);
+      expect(description(button("Turn on my camera"))).toEqual([]);
+      expect(added).toEqual([]);
+    });
+
+    it("waits, still recording, while the browser asks mid-take, and comes on once allowed", async () => {
+      const slow = slowAfterFirst();
+      const { cameraAsks, page } = await takeOnStage(slow.camera);
+      const added = addedToLiveRegion();
+      await click(button("Turn off my camera"));
+      const toggle = button("Turn on my camera");
+      await click(toggle);
+      const waiting = button("Waiting for your camera…");
+      expect(waiting).toBe(toggle); // the same button, so focus stays on it
+      expect(document.activeElement).toBe(waiting);
+      expect(waiting.getAttribute("aria-disabled")).toBe("true");
+      await click(waiting); // asks nothing new
+      expect(cameraAsks()).toBe(2);
+      expect(text(page.container)).toContain(CAMERA_ASKING_DURING);
+      expect(region()).not.toContain(CAMERA_ASKING_DURING);
+      expect(region()).not.toContain(CAMERA_ASKING);
+      expect(paragraph(CAMERA_ASKING_DURING)?.hasAttribute("role")).toBe(false);
+      expect(FakeRecorder.last?.state).toBe("recording");
+      await slow.allow(cameraStream());
+      await settle();
+      expect(video()).not.toBeNull();
+      expect(document.activeElement).toBe(button("Turn off my camera"));
+      expect(FakeRecorder.made).toBe(1);
+      expect(added).toEqual([]);
+    });
+
+    it("lets go of a camera allowed only after Finish, and leaves the card ready, not waiting", async () => {
+      const slow = slowAfterFirst();
+      await takeOnStage(slow.camera);
+      await click(button("Turn off my camera"));
+      await click(button("Turn on my camera")); // the browser asks
+      await finish();
+      await act(async () => FakeRecorder.last?.onstop?.()); // no chunks: nothing was recorded
+      await settle();
+      expect(text()).toContain("Nothing was recorded.");
+      const lens2 = fakeTrack();
+      await slow.allow(cameraStream(lens2));
+      await settle();
+      expect(lens2.stop).toHaveBeenCalled();
+      expect(video()).toBeNull();
+      expect(button("Turn on my camera").getAttribute("aria-disabled")).not.toBe("true");
+      expect(button("Record without camera")).toBeTruthy();
+      expect(region()).not.toContain(CAMERA_ASKING);
+    });
+
+    it("shows no camera alert for a refusal that comes only after Finish", async () => {
+      const slow = slowAfterFirst();
+      await takeOnStage(slow.camera);
+      await click(button("Turn off my camera"));
+      await click(button("Turn on my camera"));
+      await finish();
+      await act(async () => FakeRecorder.last?.onstop?.());
+      await settle();
+      await slow.block(new DOMException("blocked", "NotAllowedError"));
+      await settle();
+      const alerts = [...document.querySelectorAll('[role="alert"]')].map((alert) => alert.textContent);
+      expect(alerts).toEqual(["Nothing was recorded. Check your microphone, then try again."]);
+      expect(text()).not.toContain("Camera access is blocked");
+      expect(button("Turn on my camera").getAttribute("aria-disabled")).not.toBe("true");
+      expect(region()).not.toContain(CAMERA_ASKING);
+    });
+
+    it("lets go of a camera allowed only after Sign out finished the take", async () => {
+      const slow = slowAfterFirst();
+      const { finishRecording } = await takeOnStage(slow.camera);
+      await click(button("Turn off my camera"));
+      await click(button("Turn on my camera"));
+      await act(async () => finishRecording()); // what Sign out does first
+      const lens2 = fakeTrack();
+      await slow.allow(cameraStream(lens2));
+      expect(lens2.stop).toHaveBeenCalled();
+      expect(video()).toBeNull();
+    });
+
+    it("lets go of a camera allowed only after the member left the page mid-take", async () => {
+      const slow = slowAfterFirst();
+      const { page } = await takeOnStage(slow.camera);
+      await click(button("Turn off my camera"));
+      await click(button("Turn on my camera"));
+      await page.rerender(<></>);
+      const lens2 = fakeTrack();
+      await slow.allow(cameraStream(lens2));
+      expect(lens2.stop).toHaveBeenCalled();
+      expect(video()).toBeNull();
+    });
+
+    it("has no camera button while the browser asks about the microphone, on the stage or in the card", async () => {
+      vi.stubGlobal("MediaRecorder", FakeRecorder);
+      let allowMic: (stream: unknown) => void = () => {};
+      const { microphone, getUserMedia } = devices();
+      getUserMedia.mockImplementation((constraints: MediaStreamConstraints) =>
+        constraints.video ? Promise.resolve(cameraStream()) : new Promise((resolve) => (allowMic = resolve)),
+      );
+      const { Recorder } = await load();
+      await render(<Recorder />);
+      await turnOnCamera();
+      await click(button("Start recording")); // the browser asks about the microphone
+      expect(text()).toContain("Waiting for your microphone…");
+      expect(video()).not.toBeNull();
+      expect(queryButton(/my camera/)).toBeNull(); // on the stage
+      await act(async () => allowMic(microphone));
+      await settle();
+      expect(button("Turn off my camera")).toBeTruthy();
+      await finish();
+      await act(async () => FakeRecorder.last?.onstop?.()); // nothing recorded: ready again
+      await settle();
+      await click(button("Record without camera"));
+      expect(text()).toContain("Waiting for your microphone…");
+      expect(queryButton(/my camera/)).toBeNull(); // in the card
+      await act(async () => allowMic(microphone));
+      await settle();
+      expect(button("Turn on my camera")).toBeTruthy();
+    });
+
+    it("turns off and on again from the keyboard without ending the take", async () => {
+      const lens = cameras();
+      await takeOnStage(lens.next);
+      fakes.saveDraft.mockClear();
+      button("Turn off my camera").focus();
+      await click(document.activeElement!); // Enter on the focused button
+      expect(document.activeElement).toBe(button("Turn on my camera"));
+      await click(document.activeElement!); // and again
+      await settle();
+      expect(video()?.srcObject).toBe(lens.streams[1]);
+      expect(document.activeElement).toBe(button("Turn off my camera"));
+      expect(FakeRecorder.last?.state).toBe("recording");
+      expect(fakes.saveDraft).not.toHaveBeenCalled();
+      expect(text()).not.toContain("Saving your recording");
+    });
+
+    it("doesn't carry a mid-take failure over into the next take", async () => {
+      let asks = 0;
+      await takeOnStage(async () => {
+        if (++asks === 1) return cameraStream();
+        throw new DOMException("blocked", "NotAllowedError");
+      });
+      await click(button("Turn off my camera"));
+      await click(button("Turn on my camera"));
+      await settle();
+      expect(text()).toContain(CAMERA_DIDNT_COME_ON);
+      await finish();
+      await act(async () => FakeRecorder.last?.onstop?.()); // nothing recorded: back to the start
+      await settle();
+      expect(text()).toContain("Camera access is blocked."); // the reason, now the take is over
+      expect(text()).not.toContain(CAMERA_DIDNT_COME_ON);
+      await click(button("Record without camera"));
+      await settle();
+      expect(FakeRecorder.made).toBe(2);
+      expect(FakeRecorder.last?.state).toBe("recording");
+      expect(text()).not.toContain(CAMERA_DIDNT_COME_ON);
+      await click(button("Turn on my camera"));
+      await settle();
+      expect(text()).toContain(CAMERA_DIDNT_COME_ON); // until it fails again
+      expect(FakeRecorder.last?.state).toBe("recording");
+    });
+  });
 });
 
 // Every check-in asks one open question (page.tsx); without live check-ins, nothing follows it up.
@@ -843,7 +1293,7 @@ describe("the one question", () => {
     vi.unstubAllGlobals();
   });
 
-  it("is the only question, before and during the take, with Finish and nothing else to press", async () => {
+  it("is the only question, before and during the take, with Finish (and the camera button) to press", async () => {
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     devices();
     fakes.startLive.mockClear();
@@ -860,6 +1310,7 @@ describe("the one question", () => {
 
     await record();
     expect(stage?.querySelector("h3")?.textContent).toBe(QUESTION);
+    expect(stage?.textContent).toContain(VOICE_ONLY_LINE);
     expect(document.activeElement).toBe(button("Finish"));
     expect(queryButton("Next question")).toBeNull();
     expect(queryButton("Different question")).toBeNull();
@@ -906,7 +1357,7 @@ const READY: LiveReady = {
   pacing: { showAfterSilenceMs: 1500, stoppedSilenceMs: 3000, minQuestionMs: 8000, minWordsPerQuestion: 15, firstFollowUpAfterMs: 20_000 },
 };
 
-// With live check-ins on, the member still records looking at themselves: the coach's question is
+// With live check-ins on, the member can still record looking at themselves: the coach's question is
 // laid over the camera, as the fixed ones are.
 describe("a live check-in", () => {
   const connection = { commit: vi.fn(), close: vi.fn() };
@@ -938,24 +1389,6 @@ describe("a live check-in", () => {
     return { ...found, ...saves, page };
   }
 
-  // What the take is saved through, so a test can see the take reach the draft.
-  function saving() {
-    fakes.prepareRecording.mockResolvedValue({
-      status: "ready",
-      path: "3e3b0000-0000-4000-8000-000000000003/2026-10-05-take.webm",
-      token: "token-1",
-      contentType: "audio/webm",
-    });
-    fakes.createClient.mockReturnValue({
-      storage: { from: () => ({ uploadToSignedUrl: async () => ({ error: null }) }) },
-    });
-    fakes.saveDraft.mockReset().mockResolvedValue({ status: "saved" });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ now: Date.now() }), { headers: { "content-type": "application/json" } })),
-    );
-  }
-
   const stage = () => video()?.parentElement ?? null;
 
   afterEach(() => {
@@ -967,7 +1400,7 @@ describe("a live check-in", () => {
     const { Recorder } = await load();
     await render(<Recorder opening={OPENING} live />);
     expect(text()).toContain("We'll start with one question.");
-    expect(text()).toContain("You record with your camera on");
+    expect(text()).toContain(VOICE_ONLY_LINE);
     expect(text()).toContain(OPENING);
     expect(text()).not.toContain("What have you done this week?");
     expect(button("Turn on my camera")).toBeTruthy();
@@ -1123,6 +1556,34 @@ describe("a live check-in", () => {
     await click(button("Finish"));
     expect(fakes.endLive).toHaveBeenCalledOnce();
     expect(text(page.container)).toContain("Saving your recording");
+  });
+
+  it("carries the question, its line and the live session across the camera going off and on", async () => {
+    const { microphone } = await startRecording();
+    const shown = () => [document.querySelector("h3")?.textContent, document.querySelector("h3 + p")?.textContent];
+    // Connected, and listening (the line changes on the coach's next tick).
+    for (let i = 0; i < 40 && shown()[1] !== "Listening…"; i++) await act(() => new Promise((resolve) => setTimeout(resolve, 25)));
+    const added = addedToLiveRegion();
+    const before = shown();
+    expect(before).toEqual([OPENING, "Listening…"]);
+    await click(button("Turn off my camera"));
+    expect(video()).toBeNull();
+    expect(shown()).toEqual(before);
+    await click(button("Turn on my camera"));
+    await settle();
+    expect(video()).not.toBeNull();
+    expect(shown()).toEqual(before);
+    // One connection, one session and one level meter, on the microphone, for the whole take.
+    expect(fakes.connectLiveTranscription).toHaveBeenCalledOnce();
+    expect(fakes.startLive).toHaveBeenCalledOnce();
+    expect(fakes.startLevelMeter).toHaveBeenCalledOnce();
+    expect(fakes.startLevelMeter).toHaveBeenCalledWith(microphone, expect.any(Function));
+    expect(fakes.endLive).not.toHaveBeenCalled();
+    expect(connection.close).not.toHaveBeenCalled();
+    expect(added).toEqual([]);
+    saving();
+    await click(button("Finish"));
+    expect(fakes.endLive).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: SESSION }));
   });
 
   // Without a camera, the note under the question is in the card (the stage's has its own test).
@@ -1282,6 +1743,35 @@ describe("a live check-in", () => {
       expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain("Follow-up questions have stopped.");
       for (const line of FOLLOW_UP_LINES) expect(stage()?.textContent).not.toContain(line);
       expect(document.activeElement).toBe(button("Finish"));
+      neverAnnounced(take.said);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a follow-up, Different question and the areas, unannounced again, across the camera going off and on", async () => {
+    try {
+      const take = await coachedTake({ id: 2, kind: "question", text: "What came of the vendor onboarding?" });
+      const chips = () => [...document.querySelectorAll("li")].map((li) => text(li));
+      expect(document.querySelector("h3")?.textContent).toBe("What came of the vendor onboarding?");
+      expect(button("Different question")).toBeTruthy();
+      const areas = chips();
+      expect(areas).toContain("Touched on: What you did");
+      const said = take.said.length;
+      const added = take.added.length;
+      await click(button("Turn off my camera"));
+      expect(video()).toBeNull();
+      expect(document.querySelector("h3")?.textContent).toBe("What came of the vendor onboarding?");
+      expect(button("Different question")).toBeTruthy();
+      expect(chips()).toEqual(areas);
+      await click(button("Turn on my camera"));
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(video()).not.toBeNull();
+      expect(stage()?.querySelector("h3")?.textContent).toBe("What came of the vendor onboarding?");
+      expect(button("Different question")).toBeTruthy();
+      expect(chips()).toEqual(areas);
+      expect(take.said).toHaveLength(said); // nothing said again
+      expect(take.added).toHaveLength(added); // nor put in the live region again
       neverAnnounced(take.said);
     } finally {
       vi.useRealTimers();
