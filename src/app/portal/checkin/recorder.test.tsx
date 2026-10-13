@@ -173,6 +173,16 @@ function diary(recorder: ReactNode) {
   );
 }
 const inert = (id: string) => document.getElementById(id)?.hasAttribute("inert");
+// What a screen reader reads as a control's description, as it lands on it: the text of each element
+// its aria-describedby names.
+const description = (element: Element | null) =>
+  (element?.getAttribute("aria-describedby") ?? "")
+    .split(" ")
+    .filter(Boolean)
+    .map((id) => document.getElementById(id)?.textContent ?? null);
+// The part of the camera stage that scrolls when there isn't room for all of it (a short phone).
+const scroller = (element: Element) => element.closest('[class~="overflow-y-auto"]');
+const follows = (first: Element, second: Element) => (first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
 const entryPlayer = () => document.querySelector<HTMLAudioElement>("#entries audio")!;
 // A media event as the browser fires it on the element.
 const fire = (el: HTMLMediaElement, type: string) => act(async () => void el.dispatchEvent(new Event(type)));
@@ -572,11 +582,13 @@ describe("the camera", () => {
     expect(stage?.contains(button("Start recording"))).toBe(true); // the controls are on the stage
     expect(document.activeElement).toBe(button("Start recording")); // and focus went with them
     expect(document.documentElement.style.overflow).toBe("hidden"); // the page behind stays put
-    // What is recorded, in the camera's own row with its button, under Start; Start alone in its row.
+    // What is recorded, under Start; Start alone in its row; the camera's button on the stage, which
+    // the line describes before the take (nothing records yet).
     const voiceLine = () => [...(stage?.querySelectorAll("p") ?? [])].filter((p) => p.textContent === VOICE_ONLY_LINE);
     expect(voiceLine()).toHaveLength(1);
-    expect(voiceLine()[0].parentElement?.contains(button("Turn off my camera"))).toBe(true);
+    expect(follows(button("Start recording"), voiceLine()[0])).toBe(true);
     expect(stage?.contains(button("Turn off my camera"))).toBe(true);
+    expect(description(button("Turn off my camera"))).toEqual([VOICE_ONLY_LINE]);
     expect([...(button("Start recording").parentElement?.querySelectorAll("button") ?? [])]).toEqual([button("Start recording")]);
     expect(document.querySelector("[aria-live]")?.textContent).not.toContain(VOICE_ONLY_LINE);
 
@@ -591,7 +603,10 @@ describe("the camera", () => {
     expect(stage?.querySelector("h3 + p")?.textContent).not.toBe(VOICE_ONLY_LINE); // not taken for the status line
     expect(stage?.querySelector("h3")?.textContent).toBe(DEFAULT_OPENING_QUESTION);
     expect(stage?.contains(button("Finish"))).toBe(true);
+    expect(follows(button("Finish"), voiceLine()[0])).toBe(true); // under Finish
     expect(stage?.contains(button("Turn off my camera"))).toBe(true);
+    // While recording, no description: a screen reader reads one out as focus lands on the button.
+    expect(description(button("Turn off my camera"))).toEqual([]);
     expect(document.querySelector("[aria-live]")?.textContent).not.toContain(VOICE_ONLY_LINE);
 
     await finish();
@@ -600,6 +615,39 @@ describe("the camera", () => {
     expect(document.documentElement.style.overflow).toBe("");
     await act(async () => FakeRecorder.last?.onstop?.()); // nothing recorded here
     expect(button("Turn on my camera")).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
+
+  // On a short phone the stage's panel (the question, Start or Finish, the voice-only line) doesn't
+  // fit, and scrolls. The camera's button sits above it in the stage's top row, beside the pill and
+  // the clock during the take, so it is always in view; the line stays in the panel, under the buttons.
+  it("keeps its button in the stage's top row, out of the panel that scrolls, before and during the take", async () => {
+    vi.stubGlobal("MediaRecorder", FakeRecorder);
+    devices();
+    const { Recorder } = await load();
+    await render(diary(<Recorder />));
+    await turnOnCamera();
+    const stage = video()!.parentElement!;
+    const line = () => [...stage.querySelectorAll("p")].find((p) => p.textContent === VOICE_ONLY_LINE)!;
+    const panel = scroller(button("Start recording"));
+    expect(panel).not.toBeNull(); // the panel scrolls on a short screen
+    expect(stage.contains(button("Turn off my camera"))).toBe(true);
+    expect(scroller(button("Turn off my camera"))).toBeNull(); // the button doesn't
+    expect(follows(button("Turn off my camera"), panel!)).toBe(true); // above it
+    expect(scroller(line())).toBe(panel); // the line in the panel, under Start
+    expect(follows(button("Start recording"), line())).toBe(true);
+
+    await record();
+    const pill = [...stage.querySelectorAll("span")].find((span) => span.textContent === "Recording your voice")!;
+    const row = pill.parentElement!;
+    expect(row.contains(stage.querySelector('[role="timer"]'))).toBe(true);
+    expect(row.contains(button("Turn off my camera"))).toBe(true); // beside the pill and the clock
+    expect(row.contains(button("Finish"))).toBe(false);
+    expect(scroller(row)).toBeNull();
+    expect(scroller(button("Finish"))).not.toBeNull();
+    expect(scroller(line())).toBe(scroller(button("Finish"))); // the line in the panel, under Finish
+    expect(follows(button("Finish"), line())).toBe(true);
+    expect(document.activeElement).toBe(button("Finish"));
     vi.unstubAllGlobals();
   });
 
@@ -958,6 +1006,36 @@ describe("the camera", () => {
       expect(added).toEqual([]);
     });
 
+    // Focus moves to the camera button's counterpart at each switch, and a screen reader reads a
+    // focused control's description: the voice-only line (or any note) read out through the speakers
+    // would reach the microphone, the take, the live transcript and the grade. So no description
+    // while recording, either way round, waiting or refused.
+    it("moves focus at each switch to a camera button with no description, so nothing more is read into the take", async () => {
+      const slow = slowAfterFirst();
+      await takeOnStage(slow.camera);
+      const added = addedToLiveRegion();
+      expect(description(button("Turn off my camera"))).toEqual([]);
+      await click(button("Turn off my camera"));
+      expect(document.activeElement).toBe(button("Turn on my camera"));
+      expect(description(document.activeElement)).toEqual([]);
+      await click(button("Turn on my camera"));
+      expect(document.activeElement).toBe(button("Waiting for your camera…"));
+      expect(description(document.activeElement)).toEqual([]);
+      await slow.allow(cameraStream());
+      await settle();
+      expect(document.activeElement).toBe(button("Turn off my camera"));
+      expect(description(document.activeElement)).toEqual([]);
+      await click(button("Turn off my camera"));
+      await click(button("Turn on my camera"));
+      await slow.block(new DOMException("blocked", "NotAllowedError"));
+      await settle();
+      expect(text()).toContain(CAMERA_DIDNT_COME_ON);
+      expect(document.activeElement).toBe(button("Turn on my camera"));
+      expect(description(document.activeElement)).toEqual([]);
+      expect(FakeRecorder.last?.state).toBe("recording");
+      expect(added).toEqual([]);
+    });
+
     it("comes on again mid-take, asked for on its own, and brings the stage back", async () => {
       const lens = cameras();
       const { getUserMedia, cameraAsks } = await takeOnStage(lens.next);
@@ -1019,7 +1097,10 @@ describe("the camera", () => {
       expect(document.querySelector('[role="alert"]')).toBeNull();
       expect(text()).not.toContain("Camera access is blocked"); // the reason waits until after the take
       expect(document.activeElement).toBe(button("Turn on my camera"));
-      expect(button("Turn on my camera").getAttribute("aria-describedby")?.split(" ")).toContain(note.id);
+      // Just under it, and not its description: a description that changes on the focused button is
+      // read out too, into the take.
+      expect(follows(button("Turn on my camera"), note)).toBe(true);
+      expect(description(button("Turn on my camera"))).toEqual([]);
       expect(added).toEqual([]);
     });
 

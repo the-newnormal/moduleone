@@ -1,7 +1,7 @@
 "use client";
 
 import { Camera, CameraOff } from "lucide-react";
-import { useEffect, useId, useRef, type ReactNode, type RefObject } from "react";
+import { useEffect, useRef, type ReactNode, type RefObject } from "react";
 import { pauseOtherAudio } from "@/components/recordings/pause-others";
 import { Button } from "@/components/ui/button";
 
@@ -11,11 +11,22 @@ export const VOICE_ONLY_LINE =
   "Only your voice is recorded. The camera just shows you to yourself; its picture is never saved or sent.";
 
 // The camera on a stage that fills the screen below the app bar, with what the member needs laid
-// over it: the progress and clock along the top (top), the question and the buttons in a panel at
-// the bottom (children). The video is muted and inline, as iPhone Safari needs to play it in the
-// page rather than fullscreen, and mirrored, as people expect to see themselves. The page behind
-// doesn't scroll while the stage is up, and can't be reached under it (see below).
-export function CameraStage({ stream, top, children }: { stream: MediaStream; top?: ReactNode; children: ReactNode }) {
+// over it: a top row with what is happening (status: the pill and the clock during the take) and the
+// camera's own button (control), and under it the question and the buttons in a panel at the bottom
+// (children). The video is muted and inline, as iPhone Safari needs to play it in the page rather
+// than fullscreen, and mirrored, as people expect to see themselves. The page behind doesn't scroll
+// while the stage is up, and can't be reached under it (see below).
+export function CameraStage({
+  stream,
+  status,
+  control,
+  children,
+}: {
+  stream: MediaStream;
+  status?: ReactNode;
+  control?: ReactNode;
+  children: ReactNode;
+}) {
   const stage = useRef<HTMLDivElement>(null);
   const video = useRef<HTMLVideoElement>(null);
   useEffect(() => {
@@ -58,11 +69,19 @@ export function CameraStage({ stream, top, children }: { stream: MediaStream; to
           aria-hidden="true"
           className="absolute inset-0 size-full -scale-x-100 object-cover"
         />
-        {/* Scrolls when there isn't room for both (a short screen, or zoomed in), so the question is never cut off. */}
-        <div className="absolute inset-0 flex flex-col justify-between gap-3 overflow-y-auto p-3 sm:p-5">
-          <div className="flex flex-wrap items-start justify-between gap-2">{top}</div>
-          <div className="mx-auto grid w-full max-w-3xl gap-4 rounded-2xl bg-black/65 p-4 backdrop-blur-md sm:p-6">
-            {children}
+        <div className="absolute inset-0 flex flex-col gap-3 p-3 sm:p-5">
+          {/* Never scrolls, so the camera's button is always in view; it wraps under the status on a phone. */}
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {status}
+            {control && <div className="ml-auto">{control}</div>}
+          </div>
+          {/* The panel sits at the bottom, and scrolls when there isn't room for it (a short screen, or
+              zoomed in), so the question is never cut off. mt-auto, not justify-end, which would put
+              the panel's top out of reach once it scrolls. */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+            <div className="mx-auto mt-auto grid w-full max-w-3xl gap-4 rounded-2xl bg-black/65 p-4 backdrop-blur-md sm:p-6">
+              {children}
+            </div>
           </div>
         </div>
       </div>
@@ -76,57 +95,84 @@ export const ON_STAGE_MAIN = "focus-visible:outline-white bg-white text-black ho
 export const ON_STAGE_OUTLINE =
   "focus-visible:outline-white border-white/60 bg-transparent text-white hover:bg-white/15 hover:text-white dark:border-white/60 dark:bg-transparent dark:hover:bg-white/15";
 export const STAGE_PILL = "rounded-full bg-black/55 px-3 py-1 text-sm backdrop-blur-md";
+// A button in the stage's top row, straight over the camera's picture: outlined in white on a dark
+// ground of its own, as the pills are, so its words can be read over a bright picture, and with a dark
+// band round its white focus ring, so the ring can be seen over one too.
+export const ON_STAGE_TOP =
+  "focus-visible:outline-white focus-visible:shadow-[0_0_0_6px_rgb(0_0_0/0.6)] border-white/60 bg-black/55 text-white backdrop-blur-md hover:bg-black/70 hover:text-white dark:border-white/60 dark:bg-black/55 dark:hover:bg-black/70";
 
-// The camera's own row, under the main buttons, on the stage and in the card: what is recorded, and
-// the camera's on/off button. Never the main action (no sun, never ON_STAGE_MAIN). Never announced;
-// the note under it is tied to the button by aria-describedby instead.
-// on: the camera is on (the button turns it off). waiting: the browser is asking about the camera, so
-// the button waits, and ignores presses, until it's answered. note: a line under the row (why the
-// camera isn't on yet, or didn't come on). onStage: over the dark stage.
-export function CameraRow({
+// The privacy notice's line, on the stage (under its main buttons) and in the card.
+export function VoiceOnlyLine({ id, onStage = false, className }: { id?: string; onStage?: boolean; className?: string }) {
+  const muted = onStage ? "text-sm text-white/75" : "text-sm text-muted-foreground";
+  return (
+    <p id={id} className={className ? `${muted} ${className}` : muted}>
+      {VOICE_ONLY_LINE}
+    </p>
+  );
+}
+
+// The camera's on/off button: one button whose words change (no aria-pressed), never the main action
+// (no sun, never ON_STAGE_MAIN). on: the camera is on (the button turns it off). waiting: the browser
+// is asking about the camera, so the button waits, and ignores presses, until it's answered. onStage:
+// in the stage's top row, over the camera's picture. describedBy: the id of what describes it, only
+// while nothing records: a screen reader reads a description out as focus lands on the button (the
+// recorder moves focus to it at each switch mid-take), and reads it again when it changes, and its
+// voice through the speakers would reach the microphone, the take and the live transcript.
+export function CameraButton({
   on,
+  waiting = false,
+  onToggle,
+  buttonRef,
+  onStage = false,
+  describedBy,
+}: {
+  on: boolean;
+  waiting?: boolean;
+  onToggle: () => void;
+  buttonRef: RefObject<HTMLButtonElement | null>;
+  onStage?: boolean;
+  describedBy?: string;
+}) {
+  const label = waiting ? "Waiting for your camera…" : on ? "Turn off my camera" : "Turn on my camera";
+  return (
+    <Button
+      ref={buttonRef}
+      type="button"
+      variant="outline"
+      size="sm"
+      aria-disabled={waiting}
+      aria-describedby={describedBy}
+      onClick={() => !waiting && onToggle()}
+      className={onStage ? ON_STAGE_TOP : undefined}
+    >
+      {on && !waiting ? <CameraOff aria-hidden="true" /> : <Camera aria-hidden="true" />}
+      {label}
+    </Button>
+  );
+}
+
+// The camera's row in the card while recording, where the camera is off (the stage is the camera):
+// what is recorded, the button that turns the camera on, and a note under them (while the browser
+// asks, or once it didn't come on). Nothing in it is announced, and nothing in it describes the
+// button (see CameraButton): the note is only there to be seen, and read like any other text.
+export function CameraRow({
   waiting = false,
   note = null,
   onToggle,
   buttonRef,
-  onStage = false,
 }: {
-  on: boolean;
   waiting?: boolean;
   note?: string | null;
   onToggle: () => void;
   buttonRef: RefObject<HTMLButtonElement | null>;
-  onStage?: boolean;
 }) {
-  const lineId = useId();
-  const noteId = useId();
-  const muted = onStage ? "text-sm text-white/75" : "text-sm text-muted-foreground";
-  const label = waiting ? "Waiting for your camera…" : on ? "Turn off my camera" : "Turn on my camera";
   return (
     <div className="grid gap-2">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <p id={lineId} className={`${muted} min-w-48 flex-1`}>
-          {VOICE_ONLY_LINE}
-        </p>
-        <Button
-          ref={buttonRef}
-          type="button"
-          variant="outline"
-          size="sm"
-          aria-disabled={waiting}
-          aria-describedby={note ? `${lineId} ${noteId}` : lineId}
-          onClick={() => !waiting && onToggle()}
-          className={onStage ? ON_STAGE_OUTLINE : undefined}
-        >
-          {on && !waiting ? <CameraOff aria-hidden="true" /> : <Camera aria-hidden="true" />}
-          {label}
-        </Button>
+        <VoiceOnlyLine className="min-w-48 flex-1" />
+        <CameraButton on={false} waiting={waiting} onToggle={onToggle} buttonRef={buttonRef} />
       </div>
-      {note && (
-        <p id={noteId} className={muted}>
-          {note}
-        </p>
-      )}
+      {note && <p className="text-sm text-muted-foreground">{note}</p>}
     </div>
   );
 }

@@ -2,14 +2,14 @@
 
 import { Camera, LoaderCircle, Mic } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useEffectEvent, useRef, useState, useTransition, type RefObject } from "react";
+import { useEffect, useEffectEvent, useId, useRef, useState, useTransition, type RefObject } from "react";
 import { pauseOtherAudio } from "@/components/recordings/pause-others";
 import { Button } from "@/components/ui/button";
 import { baseMimeType, extensionFor } from "@/lib/checkin/audio";
 import { DEFAULT_OPENING_QUESTION } from "@/lib/checkin/week";
 import { createClient } from "@/lib/supabase/client";
 import { prepareRecording, saveDraft } from "./actions";
-import { CameraRow, CameraStage, ON_STAGE_MAIN, STAGE_PILL, VOICE_ONLY_LINE } from "./camera-stage";
+import { CameraButton, CameraRow, CameraStage, ON_STAGE_MAIN, STAGE_PILL, VoiceOnlyLine } from "./camera-stage";
 import { formatClock } from "./format";
 import { followUpCopy, LivePrompt } from "./live/live-prompt";
 import type { ShownOffer } from "./live/contract";
@@ -244,8 +244,10 @@ export function Recorder({
   // member has moved on (or started again) is let go instead of recording in the background.
   const startCount = useRef(0);
   const primary = useRef<HTMLButtonElement>(null);
-  // The camera's on/off button, in whichever layout is up.
+  // The camera's on/off button, in whichever layout is up: in the stage's top row, or in the card.
   const cameraButton = useRef<HTMLButtonElement>(null);
+  // The stage's voice-only line, which describes the camera's button there before the take.
+  const voiceLineId = useId();
   // Set by the camera button during a take, so the layout switch it causes focuses the button's
   // counterpart in the new layout, not Finish, where a second Enter would end the take.
   const toggledCamera = useRef(false);
@@ -665,7 +667,7 @@ export function Recorder({
               minutes is plenty; the recording stops at 10 minutes. You can listen back before you submit.
             </p>
           )}
-          <p className="text-sm text-muted-foreground">{VOICE_ONLY_LINE}</p>
+          <VoiceOnlyLine />
           <p className="text-lg leading-snug">{opening}</p>
         </>
       )}
@@ -736,7 +738,6 @@ export function Recorder({
             {lastMinute && <p className="rounded-md bg-muted px-3 py-2 text-sm">{LAST_MINUTE}</p>}
           </LivePrompt>
           <CameraRow
-            on={false}
             waiting={cameraNote === "asking"}
             note={midTakeNote}
             onToggle={toggleCameraDuringTake}
@@ -783,7 +784,7 @@ export function Recorder({
       {staged && (
         <CameraStage
           stream={mirror}
-          top={
+          status={
             state.step === "recording" && (
               <>
                 <span className={STAGE_PILL}>Recording your voice</span>
@@ -795,6 +796,19 @@ export function Recorder({
                 </span>
               </>
             )
+          }
+          // The camera's button, above the panel so it is always in view, even on a short phone (the
+          // panel scrolls). Not while the browser asks about the microphone: off then would leave the
+          // take with no camera before it began (CAMERA_STOPPED). Turn off my camera before the take:
+          // back to the card, with the camera off, and the Diary below in reach again. During it: the
+          // take carries on in the card. Described by the voice-only line only before the take (see
+          // CameraButton).
+          control={
+            state.step === "idle" ? (
+              <CameraButton on onToggle={turnCameraOff} buttonRef={cameraButton} onStage describedBy={voiceLineId} />
+            ) : state.step === "recording" ? (
+              <CameraButton on onToggle={toggleCameraDuringTake} buttonRef={cameraButton} onStage />
+            ) : null
           }
         >
           {state.step === "idle" && (
@@ -823,8 +837,7 @@ export function Recorder({
                   Start recording
                 </Button>
               </div>
-              {/* Turn off my camera: back to the card, with the camera off, and the Diary below in reach again. */}
-              <CameraRow on onToggle={turnCameraOff} buttonRef={cameraButton} onStage />
+              <VoiceOnlyLine id={voiceLineId} onStage />
             </>
           )}
           {state.step === "starting" && (
@@ -849,7 +862,7 @@ export function Recorder({
                 {lastMinute && <p className="text-sm text-white/80">{LAST_MINUTE}</p>}
                 {awayNote && <p className="text-sm text-white/80">{AWAY}</p>}
               </LivePrompt>
-              <CameraRow on onToggle={toggleCameraDuringTake} buttonRef={cameraButton} onStage />
+              <VoiceOnlyLine onStage />
             </>
           )}
         </CameraStage>
