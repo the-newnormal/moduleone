@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { noticeSections } from "@/lib/checkin/notice";
 import { button, click, render } from "@/test/dom";
 import { CameraButton, CameraRow, CameraStage, ON_STAGE_MAIN, ON_STAGE_TOP, VOICE_ONLY_LINE, VoiceOnlyLine } from "./camera-stage";
 
@@ -198,15 +197,12 @@ describe("CameraStage", () => {
   });
 });
 
-// The screen says, in short, what the privacy notice says: never more.
+// The promise members are given before they record, word for word: change it only together with
+// what they are told (the privacy notice, or the onboarding form that replaces it).
 describe("VOICE_ONLY_LINE", () => {
-  it("agrees with the privacy notice's What we record, with live check-ins on or off", () => {
-    for (const env of [{}, { LIVE_CHECKIN: "on" }]) {
-      const body = noticeSections(env).find((section) => section.heading === "What we record")?.body;
-      expect(body).toContain("Only your voice is recorded.");
-      expect(body).toContain("never saved or sent");
-    }
-    expect(VOICE_ONLY_LINE.startsWith("Only your voice is recorded.")).toBe(true);
-    expect(VOICE_ONLY_LINE).toContain("never saved or sent");
+  it("says only the voice is recorded, and the picture is never saved or sent", () => {
+    expect(VOICE_ONLY_LINE).toBe(
+      "Only your voice is recorded. The camera just shows you to yourself; its picture is never saved or sent.",
+    );
   });
 });

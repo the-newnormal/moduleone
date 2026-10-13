@@ -5,8 +5,8 @@ import { useEffect, useRef, type ReactNode, type RefObject } from "react";
 import { pauseOtherAudio } from "@/components/recordings/pause-others";
 import { Button } from "@/components/ui/button";
 
-// The privacy notice's VOICE_ONLY (src/lib/checkin/notice.ts), shortened for the screen. Say nothing
-// here that the notice doesn't say.
+// What members are told before they record (the privacy notice's "What we record", or the onboarding
+// form that replaces it), shortened for the screen. Say nothing here that they aren't told.
 export const VOICE_ONLY_LINE =
   "Only your voice is recorded. The camera just shows you to yourself; its picture is never saved or sent.";
 
