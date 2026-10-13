@@ -1655,6 +1655,7 @@ describe("a live check-in", () => {
       const areas = chips();
       expect(areas).toContain("Touched on: What you did");
       const said = take.said.length;
+      const added = take.added.length;
       await click(button("Turn off my camera"));
       expect(video()).toBeNull();
       expect(document.querySelector("h3")?.textContent).toBe("What came of the vendor onboarding?");
@@ -1667,7 +1668,7 @@ describe("a live check-in", () => {
       expect(button("Different question")).toBeTruthy();
       expect(chips()).toEqual(areas);
       expect(take.said).toHaveLength(said); // nothing said again
-      expect(take.added).not.toContain(expect.stringContaining("vendor onboarding")); // not re-added either
+      expect(take.added).toHaveLength(added); // nor put in the live region again
       neverAnnounced(take.said);
     } finally {
       vi.useRealTimers();
