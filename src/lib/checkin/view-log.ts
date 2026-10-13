@@ -37,14 +37,15 @@ export async function logCheckinViews(supabase: SupabaseClient, ids: readonly st
 }
 
 // What the Diary reads of its owner's log: never the owner (it's them) or the Singapore day (the
-// time says it).
-export const VIEW_LOG_COLUMNS = "id, checkin_id, week_start, viewer_id, viewer_name, viewer_role, kind, viewed_at";
+// time says it), and never the viewer's member id, which signed-in users can't read (0015): lines
+// are grouped by viewer_key instead.
+export const VIEW_LOG_COLUMNS = "id, checkin_id, week_start, viewer_key, viewer_name, viewer_role, kind, viewed_at";
 
 export type ViewLogRow = {
   id: string;
   checkin_id: string | null; // null once a Master Admin reset the check-in
   week_start: string; // the check-in's Monday, 'YYYY-MM-DD'
-  viewer_id: string | null; // null if the viewer's member row was deleted
+  viewer_key: string; // random, the same on every row of one viewer on this week
   viewer_name: string; // as it was when they looked
   viewer_role: "leader" | "hq"; // as it was when they looked
   kind: ViewKind;
@@ -72,17 +73,16 @@ export type ViewGroup = { name: string; role: "Leader" | "HQ"; lines: ViewLine[]
 
 const ROLE_LABEL: Record<ViewLogRow["viewer_role"], ViewGroup["role"]> = { leader: "Leader", hq: "HQ" };
 
-// The log by week ('YYYY-MM-DD' Monday): a group per viewer (by their member id, or by name once
-// their row is gone), the most recent viewer first. Named fields only, so the viewer's id, and
-// anything else on a row, never reaches the page.
+// The log by week ('YYYY-MM-DD' Monday): a group per viewer (by viewer_key, so two people with one
+// name stay apart and a renamed one stays together), the most recent viewer first. Named fields
+// only, so the key, and anything else on a row, never reaches the page.
 export function viewsByWeek(rows: readonly ViewLogRow[]): Map<string, ViewGroup[]> {
   const weeks = new Map<string, Map<string, { group: ViewGroup; latest: string }>>();
   for (const row of rows) {
-    const key = row.viewer_id !== null ? `id:${row.viewer_id}` : `name:${row.viewer_name}`;
     let viewers = weeks.get(row.week_start);
     if (!viewers) weeks.set(row.week_start, (viewers = new Map()));
-    let entry = viewers.get(key);
-    if (!entry) viewers.set(key, (entry = { group: { name: row.viewer_name, role: "Leader", lines: [] }, latest: "" }));
+    let entry = viewers.get(row.viewer_key);
+    if (!entry) viewers.set(row.viewer_key, (entry ={ group: { name: row.viewer_name, role: "Leader", lines: [] }, latest: "" }));
     entry.group.lines.push({ kind: row.kind === "played" ? "played" : "opened", at: row.viewed_at, reset: row.checkin_id === null });
     if (newer(row.viewed_at, entry.latest)) {
       entry.latest = row.viewed_at;

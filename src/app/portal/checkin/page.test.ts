@@ -785,7 +785,7 @@ describe("/portal/checkin, who opened it", () => {
       id: `e1000000-0000-4000-8000-${String(v).padStart(12, "0")}`,
       checkin_id: CHECKIN,
       week_start: WEEK,
-      viewer_id: JANE,
+      viewer_key: JANE,
       viewer_name: "Jane Tan",
       viewer_role: "hq",
       kind: "opened",
@@ -799,8 +799,8 @@ describe("/portal/checkin, who opened it", () => {
     view({}),
     view({ checkin_id: null, viewed_at: "2026-10-06T01:00:00+00:00" }),
     // 28 September's, under its entry.
-    view({ checkin_id: SEP_28.id, week_start: SEP_28.week_start, viewer_id: ALI, viewer_name: "Ali Rahman", viewer_role: "leader", viewed_at: "2026-10-01T02:00:00+00:00" }),
-    view({ checkin_id: SEP_28.id, week_start: SEP_28.week_start, viewer_id: ALI, viewer_name: "Ali Rahman", viewer_role: "leader", kind: "played", viewed_at: "2026-10-01T02:05:00+00:00" }),
+    view({ checkin_id: SEP_28.id, week_start: SEP_28.week_start, viewer_key: ALI, viewer_name: "Ali Rahman", viewer_role: "leader", viewed_at: "2026-10-01T02:00:00+00:00" }),
+    view({ checkin_id: SEP_28.id, week_start: SEP_28.week_start, viewer_key: ALI, viewer_name: "Ali Rahman", viewer_role: "leader", kind: "played", viewed_at: "2026-10-01T02:05:00+00:00" }),
     // 22 December 2025's, last year.
     view({ checkin_id: DEC_22.id, week_start: DEC_22.week_start, viewed_at: "2025-12-23T02:00:00+00:00" }),
     // 24 August's was reset and never recorded again: no entry left.
@@ -890,7 +890,7 @@ describe("/portal/checkin, who opened it", () => {
   it("names a few people, then how many more", async () => {
     submitted();
     const people = ["Ann Ong", "Ben Ho", "Cai Lin", "Dev Raj"].map((name, i) =>
-      view({ viewer_id: `a2000000-0000-4000-8000-00000000000${i}`, viewer_name: name, viewed_at: `2026-10-07T0${i}:00:00+00:00` }),
+      view({ viewer_key: `a2000000-0000-4000-8000-00000000000${i}`, viewer_name: name, viewed_at: `2026-10-07T0${i}:00:00+00:00` }),
     );
     lists.checkin_views = { data: people.slice(0, 3), error: null };
     expect(text(card(await page()).querySelector("summary"))).toBe("Opened by Cai Lin, Ben Ho and Ann Ong");
@@ -907,7 +907,7 @@ describe("/portal/checkin, who opened it", () => {
     expect(html).not.toContain("<details class=\"group\"><summary class=\"flex min-h-10 w-fit");
   });
 
-  it("never shows a grade, the viewer's id, team or email, or the owner", async () => {
+  it("never shows a grade, the viewer's key, team or email, or the owner", async () => {
     submitted();
     const html = await render();
     for (const word of ["SECRET", "wellbeing", "burnt out", "exhausted", /\brough\b/, "score", "Score", "review", "transcript", "category", "Red", "Yellow", "Green", /\b[1-5]\s*\/\s*5\b/]) {

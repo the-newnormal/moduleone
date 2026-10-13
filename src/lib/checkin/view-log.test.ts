@@ -99,12 +99,13 @@ describe("loadViewLog", () => {
     expect(queries[1].calls).toContainEqual(["eq", "owner_id", OWNER]);
   });
 
-  it("asks for nothing that names the owner, the source or a count", () => {
+  it("asks for nothing that names the owner, the source or a count, and never the viewer's member id", () => {
+    // Signed-in users can't read viewer_id (0015's column grants): asking for it would fail the read.
     expect(VIEW_LOG_COLUMNS.split(",").map((c) => c.trim())).toEqual([
       "id",
       "checkin_id",
       "week_start",
-      "viewer_id",
+      "viewer_key",
       "viewer_name",
       "viewer_role",
       "kind",
@@ -121,6 +122,7 @@ describe("loadViewLog", () => {
 });
 
 describe("viewsByWeek", () => {
+  // viewer_keys: random per viewer and week in the database.
   const JANE = "a0000000-0000-4000-8000-000000000001";
   const ALI = "a0000000-0000-4000-8000-000000000002";
   let n = 0;
@@ -130,7 +132,7 @@ describe("viewsByWeek", () => {
       id: `e0000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
       checkin_id: A,
       week_start: "2026-10-05",
-      viewer_id: JANE,
+      viewer_key: JANE,
       viewer_name: "Jane Tan",
       viewer_role: "hq",
       kind: "opened",
@@ -142,7 +144,7 @@ describe("viewsByWeek", () => {
   it("groups each week's rows by viewer, the most recent viewer first and their lines newest first", () => {
     const weeks = viewsByWeek([
       view({ viewed_at: "2026-10-07T01:00:00+00:00" }),
-      view({ viewer_id: ALI, viewer_name: "Ali Rahman", viewer_role: "leader", viewed_at: "2026-10-08T01:00:00+00:00" }),
+      view({ viewer_key: ALI, viewer_name: "Ali Rahman", viewer_role: "leader", viewed_at: "2026-10-08T01:00:00+00:00" }),
       view({ kind: "played", viewed_at: "2026-10-09T02:00:00+00:00" }),
       view({ week_start: "2026-09-28", checkin_id: B, viewed_at: "2026-10-01T03:00:00+00:00" }),
     ]);
@@ -180,26 +182,25 @@ describe("viewsByWeek", () => {
     expect(group.lines).toHaveLength(2);
   });
 
-  it("groups by name once a viewer's member row is gone, apart from anyone still there", () => {
+  it("groups by viewer_key, not by name: two people with one name stay apart", () => {
+    const OTHER_JANE = "a0000000-0000-4000-8000-000000000003";
     const groups = viewsByWeek([
-      view({ viewer_id: null, viewer_name: "Wen Li", viewed_at: "2026-10-06T01:00:00+00:00" }),
-      view({ viewer_id: null, viewer_name: "Wen Li", kind: "played", viewed_at: "2026-10-06T02:00:00+00:00" }),
-      view({ viewer_id: null, viewer_name: "Jane Tan", viewed_at: "2026-10-05T02:00:00+00:00" }),
+      view({ viewer_key: OTHER_JANE, viewed_at: "2026-10-06T01:00:00+00:00" }),
+      view({ viewer_key: OTHER_JANE, kind: "played", viewed_at: "2026-10-06T02:00:00+00:00" }),
       view({ viewed_at: "2026-10-05T01:00:00+00:00" }),
     ]).get("2026-10-05")!;
     expect(groups.map((g) => [g.name, g.lines.length])).toEqual([
-      ["Wen Li", 2],
-      ["Jane Tan", 1],
+      ["Jane Tan", 2],
       ["Jane Tan", 1],
     ]);
   });
 
-  it("builds named fields only: never a viewer's id, or anything else a row holds", () => {
+  it("builds named fields only: never a viewer's key, or anything else a row holds", () => {
     const rows = [
-      { ...view({ viewer_id: ALI }), owner_id: OWNER, viewed_on: "2026-10-09", activity_score: 1, rubric_review: "SECRET" },
+      { ...view({ viewer_key: ALI }), viewer_id: B, owner_id: OWNER, viewed_on: "2026-10-09", activity_score: 1, rubric_review: "SECRET" },
     ];
     const json = JSON.stringify([...viewsByWeek(rows as ViewLogRow[])]);
-    for (const secret of [ALI, OWNER, A, "viewed_on", "SECRET", "activity_score", "viewer_id", "checkin_id"]) {
+    for (const secret of [ALI, B, OWNER, A, "viewed_on", "SECRET", "activity_score", "viewer_key", "viewer_id", "checkin_id"]) {
       expect(json).not.toContain(secret);
     }
     const [group] = viewsByWeek(rows as ViewLogRow[]).get("2026-10-05")!;

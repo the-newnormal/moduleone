@@ -24,13 +24,18 @@
 --     table any other way: signed-in users have no insert, update or delete on it.
 --
 -- Only the owner reads their log (owner_id): not leaders, hq, admins, grant holders, or the viewer
--- themselves. The project owner can still query it in the Supabase dashboard.
+-- themselves. The project owner can still query it in the Supabase dashboard. Even the owner never
+-- reads viewer_id: a member can read the team_leads rows of their own team and every node above it
+-- (0003), so a member id next to a name would say which node that viewer leads, and its leader
+-- title. The owner gets a name, Leader or HQ, and viewer_key instead: random, the same on every row
+-- of one viewer on one of the owner's weeks, so the Diary can group a week's lines by person.
 --
--- A Master Admin's reset (hq_reset_checkin, 0007) deletes the check-in but keeps its rows, with
--- checkin_id null: the owner still sees who opened the earlier check-in for that week, and whoever
--- resets it, who is also a viewer, can't erase their own viewing. Rows go only with the owner's
--- member row. Deleting a recording (hq_delete_checkin_recording, forget_expired_checkin_audio)
--- leaves them alone.
+-- Rows are only ever added. Nothing edits or deletes them but foreign keys: a Master Admin's reset
+-- (hq_reset_checkin, 0007) deletes the check-in and sets their checkin_id to null, so the owner
+-- still sees who opened the earlier check-in for that week, and whoever resets it, who is also a
+-- viewer, can't erase their own viewing; deleting a viewer's member row sets viewer_id to null
+-- (the name and viewer_key stay); and they are deleted only with the owner's member row. Deleting
+-- a recording (hq_delete_checkin_recording, forget_expired_checkin_audio) leaves them alone.
 --
 -- No existing function or policy changes.
 
@@ -43,8 +48,12 @@ create table checkin_views (
   -- no join and a reset doesn't orphan the row.
   owner_id     uuid not null references members(id) on delete cascade,
   week_start   date not null,
-  -- Who looked. Kept (null) if their member row is ever deleted; the name stays.
+  -- Who looked. Kept (null) if their member row is ever deleted; the name stays. Never granted to
+  -- signed-in users, the owner included (see the header).
   viewer_id    uuid references members(id) on delete set null,
+  -- What the owner groups a week's lines by instead: random, never derived from an id, and the same
+  -- on every row of this viewer on this owner's week (log_checkin_views reuses it).
+  viewer_key   uuid not null,
   viewer_name  text not null,   -- members.name when they looked (members_select hides most viewers from the owner)
   viewer_role  text not null,   -- 'leader' | 'hq' when they looked
   kind         text not null,   -- 'opened' (drill-in) | 'played' (recording route)
@@ -58,9 +67,13 @@ create table checkin_views (
 );
 create index checkin_views_owner on checkin_views (owner_id, id);   -- the Diary's paged read
 create index checkin_views_viewer on checkin_views (viewer_id);     -- the on-delete-set-null
+create index checkin_views_key on checkin_views (owner_id, week_start, viewer_id);   -- reusing viewer_key
 alter table checkin_views enable row level security;
 
-grant select on table checkin_views to authenticated;
+-- Every column but viewer_id (see the header). Column by column, so a column added later isn't
+-- readable until it is granted here too.
+grant select (id, checkin_id, owner_id, week_start, viewer_key, viewer_name, viewer_role, kind, viewed_on, viewed_at)
+  on table checkin_views to authenticated;
 grant all on table checkin_views to service_role;
 -- Only the owner: no exception for hq, admins, grant holders or the viewer. Deliberately NOT the
 -- mentions pattern (exists … checkins), which would hand leaders and hq other people's logs.
@@ -76,6 +89,12 @@ create policy checkin_views_select on checkin_views for select to authenticated
 -- Rows are taken in id order and held FOR KEY SHARE, so two tabs logging overlapping lists lock
 -- them in the same order (no deadlock), and a reset in progress is waited for, after which its
 -- check-in is skipped (no foreign-key error). ON CONFLICT DO NOTHING keeps the day's first row.
+--
+-- viewer_key: the one this viewer already has on that owner's week (an earlier day, the other kind,
+-- or a check-in since reset), else a new random one. Each week has its own, as the Diary groups
+-- a week at a time. Two first views of one week that commit at the same moment could each make a
+-- key, showing that person twice that week; the app can't (a play follows the opening that noted
+-- the week, and two openings of one check-in on one day are one row).
 create function log_checkin_views(p_checkin_ids uuid[], p_kind text) returns void
   language plpgsql security definer set search_path = '' as $$
 declare
@@ -95,9 +114,13 @@ begin
   end if;
   v_led := public.app_led_team_ids();   -- once, not per row
   insert into public.checkin_views
-      (checkin_id, owner_id, week_start, viewer_id, viewer_name, viewer_role, kind, viewed_on)
-    select c.id, c.member_id, c.week_start, v_viewer.id, v_viewer.name, v_viewer.role, p_kind,
-           (now() at time zone 'Asia/Singapore')::date
+      (checkin_id, owner_id, week_start, viewer_id, viewer_key, viewer_name, viewer_role, kind, viewed_on)
+    select c.id, c.member_id, c.week_start, v_viewer.id,
+           coalesce((select k.viewer_key from public.checkin_views k
+                     where k.owner_id = c.member_id and k.week_start = c.week_start and k.viewer_id = v_viewer.id
+                     limit 1),
+                    gen_random_uuid()),
+           v_viewer.name, v_viewer.role, p_kind, (now() at time zone 'Asia/Singapore')::date
     from public.checkins c
     join public.members o on o.id = c.member_id
     where c.id = any (p_checkin_ids)
